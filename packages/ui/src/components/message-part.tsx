@@ -884,7 +884,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
   const i18n = useI18n()
   const [state, setState] = createStore({
     copied: false,
-    busy: undefined as "fork" | "revert" | undefined,
+    busy: false,
   })
   const copied = () => state.copied
   const busy = () => state.busy
@@ -938,10 +938,10 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
     setTimeout(() => setState("copied", false), 2000)
   }
 
-  const run = (kind: "fork" | "revert") => {
-    const act = kind === "fork" ? props.actions?.fork : props.actions?.revert
+  const revert = () => {
+    const act = props.actions?.revert
     if (!act || busy()) return
-    setState("busy", kind)
+    setState("busy", true)
     void Promise.resolve()
       .then(() =>
         act({
@@ -949,9 +949,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
           messageID: props.message.id,
         }),
       )
-      .finally(() => {
-        if (busy() === kind) setState("busy", undefined)
-      })
+      .finally(() => setState("busy", false))
   }
 
   return (
@@ -1017,22 +1015,6 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
                 </Show>
               </span>
             </Show>
-            <Show when={props.actions?.fork}>
-              <Tooltip value={i18n.t("ui.message.forkMessage")} placement="top" gutter={4}>
-                <IconButton
-                  icon="fork"
-                  size="normal"
-                  variant="ghost"
-                  disabled={!!busy()}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={(event) => {
-                    event.stopPropagation()
-                    run("fork")
-                  }}
-                  aria-label={i18n.t("ui.message.forkMessage")}
-                />
-              </Tooltip>
-            </Show>
             <Show when={props.actions?.revert}>
               <Tooltip value={i18n.t("ui.message.revertMessage")} placement="top" gutter={4}>
                 <IconButton
@@ -1043,7 +1025,7 @@ export function UserMessageDisplay(props: { message: UserMessage; parts: PartTyp
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(event) => {
                     event.stopPropagation()
-                    run("revert")
+                    revert()
                   }}
                   aria-label={i18n.t("ui.message.revertMessage")}
                 />
