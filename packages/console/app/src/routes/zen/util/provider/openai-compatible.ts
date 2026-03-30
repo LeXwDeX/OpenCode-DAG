@@ -32,7 +32,7 @@ export const oaCompatHelper: ProviderHelper = ({ adjustCacheUsage, safetyIdentif
     return {
       ...body,
       ...(body.stream ? { stream_options: { include_usage: true } } : {}),
-      //...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {}),
+      ...(safetyIdentifier ? { safety_identifier: safetyIdentifier } : {}),
     }
   },
   createBinaryStreamDecoder: () => undefined,
