@@ -133,8 +133,8 @@ export namespace Runner {
         }),
       ).pipe(
         Effect.flatten,
-        Effect.catch((e): Effect.Effect<A, E> =>
-          e instanceof Cancelled ? (onInterrupt ?? Effect.die(e)) : Effect.fail(e as E),
+        Effect.catch(
+          (e): Effect.Effect<A, E> => (e instanceof Cancelled ? (onInterrupt ?? Effect.die(e)) : Effect.fail(e as E)),
         ),
       )
 
