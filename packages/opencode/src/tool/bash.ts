@@ -182,7 +182,6 @@ function prefix(text: string) {
   return text.slice(0, match.index)
 }
 
-
 function pathArgs(list: Part[], ps: boolean) {
   if (!ps) {
     return list
@@ -209,7 +208,6 @@ function pathArgs(list: Part[], ps: boolean) {
   }
   return out
 }
-
 
 function preview(text: string) {
   if (text.length <= MAX_METADATA_LENGTH) return text
@@ -249,7 +247,6 @@ const ask = Effect.fn("BashTool.ask")(function* (ctx: Tool.Context, scan: Scan) 
   )
 })
 
-
 function cmd(shell: string, name: string, command: string, cwd: string, env: NodeJS.ProcessEnv) {
   if (process.platform === "win32" && PS.has(name)) {
     return ChildProcess.make(shell, ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], {
@@ -268,7 +265,6 @@ function cmd(shell: string, name: string, command: string, cwd: string, env: Nod
     detached: process.platform !== "win32",
   })
 }
-
 
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
@@ -306,9 +302,9 @@ export const BashTool = Tool.defineEffect(
     const plugin = yield* Plugin.Service
 
     const cygpath = Effect.fn("BashTool.cygpath")(function* (shell: string, text: string) {
-      const lines = yield* spawner.lines(
-        ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text]),
-      ).pipe(Effect.catch(() => Effect.succeed([] as string[])))
+      const lines = yield* spawner
+        .lines(ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text]))
+        .pipe(Effect.catch(() => Effect.succeed([] as string[])))
       const file = lines[0]?.trim()
       if (!file) return
       return AppFileSystem.normalizePath(file)
@@ -366,7 +362,11 @@ export const BashTool = Tool.defineEffect(
     })
 
     const shellEnv = Effect.fn("BashTool.shellEnv")(function* (ctx: Tool.Context, cwd: string) {
-      const extra = yield* plugin.trigger("shell.env", { cwd, sessionID: ctx.sessionID, callID: ctx.callID }, { env: {} })
+      const extra = yield* plugin.trigger(
+        "shell.env",
+        { cwd, sessionID: ctx.sessionID, callID: ctx.callID },
+        { env: {} },
+      )
       return {
         ...process.env,
         ...extra.env,
@@ -477,31 +477,34 @@ export const BashTool = Tool.defineEffect(
           .replaceAll("${maxLines}", String(Truncate.MAX_LINES))
           .replaceAll("${maxBytes}", String(Truncate.MAX_BYTES)),
         parameters: Parameters,
-      execute: (params: z.infer<typeof Parameters>, ctx: Tool.Context) =>
-        Effect.gen(function* () {
-          const cwd = params.workdir
-            ? yield* resolvePath(params.workdir, Instance.directory, shell)
-            : Instance.directory
-          if (params.timeout !== undefined && params.timeout < 0) {
-            throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
-          }
-          const timeout = params.timeout ?? DEFAULT_TIMEOUT
-          const ps = PS.has(name)
-          const root = yield* parse(params.command, ps)
-          const scan = yield* collect(root, cwd, ps, shell)
-          if (!Instance.containsPath(cwd)) scan.dirs.add(cwd)
-          yield* ask(ctx, scan)
+        execute: (params: z.infer<typeof Parameters>, ctx: Tool.Context) =>
+          Effect.gen(function* () {
+            const cwd = params.workdir
+              ? yield* resolvePath(params.workdir, Instance.directory, shell)
+              : Instance.directory
+            if (params.timeout !== undefined && params.timeout < 0) {
+              throw new Error(`Invalid timeout value: ${params.timeout}. Timeout must be a positive number.`)
+            }
+            const timeout = params.timeout ?? DEFAULT_TIMEOUT
+            const ps = PS.has(name)
+            const root = yield* parse(params.command, ps)
+            const scan = yield* collect(root, cwd, ps, shell)
+            if (!Instance.containsPath(cwd)) scan.dirs.add(cwd)
+            yield* ask(ctx, scan)
 
-          return yield* run({
-            shell,
-            name,
-            command: params.command,
-            cwd,
-            env: yield* shellEnv(ctx, cwd),
-            timeout,
-            description: params.description,
-          }, ctx)
-        }).pipe(Effect.orDie, Effect.runPromise),
+            return yield* run(
+              {
+                shell,
+                name,
+                command: params.command,
+                cwd,
+                env: yield* shellEnv(ctx, cwd),
+                timeout,
+                description: params.description,
+              },
+              ctx,
+            )
+          }).pipe(Effect.orDie, Effect.runPromise),
       }
     }
   }),
