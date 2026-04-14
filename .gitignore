@@ -23,6 +23,15 @@ target
 .scripts
 .direnv/
 
+# upstream-merge 运行时产物
+.upstream-merge/
+
+# OpenCode 项目级配置
+.opencode/
+
+# 本地 release 归档（由 agents_multi-orchestration 管理）
+releases/
+
 # Local dev files
 opencode-dev
 UPCOMING_CHANGELOG.md

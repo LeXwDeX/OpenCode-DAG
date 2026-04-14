@@ -1,3 +1,5 @@
+# 简介
+- 上游原始仓库地址 `https://github.com/anomalyco/opencode`.
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
 - ALWAYS USE PARALLEL TOOLS WHEN APPLICABLE.
 - The default branch in this repo is `dev`.
