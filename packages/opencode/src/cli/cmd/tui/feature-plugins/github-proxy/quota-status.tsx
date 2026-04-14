@@ -72,13 +72,14 @@ function QuotaView(props: { api: TuiPluginApi }) {
   const [proxyAuth, setProxyAuth] = createSignal<ProxyAuth | null>(null)
 
   function applyQuota(q: QuotaInfo) {
-    const pct = Math.round((q.remaining / Math.max(q.entitlement, 1)) * 100)
+    // 后端 remaining 字段实际是 used（已用量），需翻转为真正的剩余量
+    const actual = q.entitlement - q.remaining
+    const pct = Math.round((actual / Math.max(q.entitlement, 1)) * 100)
     setColor(() => () => pct > 30 ? theme().success : pct > 10 ? theme().warning : theme().error)
     if (q.accounts_total > 0) {
-      setLabel(`[${q.accounts_active}/${q.accounts_total} | ${q.remaining}/${q.entitlement}]`)
+      setLabel(`[${q.accounts_active}/${q.accounts_total} | ${actual}/${q.entitlement}]`)
     } else {
-      // 兼容旧版后端（不返回 accounts_* 字段）
-      setLabel(`⊘ ${q.remaining}/${q.entitlement}`)
+      setLabel(`⊘ ${actual}/${q.entitlement}`)
     }
   }
 

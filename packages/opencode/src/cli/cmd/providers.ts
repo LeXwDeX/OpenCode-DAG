@@ -105,6 +105,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           await Auth.set(saveProvider, {
             type: "api",
             key: result.key,
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
           })
         }
         spinner.stop("Login successful")
@@ -137,6 +138,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           await Auth.set(saveProvider, {
             type: "api",
             key: result.key,
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
           })
         }
         prompts.log.success("Login successful")
@@ -158,6 +160,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
         await Auth.set(saveProvider, {
           type: "api",
           key: result.key,
+          ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
         })
         prompts.log.success("Login successful")
       }
