@@ -57,7 +57,9 @@ const seed = async () => {
         }
         await Session.updateMessage(message)
         await Session.updatePart(part)
-        await Project.update({ projectID: Instance.project.id, name: "E2E Project" })
+        await AppRuntime.runPromise(
+          Project.Service.use((svc) => svc.update({ projectID: Instance.project.id, name: "E2E Project" })),
+        )
       },
     })
   } finally {

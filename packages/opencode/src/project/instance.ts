@@ -3,6 +3,7 @@ import { disposeInstance } from "@/effect/instance-registry"
 import { Filesystem } from "@/util/filesystem"
 import { iife } from "@/util/iife"
 import { Log } from "@/util/log"
+import { Effect } from "effect"
 import { LocalContext } from "../util/local-context"
 import { Project } from "./project"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
@@ -29,7 +30,9 @@ function boot(input: { directory: string; init?: () => Promise<any>; worktree?: 
             worktree: input.worktree,
             project: input.project,
           }
-        : await Project.fromDirectory(input.directory).then(({ project, sandbox }) => ({
+        : await Effect.runPromise(
+            Project.Service.use((svc) => svc.fromDirectory(input.directory)).pipe(Effect.provide(Project.defaultLayer)),
+          ).then(({ project, sandbox }) => ({
             directory: input.directory,
             worktree: sandbox,
             project,
