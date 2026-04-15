@@ -36,7 +36,7 @@ Use best judgement when processing input.
 - Use the diff to identify which files changed
 - Use `git status --short` to identify untracked files, then read their full contents
 - Read the full file to understand existing patterns, control flow, and error handling
-- Check for existing style guide or conventions files (CONVENTIONS.md, AGENTS.md, .editorconfig, etc.)
+- Check for existing style guide or conventions files (AGENTS.md, .editorconfig, etc.)
 
 ---
 

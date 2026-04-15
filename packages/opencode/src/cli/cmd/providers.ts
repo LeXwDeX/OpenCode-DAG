@@ -102,11 +102,12 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           })
         }
         if ("key" in result) {
-          await Auth.set(saveProvider, {
+          const info: Auth.Api = new Auth.Api({
             type: "api",
             key: result.key,
-            ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata as { readonly [x: string]: string } } : {}),
           })
+          await Auth.set(saveProvider, info)
         }
         spinner.stop("Login successful")
       }
@@ -135,11 +136,12 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           })
         }
         if ("key" in result) {
-          await Auth.set(saveProvider, {
+          const info: Auth.Api = new Auth.Api({
             type: "api",
             key: result.key,
-            ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata as { readonly [x: string]: string } } : {}),
           })
+          await Auth.set(saveProvider, info)
         }
         prompts.log.success("Login successful")
       }
@@ -157,11 +159,12 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
       }
       if (result.type === "success") {
         const saveProvider = result.provider ?? provider
-        await Auth.set(saveProvider, {
+        const info: Auth.Api = new Auth.Api({
           type: "api",
           key: result.key,
-          ...("metadata" in result && result.metadata ? { metadata: result.metadata } : {}),
+          ...("metadata" in result && result.metadata ? { metadata: result.metadata as { readonly [x: string]: string } } : {}),
         })
+        await Auth.set(saveProvider, info)
         prompts.log.success("Login successful")
       }
       prompts.outro("Done")

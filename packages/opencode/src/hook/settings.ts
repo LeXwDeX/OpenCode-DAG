@@ -209,6 +209,7 @@ export namespace SettingsHook {
   type State = {
     settings: Settings
     cwd: string
+    seen: Set<string>
   }
 
   export interface Interface {
@@ -227,7 +228,7 @@ export namespace SettingsHook {
       const state = yield* InstanceState.make<State>(
         Effect.fn("SettingsHook.state")(function* (ctx) {
           const settings = load(ctx.directory, ctx.worktree)
-          return { settings, cwd: ctx.directory }
+          return { settings, cwd: ctx.directory, seen: new Set() }
         }),
       )
 
@@ -272,9 +273,13 @@ export namespace SettingsHook {
               result.preventContinuation = true
             }
 
-            // Extract additionalContext from hookSpecificOutput
+            // Extract additionalContext from hookSpecificOutput (deduplicated per-instance)
             if (json.hookSpecificOutput?.additionalContext) {
-              result.additionalContexts.push(json.hookSpecificOutput.additionalContext)
+              const ctx = json.hookSpecificOutput.additionalContext
+              if (!s.seen.has(ctx)) {
+                s.seen.add(ctx)
+                result.additionalContexts.push(ctx)
+              }
             }
           }
         }
