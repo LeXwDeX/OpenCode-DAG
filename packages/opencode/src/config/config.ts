@@ -21,6 +21,7 @@ import {
 import { Instance, type InstanceContext } from "../project/instance"
 import * as LSPServer from "../lsp/server"
 import { Installation } from "@/installation"
+import { InstallationVersion } from "@/installation/version"
 import * as ConfigMarkdown from "./markdown"
 import { existsSync } from "fs"
 import { Bus } from "@/bus"
@@ -1266,7 +1267,7 @@ export const layer: Layer.Layer<
       const pkg = path.join(dir, "package.json")
       const gitignore = path.join(dir, ".gitignore")
       const plugin = path.join(dir, "node_modules", "@opencode-ai", "plugin", "package.json")
-      const target = Installation.isLocal() ? "*" : Installation.VERSION
+      const target = Installation.isLocal() ? "*" : InstallationVersion
       const json = yield* fs.readJson(pkg).pipe(
         Effect.catch(() => Effect.succeed({} satisfies Package)),
         Effect.map((x): Package => (isRecord(x) ? (x as Package) : {})),

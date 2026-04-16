@@ -29,7 +29,7 @@ import { useExit } from "./exit"
 import { useArgs } from "./args"
 import { batch, createEffect, on } from "solid-js"
 import { Log } from "@/util"
-import { ConsoleState, emptyConsoleState, type ConsoleState as ConsoleStateType } from "@/config/console-state"
+import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -39,7 +39,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       provider: Provider[]
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
-      console_state: ConsoleStateType
+      console_state: ConsoleState
       provider_auth: Record<string, ProviderAuthMethod[]>
       agent: Agent[]
       command: Command[]
@@ -363,7 +363,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const providerListPromise = sdk.client.provider.list({ workspace }, { throwOnError: true })
       const consoleStatePromise = sdk.client.experimental.console
         .get({ workspace }, { throwOnError: true })
-        .then((x) => ConsoleState.parse(x.data))
+        .then((x) => x.data)
         .catch(() => emptyConsoleState)
       const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
@@ -378,7 +378,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       ]
 
       await Promise.all(blockingRequests)
-        .then(() => {
+        .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
           const providerListResponse = providerListPromise.then((x) => x.data!)
           const consoleStateResponse = consoleStatePromise

@@ -26,6 +26,7 @@ import { ProjectID } from "../../src/project/schema"
 import { Filesystem } from "../../src/util"
 import * as Network from "../../src/util/network"
 import { Npm } from "../../src/npm"
+import { ConfigPlugin } from "@/config/plugin"
 
 const emptyAccount = Layer.mock(Account.Service)({
   active: () => Effect.succeed(Option.none()),
@@ -1256,7 +1257,7 @@ test("keeps plugin origins aligned with merged plugin list", async () => {
       const cfg = await load()
       const plugins = cfg.plugin ?? []
       const origins = cfg.plugin_origins ?? []
-      const names = plugins.map((item) => Config.pluginSpecifier(item))
+      const names = plugins.map((item) => ConfigPlugin.pluginSpecifier(item))
 
       expect(names).toContain("shared-plugin@2.0.0")
       expect(names).not.toContain("shared-plugin@1.0.0")
@@ -1264,7 +1265,7 @@ test("keeps plugin origins aligned with merged plugin list", async () => {
       expect(names).toContain("local-only@1.0.0")
 
       expect(origins.map((item) => item.spec)).toEqual(plugins)
-      const hit = origins.find((item) => Config.pluginSpecifier(item.spec) === "shared-plugin@2.0.0")
+      const hit = origins.find((item) => ConfigPlugin.pluginSpecifier(item.spec) === "shared-plugin@2.0.0")
       expect(hit?.scope).toBe("local")
     },
   })
@@ -1909,8 +1910,8 @@ describe("resolvePluginSpec", () => {
   test("keeps package specs unchanged", async () => {
     await using tmp = await tmpdir()
     const file = path.join(tmp.path, "opencode.json")
-    expect(await Config.resolvePluginSpec("oh-my-opencode@2.4.3", file)).toBe("oh-my-opencode@2.4.3")
-    expect(await Config.resolvePluginSpec("@scope/pkg", file)).toBe("@scope/pkg")
+    expect(await ConfigPlugin.resolvePluginSpec("oh-my-opencode@2.4.3", file)).toBe("oh-my-opencode@2.4.3")
+    expect(await ConfigPlugin.resolvePluginSpec("@scope/pkg", file)).toBe("@scope/pkg")
   })
 
   test("resolves windows-style relative plugin directory specs", async () => {
@@ -1925,8 +1926,8 @@ describe("resolvePluginSpec", () => {
     })
 
     const file = path.join(tmp.path, "opencode.json")
-    const hit = await Config.resolvePluginSpec(".\\plugin", file)
-    expect(Config.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin", "index.ts")).href)
+    const hit = await ConfigPlugin.resolvePluginSpec(".\\plugin", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin", "index.ts")).href)
   })
 
   test("resolves relative file plugin paths to file urls", async () => {
@@ -1937,8 +1938,8 @@ describe("resolvePluginSpec", () => {
     })
 
     const file = path.join(tmp.path, "opencode.json")
-    const hit = await Config.resolvePluginSpec("./plugin.ts", file)
-    expect(Config.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin.ts")).href)
+    const hit = await ConfigPlugin.resolvePluginSpec("./plugin.ts", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin.ts")).href)
   })
 
   test("resolves plugin directory paths to directory urls", async () => {
@@ -1956,8 +1957,8 @@ describe("resolvePluginSpec", () => {
     })
 
     const file = path.join(tmp.path, "opencode.json")
-    const hit = await Config.resolvePluginSpec("./plugin", file)
-    expect(Config.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin")).href)
+    const hit = await ConfigPlugin.resolvePluginSpec("./plugin", file)
+    expect(ConfigPlugin.pluginSpecifier(hit)).toBe(pathToFileURL(path.join(tmp.path, "plugin")).href)
   })
 
   test("resolves plugin directories without package.json to index.ts", async () => {
