@@ -923,7 +923,7 @@ export function smallOptions(model: Provider.Model) {
     model.api.npm === "@ai-sdk/github-copilot"
   ) {
     if (model.api.id.includes("gpt-5")) {
-      if (model.api.id.includes("5.")) {
+      if (model.api.id.includes("5.") || model.api.id.includes("5-mini")) {
         return { store: false, reasoningEffort: "low" }
       }
       return { store: false, reasoningEffort: "minimal" }
