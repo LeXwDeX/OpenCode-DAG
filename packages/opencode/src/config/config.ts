@@ -2,9 +2,8 @@ import { Log } from "../util"
 import path from "path"
 import { pathToFileURL } from "url"
 import os from "os"
-import { Process } from "../util"
 import z from "zod"
-import { mergeDeep, pipe, unique } from "remeda"
+import { mergeDeep, pipe } from "remeda"
 import { Global } from "../global"
 import fsNode from "fs/promises"
 import { NamedError } from "@opencode-ai/shared/util/error"
@@ -35,10 +34,11 @@ import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import { InstanceState } from "@/effect"
 import { Context, Duration, Effect, Exit, Fiber, Layer, Option } from "effect"
 import { EffectFlock } from "@opencode-ai/shared/util/effect-flock"
-
-import { isPathPluginSpec, parsePluginSpecifier, resolvePathPluginTarget } from "@/plugin/shared"
 import { InstanceRef } from "@/effect/instance-ref"
 import { Npm } from "@opencode-ai/shared/npm"
+import { ConfigPlugin } from "./plugin"
+import { ConfigManaged } from "./managed"
+import { ConfigCommand } from "./command"
 
 const ModelId = z.string().meta({ $ref: "https://models.dev/model-schema.json#/$defs/Model" })
 const PluginOptions = z.record(z.string(), z.unknown())
@@ -54,78 +54,6 @@ export type PluginOrigin = {
 }
 
 const log = Log.create({ service: "config" })
-
-// Managed settings directory for enterprise deployments (highest priority, admin-controlled)
-// These settings override all user and project settings
-function systemManagedConfigDir(): string {
-  switch (process.platform) {
-    case "darwin":
-      return "/Library/Application Support/opencode"
-    case "win32":
-      return path.join(process.env.ProgramData || "C:\\ProgramData", "opencode")
-    default:
-      return "/etc/opencode"
-  }
-}
-
-export function managedConfigDir() {
-  return process.env.OPENCODE_TEST_MANAGED_CONFIG_DIR || systemManagedConfigDir()
-}
-
-const managedDir = managedConfigDir()
-
-const MANAGED_PLIST_DOMAIN = "ai.opencode.managed"
-
-// Keys injected by macOS/MDM into the managed plist that are not OpenCode config
-const PLIST_META = new Set([
-  "PayloadDisplayName",
-  "PayloadIdentifier",
-  "PayloadType",
-  "PayloadUUID",
-  "PayloadVersion",
-  "_manualProfile",
-])
-
-/**
- * Parse raw JSON (from plutil conversion of a managed plist) into OpenCode config.
- * Strips MDM metadata keys before parsing through the config schema.
- * Pure function — no OS interaction, safe to unit test directly.
- */
-export function parseManagedPlist(json: string, source: string): Info {
-  const raw = JSON.parse(json)
-  for (const key of Object.keys(raw)) {
-    if (PLIST_META.has(key)) delete raw[key]
-  }
-  return parseConfig(JSON.stringify(raw), source)
-}
-
-/**
- * Read macOS managed preferences deployed via .mobileconfig / MDM (Jamf, Kandji, etc).
- * MDM-installed profiles write to /Library/Managed Preferences/ which is only writable by root.
- * User-scoped plists are checked first, then machine-scoped.
- */
-async function readManagedPreferences(): Promise<Info> {
-  if (process.platform !== "darwin") return {}
-
-  const domain = MANAGED_PLIST_DOMAIN
-  const user = os.userInfo().username
-  const paths = [
-    path.join("/Library/Managed Preferences", user, `${domain}.plist`),
-    path.join("/Library/Managed Preferences", `${domain}.plist`),
-  ]
-
-  for (const plist of paths) {
-    if (!existsSync(plist)) continue
-    log.info("reading macOS managed preferences", { path: plist })
-    const result = await Process.run(["plutil", "-convert", "json", "-o", "-", plist], { nothrow: true })
-    if (result.code !== 0) {
-      log.warn("failed to convert managed preferences plist", { path: plist })
-      continue
-    }
-    return parseManagedPlist(result.stdout.toString(), `mobileconfig:${plist}`)
-  }
-  return {}
-}
 
 // Custom merge function that concatenates array fields instead of replacing them
 function mergeConfigConcatArrays(target: Info, source: Info): Info {
@@ -152,44 +80,6 @@ function rel(item: string, patterns: string[]) {
 function trim(file: string) {
   const ext = path.extname(file)
   return ext.length ? file.slice(0, -ext.length) : file
-}
-
-async function loadCommand(dir: string) {
-  const result: Record<string, Command> = {}
-  for (const item of await Glob.scan("{command,commands}/**/*.md", {
-    cwd: dir,
-    absolute: true,
-    dot: true,
-    symlink: true,
-  })) {
-    const md = await ConfigMarkdown.parse(item).catch(async (err) => {
-      const message = ConfigMarkdown.FrontmatterError.isInstance(err)
-        ? err.data.message
-        : `Failed to parse command ${item}`
-      const { Session } = await import("@/session")
-      void Bus.publish(Session.Event.Error, { error: new NamedError.Unknown({ message }).toObject() })
-      log.error("failed to load command", { command: item, err })
-      return undefined
-    })
-    if (!md) continue
-
-    const patterns = ["/.opencode/command/", "/.opencode/commands/", "/command/", "/commands/"]
-    const file = rel(item, patterns) ?? path.basename(item)
-    const name = trim(file)
-
-    const config = {
-      name,
-      ...md.data,
-      template: md.content.trim(),
-    }
-    const parsed = Command.safeParse(config)
-    if (parsed.success) {
-      result[config.name] = parsed.data
-      continue
-    }
-    throw new InvalidError({ path: item, issues: parsed.error.issues }, { cause: parsed.error })
-  }
-  return result
 }
 
 async function loadAgent(dir: string) {
@@ -265,60 +155,6 @@ async function loadMode(dir: string) {
     }
   }
   return result
-}
-
-async function loadPlugin(dir: string) {
-  const plugins: PluginSpec[] = []
-
-  for (const item of await Glob.scan("{plugin,plugins}/*.{ts,js}", {
-    cwd: dir,
-    absolute: true,
-    dot: true,
-    symlink: true,
-  })) {
-    plugins.push(pathToFileURL(item).href)
-  }
-  return plugins
-}
-
-export function pluginSpecifier(plugin: PluginSpec): string {
-  return Array.isArray(plugin) ? plugin[0] : plugin
-}
-
-export function pluginOptions(plugin: PluginSpec): PluginOptions | undefined {
-  return Array.isArray(plugin) ? plugin[1] : undefined
-}
-
-export async function resolvePluginSpec(plugin: PluginSpec, configFilepath: string): Promise<PluginSpec> {
-  const spec = pluginSpecifier(plugin)
-  if (!isPathPluginSpec(spec)) return plugin
-
-  const base = path.dirname(configFilepath)
-  const file = (() => {
-    if (spec.startsWith("file://")) return spec
-    if (path.isAbsolute(spec) || /^[A-Za-z]:[\\/]/.test(spec)) return pathToFileURL(spec).href
-    return pathToFileURL(path.resolve(base, spec)).href
-  })()
-
-  const resolved = await resolvePathPluginTarget(file).catch(() => file)
-
-  if (Array.isArray(plugin)) return [resolved, plugin[1]]
-  return resolved
-}
-
-export function deduplicatePluginOrigins(plugins: PluginOrigin[]): PluginOrigin[] {
-  const seen = new Set<string>()
-  const list: PluginOrigin[] = []
-
-  for (const plugin of plugins.toReversed()) {
-    const spec = pluginSpecifier(plugin.spec)
-    const name = spec.startsWith("file://") ? spec : parsePluginSpecifier(spec).pkg
-    if (seen.has(name)) continue
-    seen.add(name)
-    list.push(plugin)
-  }
-
-  return list.toReversed()
 }
 
 export const McpLocal = z
@@ -452,15 +288,6 @@ export const Permission = z
     ref: "PermissionConfig",
   })
 export type Permission = z.infer<typeof Permission>
-
-export const Command = z.object({
-  template: z.string(),
-  description: z.string().optional(),
-  agent: z.string().optional(),
-  model: ModelId.optional(),
-  subtask: z.boolean().optional(),
-})
-export type Command = z.infer<typeof Command>
 
 export const Skills = z.object({
   paths: z.array(z.string()).optional().describe("Additional paths to skill folders"),
@@ -854,7 +681,7 @@ export const Info = z
     logLevel: Log.Level.optional().describe("Log level"),
     server: Server.optional().describe("Server configuration for opencode serve and web commands"),
     command: z
-      .record(z.string(), Command)
+      .record(z.string(), ConfigCommand.Info)
       .optional()
       .describe("Command configuration, see https://opencode.ai/docs/commands"),
     skills: Skills.optional().describe("Additional skill folder paths"),
@@ -1095,7 +922,7 @@ function writable(info: Info) {
   return next
 }
 
-function parseConfig(text: string, filepath: string): Info {
+export function parseConfig(text: string, filepath: string): Info {
   const errors: JsoncParseError[] = []
   const data = parseJsonc(text, errors, { allowTrailingComma: true })
   if (errors.length) {
@@ -1193,7 +1020,7 @@ export const layer = Layer.effect(
         if (data.plugin && isFile) {
           const list = data.plugin
           for (let i = 0; i < list.length; i++) {
-            list[i] = yield* Effect.promise(() => resolvePluginSpec(list[i], options.path))
+            list[i] = yield* Effect.promise(() => ConfigPlugin.resolvePluginSpec(list[i], options.path))
           }
         }
         return data
@@ -1253,7 +1080,7 @@ export const layer = Layer.effect(
       return yield* cachedGlobal
     })
 
-    const setupConfigDir = Effect.fnUntraced(function* (dir: string) {
+    const ensureGitignore = Effect.fn("Config.ensureGitignore")(function* (dir: string) {
       const gitignore = path.join(dir, ".gitignore")
       const hasIgnore = yield* fs.existsSafe(gitignore)
       if (!hasIgnore) {
@@ -1262,9 +1089,6 @@ export const layer = Layer.effect(
           ["node_modules", "package.json", "package-lock.json", "bun.lock", ".gitignore"].join("\n"),
         )
       }
-      yield* npmSvc.install(dir, {
-        add: ["@opencode-ai/plugin" + (InstallationLocal ? "" : "@" + InstallationVersion)],
-      })
     })
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(function* (ctx: InstanceContext) {
@@ -1284,7 +1108,7 @@ export const layer = Layer.effect(
       const track = Effect.fnUntraced(function* (source: string, list: PluginSpec[] | undefined, kind?: PluginScope) {
         if (!list?.length) return
         const hit = kind ?? (yield* scope(source))
-        const plugins = deduplicatePluginOrigins([
+        const plugins = ConfigPlugin.deduplicatePluginOrigins([
           ...(result.plugin_origins ?? []),
           ...list.map((spec) => ({ spec, source, scope: hit })),
         ])
@@ -1347,7 +1171,7 @@ export const layer = Layer.effect(
 
       const deps: Fiber.Fiber<void, never>[] = []
 
-      for (const dir of unique(directories)) {
+      for (const dir of directories) {
         if (dir.endsWith(".opencode") || dir === Flag.OPENCODE_CONFIG_DIR) {
           for (const file of ["opencode.json", "opencode.jsonc"]) {
             const source = path.join(dir, file)
@@ -1359,24 +1183,30 @@ export const layer = Layer.effect(
           }
         }
 
-        const dep = yield* setupConfigDir(dir).pipe(
-          Effect.exit,
-          Effect.tap((exit) =>
-            Exit.isFailure(exit)
-              ? Effect.sync(() => {
-                  log.warn("background dependency install failed", { dir, error: String(exit.cause) })
-                })
-              : Effect.void,
-          ),
-          Effect.asVoid,
-          Effect.forkScoped,
-        )
+        yield* ensureGitignore(dir).pipe(Effect.forkScoped)
+
+        const dep = yield* npmSvc
+          .install(dir, {
+            add: ["@opencode-ai/plugin" + (InstallationLocal ? "" : "@" + InstallationVersion)],
+          })
+          .pipe(
+            Effect.exit,
+            Effect.tap((exit) =>
+              Exit.isFailure(exit)
+                ? Effect.sync(() => {
+                    log.warn("background dependency install failed", { dir, error: String(exit.cause) })
+                  })
+                : Effect.void,
+            ),
+            Effect.asVoid,
+            Effect.forkDetach,
+          )
         deps.push(dep)
 
-        result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => loadCommand(dir)))
+        result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
         result.agent = mergeDeep(result.agent, yield* Effect.promise(() => loadAgent(dir)))
         result.agent = mergeDeep(result.agent, yield* Effect.promise(() => loadMode(dir)))
-        const list = yield* Effect.promise(() => loadPlugin(dir))
+        const list = yield* Effect.promise(() => ConfigPlugin.load(dir))
         yield* track(dir, list)
       }
 
@@ -1429,6 +1259,7 @@ export const layer = Layer.effect(
         )
       }
 
+      const managedDir = ConfigManaged.managedConfigDir()
       if (existsSync(managedDir)) {
         for (const file of ["opencode.json", "opencode.jsonc"]) {
           const source = path.join(managedDir, file)
@@ -1437,7 +1268,7 @@ export const layer = Layer.effect(
       }
 
       // macOS managed preferences (.mobileconfig deployed via MDM) override everything
-      result = mergeConfigConcatArrays(result, yield* Effect.promise(() => readManagedPreferences()))
+      result = mergeConfigConcatArrays(result, yield* Effect.promise(() => ConfigManaged.readManagedPreferences()))
 
       for (const [name, mode] of Object.entries(result.mode ?? {})) {
         result.agent = mergeDeep(result.agent ?? {}, {

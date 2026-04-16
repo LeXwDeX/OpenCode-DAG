@@ -1,3 +1,5 @@
 export * as Config from "./config"
+export * as ConfigCommand from "./command"
+export { ConfigManaged } from "./managed"
 export * as ConfigMarkdown from "./markdown"
 export * as ConfigPaths from "./paths"
