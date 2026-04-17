@@ -1,0 +1,88 @@
+name: release
+run-name: "release ${{ inputs.bump || 'dev' }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Bump major, minor, or patch"
+        required: false
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: "Override version (optional, e.g. 1.2.3)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-bun
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ inputs.bump }}" ]; then
+            CURRENT=$(jq -r .version packages/opencode/package.json)
+            IFS='.' read -r major minor patch <<< "${CURRENT%-*}"
+            case "${{ inputs.bump }}" in
+              major) echo "version=$((major+1)).0.0" >> "$GITHUB_OUTPUT" ;;
+              minor) echo "version=${major}.$((minor+1)).0" >> "$GITHUB_OUTPUT" ;;
+              patch) echo "version=${major}.${minor}.$((patch+1))" >> "$GITHUB_OUTPUT" ;;
+            esac
+          else
+            SHA=$(git rev-parse --short HEAD)
+            echo "version=0.0.0-dev-${SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build all platforms
+        working-directory: packages/opencode
+        run: |
+          ./script/build.ts
+        env:
+          OPENCODE_VERSION: ${{ steps.ver.outputs.version }}
+          OPENCODE_CHANNEL: dev
+
+      - name: Package archives
+        working-directory: packages/opencode
+        run: |
+          cd dist
+          for dir in opencode-linux-*; do
+            [ -d "$dir/bin" ] && tar -czf "${dir}.tar.gz" -C "${dir}/bin" .
+          done
+          for dir in opencode-darwin-* opencode-windows-*; do
+            [ -d "$dir/bin" ] && (cd "${dir}/bin" && zip -r "../../${dir}.zip" .)
+          done
+          ls -lh *.tar.gz *.zip 2>/dev/null || true
+
+      - name: Create release and upload
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          TAG="v${VERSION}"
+          # Create tag
+          git tag "${TAG}" || true
+          git push origin "${TAG}" --force || true
+          # Delete existing release if any
+          gh release delete "${TAG}" --yes 2>/dev/null || true
+          # Create release
+          gh release create "${TAG}" \
+            --title "${TAG}" \
+            --notes "Release ${TAG}" \
+            --target "${{ github.sha }}" \
+            packages/opencode/dist/*.tar.gz \
+            packages/opencode/dist/*.zip
