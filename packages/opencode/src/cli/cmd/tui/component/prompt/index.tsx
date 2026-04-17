@@ -594,6 +594,13 @@ export function Prompt(props: PromptProps) {
   ])
 
   async function submit() {
+    // Snapshot parts BEFORE sync: syncExtmarksWithPromptParts drops any part
+    // whose extmark has died (e.g. user typed adjacent to the virtual range
+    // and opentui invalidated the extmark). Without this snapshot, the literal
+    // placeholder "[Pasted ~N lines #M]" remains in plainText but has no
+    // matching replacement, causing the raw placeholder to be submitted.
+    const originalParts = input && !input.isDestroyed ? [...store.prompt.parts] : []
+
     // IME: double-defer may fire before onContentChange flushes the last
     // composed character (e.g. Korean hangul) to the store, so read
     // plainText directly and sync before any downstream reads.
@@ -646,16 +653,34 @@ export function Prompt(props: PromptProps) {
     // Collect text parts with their extmark-tracked positions, then replace
     // from end to start so earlier offsets stay valid.
     const replacements: { start: number; end: number; real: string }[] = []
+    const handledValues = new Set<string>()
     for (const part of store.prompt.parts) {
       if (part.type !== "text" || !part.text || !part.source) continue
       const src = part.source.text
       if (!src) continue
+      // Validate extmark position still matches the virtual text; if drifted
+      // (extmark survived but position moved), skip and let the literal
+      // fallback below do the safe replacement.
+      if (src.value && inputText.slice(src.start, src.end) !== src.value) continue
       replacements.push({ start: src.start, end: src.end, real: part.text })
+      if (src.value) handledValues.add(src.value)
     }
     replacements.sort((a, b) => b.start - a.start)
     for (const r of replacements) {
       if (r.start >= 0 && r.end <= inputText.length && r.start < r.end) {
         inputText = inputText.slice(0, r.start) + r.real + inputText.slice(r.end)
+      }
+    }
+
+    // Fallback: parts dropped by sync (dead extmarks) still leave the literal
+    // virtual-text marker in plainText. pasteCounter guarantees each value is
+    // globally unique (e.g. "[Pasted ~3 lines #1]"), so literal replace is safe.
+    for (const part of originalParts) {
+      if (part.type !== "text" || !part.text || !part.source?.text) continue
+      const value = part.source.text.value
+      if (!value || handledValues.has(value)) continue
+      if (inputText.includes(value)) {
+        inputText = inputText.split(value).join(part.text)
       }
     }
 
