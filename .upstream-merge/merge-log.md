@@ -119,3 +119,51 @@ config 相关 (2): `672ee28635` `ef90b93205`
 
 ---
 
+## Session 2026-04-17 — Round 3: Fork 重建（Rebase on upstream/dev）
+
+**策略**: 废弃断开历史的旧 fork，基于 upstream/dev 最新 HEAD 重建，仅保留 fork 专属功能
+
+**原因**: 旧 fork 与上游 git 历史完全断开（unrelated histories），`git merge upstream/dev` 产生 823 个 add/add 冲突，cherry-pick 效率极低（330 提交中仅成功 32 个）。重建一劳永逸解决历史断开问题。
+
+### 重建过程
+
+1. 基于 `upstream/dev` (HEAD: `c026e25088`) 创建 `dev-rebased` 分支
+2. 从旧 fork 备份 3 个核心文件 + 2 个接线文件
+3. 适配上游 API 变更后重新应用
+4. 验证所有 32 个 cherry-pick 的 fix 已包含在 upstream/dev 中（无需重新应用）
+5. 替换 dev 分支
+
+### Fork 专属文件（全部保留）
+
+**新增文件：**
+- `src/hook/settings.ts` — SettingsHook (PreToolUse/PostToolUse hook 系统)
+- `src/plugin/github-proxy/proxy.ts` — GitHub Copilot 代理 provider
+- `src/cli/cmd/tui/feature-plugins/github-proxy/quota-status.tsx` — 配额状态 TUI 插件
+
+**修改文件：**
+- `src/plugin/index.ts` — 注册 GithubProxyAuthPlugin 到 INTERNAL_PLUGINS
+- `src/cli/cmd/tui/plugin/internal.ts` — 注册 GithubProxyQuota 到 INTERNAL_TUI_PLUGINS
+- `src/session/prompt.ts` — 集成 SettingsHook 到内置工具和 MCP 工具执行路径
+
+### 上游 API 适配
+
+| 旧 fork 写法 | 新写法 | 原因 |
+|---|---|---|
+| `import { Log } from "@/util/log"` | `import * as Log from "@/util/log"` | 上游取消了 namespace export |
+| `import { InstanceState } from "@/effect/instance-state"` | `import * as InstanceState from "@/effect/instance-state"` | 同上 |
+| `Installation.VERSION` | `InstallationVersion` (from `@/installation/version`) | 上游拆分了 version 导出 |
+
+### Typecheck 结果
+
+- **fork 专属文件**：0 个错误 ✅
+- **总错误数**：484 个（全部为上游预存错误：`@opencode-ai/shared/*` 模块缺失、Effect 类型推导等）
+- **零回归**
+
+### Merge point 更新
+
+- **旧值**：`3729fd57068445104ea464a952d41798ed30ea20`
+- **新值**：`c026e25088bcd8668fba7333f97be03b70971f30`（upstream/dev HEAD）
+- **状态**：✅ 完全同步，后续可正常 `git merge upstream/dev`
+
+---
+
