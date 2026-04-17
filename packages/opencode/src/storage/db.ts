@@ -15,6 +15,7 @@ import { InstallationChannel } from "../installation/version"
 import { InstanceState } from "@/effect"
 import { iife } from "@/util/iife"
 import { init } from "#db"
+import { StartupTrace } from "../util"
 
 declare const OPENCODE_MIGRATIONS: { sql: string; timestamp: number; name: string }[] | undefined
 
@@ -82,6 +83,7 @@ function migrations(dir: string): Journal {
 }
 
 export const Client = lazy(() => {
+  StartupTrace.mark("db.open.start")
   log.info("opening database", { path: Path })
 
   const db = init(Path)
@@ -99,6 +101,7 @@ export const Client = lazy(() => {
       ? OPENCODE_MIGRATIONS
       : migrations(path.join(import.meta.dirname, "../../migration"))
   if (entries.length > 0) {
+    StartupTrace.mark("db.migration.start")
     log.info("applying migrations", {
       count: entries.length,
       mode: typeof OPENCODE_MIGRATIONS !== "undefined" ? "bundled" : "dev",
@@ -109,8 +112,10 @@ export const Client = lazy(() => {
       }
     }
     migrate(db, entries)
+    StartupTrace.mark("db.migration.end")
   }
 
+  StartupTrace.mark("db.open.end")
   return db
 })
 

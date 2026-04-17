@@ -13,8 +13,10 @@ import { FileWatcher } from "@/file/watcher"
 import { ShareNext } from "@/share"
 import * as Effect from "effect/Effect"
 import { Config } from "@/config"
+import { StartupTrace } from "../util"
 
 export const InstanceBootstrap = Effect.gen(function* () {
+  StartupTrace.mark("bootstrap.start")
   Log.Default.info("bootstrapping", { directory: Instance.directory })
   // everything depends on config so eager load it for nice traces
   yield* Config.Service.use((svc) => svc.get())
@@ -39,4 +41,5 @@ export const InstanceBootstrap = Effect.gen(function* () {
       }
     }),
   )
+  StartupTrace.mark("bootstrap.end")
 }).pipe(Effect.withSpan("InstanceBootstrap"))

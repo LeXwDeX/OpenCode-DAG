@@ -38,6 +38,9 @@ import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { drizzle } from "drizzle-orm/bun-sqlite"
+import { StartupTrace } from "./util"
+
+StartupTrace.mark("process.start")
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -114,6 +117,7 @@ const cli = yargs(args)
     if (!(await Filesystem.exists(marker))) {
       const tty = process.stderr.isTTY
       process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
+      StartupTrace.mark("json-migration.start")
       const width = 36
       const orange = "\x1b[38;5;214m"
       const muted = "\x1b[0;2m"
@@ -145,6 +149,7 @@ const cli = yargs(args)
         }
       }
       process.stderr.write("Database migration complete." + EOL)
+      StartupTrace.mark("json-migration.end")
     }
   })
   .usage("")

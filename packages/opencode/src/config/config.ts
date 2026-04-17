@@ -38,6 +38,7 @@ import { ConfigSkills } from "./skills"
 import { ConfigPaths } from "./paths"
 import { ConfigFormatter } from "./formatter"
 import { ConfigLSP } from "./lsp"
+import { StartupTrace } from "../util"
 
 const log = Log.create({ service: "config" })
 
@@ -421,6 +422,7 @@ export const layer = Layer.effect(
     })
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(function* (ctx: InstanceContext) {
+      StartupTrace.mark("config.load.start")
       const auth = yield* authSvc.all().pipe(Effect.orDie)
 
       let result: Info = {}
@@ -524,6 +526,7 @@ export const layer = Layer.effect(
 
         yield* ensureGitignore(dir).pipe(Effect.orDie)
 
+        StartupTrace.mark("npm-install-plugin.start")
         const dep = yield* npmSvc
           .install(dir, {
             add: ["@opencode-ai/plugin" + (InstallationLocal ? "" : "@" + InstallationVersion)],
@@ -541,6 +544,7 @@ export const layer = Layer.effect(
             Effect.forkDetach,
           )
         deps.push(dep)
+        StartupTrace.mark("npm-install-plugin.end")
 
         result.command = mergeDeep(result.command ?? {}, yield* Effect.promise(() => ConfigCommand.load(dir)))
         result.agent = mergeDeep(result.agent ?? {}, yield* Effect.promise(() => ConfigAgent.load(dir)))
@@ -659,6 +663,7 @@ export const layer = Layer.effect(
         result.compaction = { ...result.compaction, prune: false }
       }
 
+      StartupTrace.mark("config.load.end")
       return {
         config: result,
         directories,

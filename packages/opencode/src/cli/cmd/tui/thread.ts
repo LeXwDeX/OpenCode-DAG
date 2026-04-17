@@ -15,6 +15,7 @@ import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { writeHeapSnapshot } from "v8"
 import { TuiConfig } from "./config/tui"
+import { StartupTrace } from "@/util"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -204,6 +205,8 @@ export const TuiThreadCommand = cmd({
       }, 1000).unref?.()
 
       try {
+        StartupTrace.mark("tui.render.start")
+        await StartupTrace.flush()
         await tui({
           url: transport.url,
           async onSnapshot() {

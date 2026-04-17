@@ -26,6 +26,7 @@ import { PluginLoader } from "./loader"
 import { parsePluginSpecifier, readPluginId, readV1Plugin, resolvePluginId } from "./shared"
 import { registerAdaptor } from "@/control-plane/adaptors"
 import type { WorkspaceAdaptor } from "@/control-plane/types"
+import { StartupTrace } from "../util"
 
 const log = Log.create({ service: "plugin" })
 
@@ -150,6 +151,7 @@ export const layer = Layer.effect(
         }
 
         for (const plugin of INTERNAL_PLUGINS) {
+          StartupTrace.mark("plugin.load.start")
           log.info("loading internal plugin", { name: plugin.name })
           const init = yield* Effect.tryPromise({
             try: () => plugin(input),
@@ -233,6 +235,7 @@ export const layer = Layer.effect(
         }
 
         // Notify plugins of current config
+        StartupTrace.mark("plugin.load.end")
         for (const hook of hooks) {
           yield* Effect.tryPromise({
             try: () => Promise.resolve((hook as any).config?.(cfg)),
