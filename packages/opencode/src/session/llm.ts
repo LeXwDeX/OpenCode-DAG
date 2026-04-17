@@ -159,6 +159,11 @@ const live: Layer.Layer<
               ...input.messages,
             ]
 
+      // Defense-in-depth: repair any orphaned tool-calls (tool_use without a
+      // matching tool_result) before handing off to streamText. This prevents
+      // Anthropic/Bedrock 400 errors after session crash/cancel/retry races.
+      repairOrphanedToolCalls(messages)
+
       const params = yield* plugin.trigger(
         "chat.params",
         {
@@ -461,6 +466,66 @@ export function hasToolCalls(messages: ModelMessage[]): boolean {
     }
   }
   return false
+}
+
+/**
+ * Defense-in-depth: scan the compiled ModelMessage array for any assistant
+ * tool-call that is NOT followed by a matching tool-result, and synthesize a
+ * placeholder tool-result so the upstream API (Anthropic/Bedrock/etc.) does
+ * not 400 on dangling tool_use blocks.
+ *
+ * Normally `message-v2.ts` converts pending/running parts to `output-error`
+ * during `toModelMessages`, but a race between DB commits and retry/reconnect
+ * flows can still produce orphans. This function is an idempotent safety net
+ * that mutates `messages` in place and returns the same array for chaining.
+ */
+export function repairOrphanedToolCalls(messages: ModelMessage[]): ModelMessage[] {
+  // Collect all tool-call ids and all tool-result ids in one pass
+  const calls: { index: number; toolCallId: string; toolName: string }[] = []
+  const resultIds = new Set<string>()
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i]
+    if (!Array.isArray(msg.content)) continue
+    for (const part of msg.content as any[]) {
+      if (part.type === "tool-call" && typeof part.toolCallId === "string") {
+        calls.push({ index: i, toolCallId: part.toolCallId, toolName: part.toolName ?? "unknown" })
+      } else if (part.type === "tool-result" && typeof part.toolCallId === "string") {
+        resultIds.add(part.toolCallId)
+      }
+    }
+  }
+
+  const orphans = calls.filter((c) => !resultIds.has(c.toolCallId))
+  if (orphans.length === 0) return messages
+
+  log.warn("orphaned tool calls detected, synthesizing placeholder results", {
+    count: orphans.length,
+    ids: orphans.map((o) => o.toolCallId),
+  })
+
+  // Insert a synthetic tool-result message immediately after each orphan.
+  // Walk in reverse so earlier indices stay valid as we splice.
+  for (let k = orphans.length - 1; k >= 0; k--) {
+    const orphan = orphans[k]
+    const synthetic: ModelMessage = {
+      role: "tool",
+      content: [
+        {
+          type: "tool-result",
+          toolCallId: orphan.toolCallId,
+          toolName: orphan.toolName,
+          // AI SDK v5 shape — output carries the error
+          output: {
+            type: "error-text",
+            value: "[Tool execution was interrupted]",
+          },
+        } as any,
+      ],
+    }
+    messages.splice(orphan.index + 1, 0, synthetic)
+  }
+
+  return messages
 }
 
 export * as LLM from "./llm"
