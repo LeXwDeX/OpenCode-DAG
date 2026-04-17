@@ -50,6 +50,7 @@ import { InstanceState } from "@/effect"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect"
+import { SettingsHook } from "@/hook/settings"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -104,6 +105,7 @@ export const layer = Layer.effect(
     const revert = yield* SessionRevert.Service
     const summary = yield* SessionSummary.Service
     const sys = yield* SystemPrompt.Service
+    const settingsHook = yield* SettingsHook.Service
     const llm = yield* LLM.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
@@ -418,9 +420,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
                   { args },
                 )
+                // PreToolUse hook
+                const preHook = yield* settingsHook.trigger("PreToolUse", item.id, args)
+                if (preHook.blocked) {
+                  return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
+                }
                 const result = yield* item.execute(args, ctx)
+                // PostToolUse hook
+                const postHook = yield* settingsHook.trigger("PostToolUse", item.id, args)
+                const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
                 const output = {
                   ...result,
+                  output: hookContexts.length > 0
+                    ? result.output + hookContexts.map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`).join("")
+                    : result.output,
                   attachments: result.attachments?.map((attachment) => ({
                     ...attachment,
                     id: PartID.ascending(),
@@ -460,9 +473,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 { args },
               )
               yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
+              // PreToolUse hook
+              const preHook = yield* settingsHook.trigger("PreToolUse", key, args)
+              if (preHook.blocked) {
+                return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
+              }
               const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
                 execute(args, opts),
               )
+              // PostToolUse hook
+              const postHook = yield* settingsHook.trigger("PostToolUse", key, args)
+              const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
               yield* plugin.trigger(
                 "tool.execute.after",
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
@@ -494,6 +515,9 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               }
 
               const truncated = yield* truncate.output(textParts.join("\n\n"), {}, input.agent)
+              const hookSuffix = hookContexts.length > 0
+                ? hookContexts.map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`).join("")
+                : ""
               const metadata = {
                 ...result.metadata,
                 truncated: truncated.truncated,
@@ -503,7 +527,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               const output = {
                 title: "",
                 metadata,
-                output: truncated.content,
+                output: truncated.content + hookSuffix,
                 attachments: attachments.map((attachment) => ({
                   ...attachment,
                   id: PartID.ascending(),
@@ -1691,6 +1715,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Instruction.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
+    Layer.provide(SettingsHook.layer),
     Layer.provide(Session.defaultLayer),
     Layer.provide(SessionRevert.defaultLayer),
     Layer.provide(SessionSummary.defaultLayer),

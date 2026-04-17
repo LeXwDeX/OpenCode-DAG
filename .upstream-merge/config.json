@@ -1,0 +1,9 @@
+{
+  "upstream_url": "https://github.com/anomalyco/opencode.git",
+  "upstream_branch": "dev",
+  "fork_branch": "dev",
+  "build_cmd": "bun typecheck",
+  "test_cmd": "bun test",
+  "created": "2026-04-14",
+  "fork_dir": "/mnt/d/agents_multi-orchestration/consult/opencode"
+}
