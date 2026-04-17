@@ -118,6 +118,7 @@ export function Prompt(props: PromptProps) {
   const agentStyleId = syntax().getStyleId("extmark.agent")!
   const pasteStyleId = syntax().getStyleId("extmark.paste")!
   let promptPartTypeId = 0
+  let pasteCounter = 0
   const event = useEvent()
 
   event.on(TuiEvent.PromptAppend.type, (evt) => {
@@ -427,6 +428,7 @@ export function Prompt(props: PromptProps) {
         parts: [],
       })
       setStore("extmarkToPartIndex", new Map())
+      pasteCounter = 0
     },
     submit() {
       void submit()
@@ -636,18 +638,12 @@ export function Prompt(props: PromptProps) {
     const messageID = MessageID.ascending()
     let inputText = store.prompt.input
 
-    // Expand pasted text inline before submitting
-    const allExtmarks = input.extmarks.getAllForTypeId(promptPartTypeId)
-    const sortedExtmarks = allExtmarks.sort((a: { start: number }, b: { start: number }) => b.start - a.start)
-
-    for (const extmark of sortedExtmarks) {
-      const partIndex = store.extmarkToPartIndex.get(extmark.id)
-      if (partIndex !== undefined) {
-        const part = store.prompt.parts[partIndex]
-        if (part?.type === "text" && part.text) {
-          const before = inputText.slice(0, extmark.start)
-          const after = inputText.slice(extmark.end)
-          inputText = before + part.text + after
+    // Expand pasted text inline by replacing virtual text strings
+    for (const part of store.prompt.parts) {
+      if (part.type === "text" && part.text && part.source?.text?.value) {
+        const idx = inputText.indexOf(part.source.text.value)
+        if (idx !== -1) {
+          inputText = inputText.slice(0, idx) + part.text + inputText.slice(idx + part.source.text.value.length)
         }
       }
     }
@@ -730,6 +726,7 @@ export function Prompt(props: PromptProps) {
       parts: [],
     })
     setStore("extmarkToPartIndex", new Map())
+    pasteCounter = 0
     props.onSubmit?.()
 
     // temporary hack to make sure the message is sent
@@ -745,6 +742,8 @@ export function Prompt(props: PromptProps) {
   const exit = useExit()
 
   function pasteText(text: string, virtualText: string) {
+    pasteCounter++
+    virtualText = virtualText.replace(/\]$/, ` #${pasteCounter}]`)
     const currentOffset = input.visualCursor.offset
     const extmarkStart = currentOffset
     const extmarkEnd = extmarkStart + virtualText.length
