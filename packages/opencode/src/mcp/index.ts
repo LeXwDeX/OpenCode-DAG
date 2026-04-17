@@ -656,7 +656,7 @@ export const layer = Layer.effect(
               return
             }
 
-            const timeout = entry?.timeout ?? defaultTimeout
+            const timeout = entry?.timeout ?? defaultTimeout ?? DEFAULT_TIMEOUT
             for (const mcpTool of listed) {
               result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(mcpTool, client, timeout)
             }
