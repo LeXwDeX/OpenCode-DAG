@@ -1,5 +1,7 @@
 #!/bin/sh
 set -e
+# Ensure bun is in PATH (for environments where login shell PATH isn't inherited)
+export PATH="$HOME/.local/bin:$HOME/.bun/bin:$PATH"
 # Check if bun version matches package.json
 # keep in sync with packages/script/src/index.ts semver qualifier
 bun -e '
