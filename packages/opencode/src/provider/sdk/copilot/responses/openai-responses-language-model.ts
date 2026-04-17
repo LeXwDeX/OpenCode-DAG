@@ -193,7 +193,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       warnings.push({ type: "unsupported", feature: "stopSequences" })
     }
 
-    const openaiOptions = await parseProviderOptions({
+    const openaiOptions: OpenAIResponsesProviderOptions | undefined = await parseProviderOptions({
       provider: "copilot",
       providerOptions,
       schema: openaiResponsesProviderOptionsSchema,
@@ -491,7 +491,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
       ),
       abortSignal: options.abortSignal,
       fetch: this.config.fetch,
-    })
+    }) as any
 
     if (response.error) {
       throw new APICallError({
@@ -686,7 +686,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
             result: {
               queries: part.queries,
               results:
-                part.results?.map((result) => ({
+                part.results?.map((result: any) => ({
                   attributes: result.attributes as Record<string, JSONValue>,
                   fileId: result.file_id,
                   filename: result.filename,
@@ -1056,7 +1056,7 @@ export class OpenAIResponsesLanguageModel implements LanguageModelV3 {
                   result: {
                     queries: value.item.queries,
                     results:
-                      value.item.results?.map((result) => ({
+                      value.item.results?.map((result: any) => ({
                         attributes: result.attributes as Record<string, JSONValue>,
                         fileId: result.file_id,
                         filename: result.filename,

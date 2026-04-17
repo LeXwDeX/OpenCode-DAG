@@ -25,7 +25,7 @@ import { z } from "zod/v4"
 import { convertToOpenAICompatibleChatMessages } from "./convert-to-openai-compatible-chat-messages"
 import { getResponseMetadata } from "./get-response-metadata"
 import { mapOpenAICompatibleFinishReason } from "./map-openai-compatible-finish-reason"
-import { type OpenAICompatibleChatModelId, openaiCompatibleProviderOptions } from "./openai-compatible-chat-options"
+import { type OpenAICompatibleChatModelId, type OpenAICompatibleProviderOptions, openaiCompatibleProviderOptions } from "./openai-compatible-chat-options"
 import { defaultOpenAICompatibleErrorStructure, type ProviderErrorStructure } from "../openai-compatible-error"
 import type { MetadataExtractor } from "./openai-compatible-metadata-extractor"
 import { prepareTools } from "./openai-compatible-prepare-tools"
@@ -102,7 +102,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
     const warnings: SharedV3Warning[] = []
 
     // Parse provider options
-    const compatibleOptions = Object.assign(
+    const compatibleOptions: OpenAICompatibleProviderOptions = Object.assign(
       (await parseProviderOptions({
         provider: "copilot",
         providerOptions,
@@ -113,7 +113,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
         providerOptions,
         schema: openaiCompatibleProviderOptions,
       })) ?? {},
-    )
+    ) as OpenAICompatibleProviderOptions
 
     if (topK != null) {
       warnings.push({ type: "unsupported", feature: "topK" })
@@ -194,11 +194,7 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
 
     const body = JSON.stringify(args)
 
-    const {
-      responseHeaders,
-      value: responseBody,
-      rawValue: rawResponse,
-    } = await postJsonToApi({
+    const _apiResult = await postJsonToApi({
       url: this.config.url({
         path: "/chat/completions",
         modelId: this.modelId,
@@ -210,6 +206,9 @@ export class OpenAICompatibleChatLanguageModel implements LanguageModelV3 {
       abortSignal: options.abortSignal,
       fetch: this.config.fetch,
     })
+    const responseHeaders = _apiResult.responseHeaders
+    const responseBody = _apiResult.value as z.infer<typeof OpenAICompatibleChatResponseSchema>
+    const rawResponse = _apiResult.rawValue
 
     const choice = responseBody.choices[0]
     const content: Array<LanguageModelV3Content> = []

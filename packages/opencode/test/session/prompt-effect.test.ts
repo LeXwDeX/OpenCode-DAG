@@ -37,6 +37,7 @@ import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "../../src/tool"
 import { Truncate } from "../../src/tool"
 import { Log } from "../../src/util"
+import { SettingsHook } from "../../src/hook/settings"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
 import { Ripgrep } from "../../src/file/ripgrep"
 import { Format } from "../../src/format"
@@ -199,6 +200,7 @@ function makeHttp() {
     SessionPrompt.layer.pipe(
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(summary),
+      Layer.provide(SettingsHook.layer),
       Layer.provideMerge(run),
       Layer.provideMerge(compact),
       Layer.provideMerge(proc),

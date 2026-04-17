@@ -56,6 +56,7 @@ import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import * as CrossSpawnSpawner from "../../src/effect/cross-spawn-spawner"
 import { Ripgrep } from "../../src/file/ripgrep"
 import { Format } from "../../src/format"
+import { SettingsHook } from "../../src/hook/settings"
 
 void Log.init({ print: false })
 
@@ -155,6 +156,7 @@ function makeHttp() {
     SessionPrompt.layer.pipe(
       Layer.provide(SessionRevert.defaultLayer),
       Layer.provide(SessionSummary.defaultLayer),
+      Layer.provide(SettingsHook.layer),
       Layer.provideMerge(run),
       Layer.provideMerge(compact),
       Layer.provideMerge(proc),
