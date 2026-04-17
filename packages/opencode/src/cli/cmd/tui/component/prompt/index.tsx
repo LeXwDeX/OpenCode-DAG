@@ -597,8 +597,9 @@ export function Prompt(props: PromptProps) {
     // IME: double-defer may fire before onContentChange flushes the last
     // composed character (e.g. Korean hangul) to the store, so read
     // plainText directly and sync before any downstream reads.
-    if (input && !input.isDestroyed && input.plainText !== store.prompt.input) {
-      setStore("prompt", "input", input.plainText)
+    if (input && !input.isDestroyed) {
+      if (input.plainText !== store.prompt.input)
+        setStore("prompt", "input", input.plainText)
       syncExtmarksWithPromptParts()
     }
     if (props.disabled) return
@@ -638,13 +639,23 @@ export function Prompt(props: PromptProps) {
     const messageID = MessageID.ascending()
     let inputText = store.prompt.input
 
-    // Expand pasted text inline by replacing virtual text strings
+    // Expand pasted text inline by replacing virtual text with real content.
+    // Use extmark-tracked start/end positions (auto-updated by @opentui/core
+    // on every insertion/deletion) instead of indexOf, which breaks when the
+    // user moves the cursor around virtual text and types adjacent content.
+    // Collect text parts with their extmark-tracked positions, then replace
+    // from end to start so earlier offsets stay valid.
+    const replacements: { start: number; end: number; real: string }[] = []
     for (const part of store.prompt.parts) {
-      if (part.type === "text" && part.text && part.source?.text?.value) {
-        const idx = inputText.indexOf(part.source.text.value)
-        if (idx !== -1) {
-          inputText = inputText.slice(0, idx) + part.text + inputText.slice(idx + part.source.text.value.length)
-        }
+      if (part.type !== "text" || !part.text || !part.source) continue
+      const src = part.source.text
+      if (!src) continue
+      replacements.push({ start: src.start, end: src.end, real: part.text })
+    }
+    replacements.sort((a, b) => b.start - a.start)
+    for (const r of replacements) {
+      if (r.start >= 0 && r.end <= inputText.length && r.start < r.end) {
+        inputText = inputText.slice(0, r.start) + r.real + inputText.slice(r.end)
       }
     }
 
