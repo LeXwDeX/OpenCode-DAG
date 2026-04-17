@@ -6,6 +6,9 @@ import type * as Provider from "./provider"
 import type * as ModelsDev from "./models"
 import { iife } from "@/util/iife"
 import { Flag } from "@/flag/flag"
+import * as Log from "@/util/log"
+
+const log = Log.create({ service: "transform" })
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -53,6 +56,28 @@ function normalizeMessages(
   // Anthropic rejects messages with empty content - filter out empty string messages
   // and remove empty text/reasoning parts from array content
   if (model.api.npm === "@ai-sdk/anthropic" || model.api.npm === "@ai-sdk/amazon-bedrock") {
+    // 诊断日志：检查进入 normalizeMessages 时 reasoning parts 的 providerOptions 状态
+    for (let i = 0; i < msgs.length; i++) {
+      const msg = msgs[i]
+      if (msg.role !== "assistant" || !Array.isArray(msg.content)) continue
+      for (let j = 0; j < msg.content.length; j++) {
+        const part = msg.content[j] as any
+        if (part.type !== "reasoning") continue
+        const sig = part.providerOptions?.anthropic?.signature ?? part.providerMetadata?.anthropic?.signature
+        log.info("normalize-reasoning-diag", {
+          msgIndex: i,
+          partIndex: j,
+          npm: model.api.npm,
+          modelId: model.api.id,
+          hasProviderOptions: !!part.providerOptions,
+          hasProviderMetadata: !!part.providerMetadata,
+          hasSignature: !!sig,
+          signatureLen: sig ? sig.length : 0,
+          signaturePreview: sig ? String(sig).substring(0, 40) + "..." : "(none)",
+          textLen: part.text?.length ?? 0,
+        })
+      }
+    }
     msgs = msgs
       .map((msg) => {
         if (typeof msg.content === "string") {

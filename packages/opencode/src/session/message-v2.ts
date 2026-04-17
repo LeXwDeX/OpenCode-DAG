@@ -16,6 +16,9 @@ import type { Provider } from "@/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Effect } from "effect"
 import { EffectLogger } from "@/effect"
+import * as Log from "@/util/log"
+
+const log = Log.create({ service: "message-v2" })
 
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
@@ -788,6 +791,22 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
             })
         }
         if (part.type === "reasoning") {
+          // 诊断日志：记录 reasoning part 的 metadata（含 signature）状态
+          const sig = part.metadata?.anthropic?.signature
+          log.info("reasoning-part-diag", {
+            msgIndex: result.length,
+            msgId: msg.info.id,
+            differentModel,
+            currentModel: `${model.providerID}/${model.id}`,
+            partModel: `${msg.info.providerID}/${msg.info.modelID}`,
+            hasMetadata: !!part.metadata,
+            metadataKeys: part.metadata ? Object.keys(part.metadata).join(",") : "",
+            hasSignature: !!sig,
+            signatureLen: sig ? sig.length : 0,
+            signaturePreview: sig ? sig.substring(0, 40) + "..." : "(none)",
+            textLen: part.text?.length ?? 0,
+            willIncludeMetadata: !differentModel,
+          })
           assistantMessage.parts.push({
             type: "reasoning",
             text: part.text,
