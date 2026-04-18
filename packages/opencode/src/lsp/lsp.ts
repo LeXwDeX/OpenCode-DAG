@@ -226,7 +226,10 @@ export const layer = Layer.effect(
 
     const getClients = Effect.fnUntraced(function* (file: string) {
       const ctx = yield* InstanceState.context
-      if (!AppFileSystem.contains(ctx.directory, file) && (ctx.worktree === "/" || !AppFileSystem.contains(ctx.worktree, file))) {
+      if (
+        !AppFileSystem.contains(ctx.directory, file) &&
+        (ctx.worktree === "/" || !AppFileSystem.contains(ctx.worktree, file))
+      ) {
         return [] as LSPClient.Info[]
       }
       const s = yield* InstanceState.get(state)

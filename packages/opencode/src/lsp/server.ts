@@ -1077,10 +1077,10 @@ export const JDTLS: Info = {
     const exclusionsForMonorepos = gradleMarkers.concat(settingsMarkers)
 
     const [projectRoot, wrapperRoot, settingsRoot] = await Promise.all([
-      NearestRoot(
-        ["pom.xml", "build.gradle", "build.gradle.kts", ".project", ".classpath"],
-        exclusionsForMonorepos,
-      )(file, ctx),
+      NearestRoot(["pom.xml", "build.gradle", "build.gradle.kts", ".project", ".classpath"], exclusionsForMonorepos)(
+        file,
+        ctx,
+      ),
       NearestRoot(gradleMarkers, settingsMarkers)(file, ctx),
       NearestRoot(settingsMarkers)(file, ctx),
     ])
