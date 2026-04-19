@@ -478,9 +478,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               if (preHook.blocked) {
                 return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
               }
-              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
-                execute(args, opts),
-              )
+              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.tryPromise({
+                try: () => execute(args, opts),
+                catch: (e) => new Error(`MCP tool "${key}" failed: ${e instanceof Error ? e.message : String(e)}`),
+              })
               // PostToolUse hook
               const postHook = yield* settingsHook.trigger("PostToolUse", key, args)
               const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
@@ -540,7 +541,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* input.processor.completeToolCall(opts.toolCallId, output)
               }
               return output
-            }),
+            }).pipe(
+              Effect.catch((e: unknown) =>
+                Effect.succeed({
+                  title: "",
+                  metadata: {} as Record<string, unknown>,
+                  output: `MCP tool error: ${e instanceof Error ? e.message : String(e)}`,
+                  content: [{ type: "text" as const, text: `MCP tool error: ${e instanceof Error ? e.message : String(e)}` }],
+                }),
+              ),
+            ),
           )
         tools[key] = item
       }

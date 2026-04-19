@@ -148,6 +148,11 @@ export namespace SettingsHook {
       child.stdout.on("data", (d: string) => (stdout += d))
       child.stderr.on("data", (d: string) => (stderr += d))
 
+      // Prevent EPIPE on stdin from becoming an uncaughtException that kills the process
+      child.stdin.on("error", (err) => {
+        log.warn("hook stdin error", { command, error: err.message })
+      })
+
       // Write JSON input to stdin
       child.stdin.write(JSON.stringify(input) + "\n", "utf8")
       child.stdin.end()
