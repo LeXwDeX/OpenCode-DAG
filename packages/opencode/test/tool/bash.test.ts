@@ -1193,3 +1193,81 @@ describe("tool.bash truncation", () => {
     })
   })
 })
+
+describe("tool.bash timeout with orphan stdout holder", () => {
+  // 回归测试：修复前，孙子进程继承 stdout pipe fd 导致工具调用永不返回。
+  // 复现场景：shell 命令 fork 出一个持有 stdout fd 的后台子进程，
+  //           主进程正常退出，但孙子进程一直活着。
+  //
+  // 修复要求：工具调用必须在 timeout + 一定清理窗口（< 10s）内返回。
+  test.skipIf(process.platform === "win32")(
+    "returns within timeout even when child forks an orphan stdout holder",
+    async () => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const bash = await initBash()
+          const TIMEOUT_MS = 1500
+
+          const before = Date.now()
+          const result = await Effect.runPromise(
+            bash.execute(
+              {
+                // python3 直接 exec（不经过 shell &），fork 出的孙子进程继承 stdout pipe fd，
+                // 主 python 进程结束后孙子还活着。
+                // 这准确模拟了 opencode 套 opencode 的场景。
+                // 修复前：工具调用卡在等 stream EOF，永不返回。
+                // 修复后：超时后强制 destroy stream，工具正常返回。
+                command: `python3 -c "import subprocess, sys; subprocess.Popen(['sleep','60']); print('orphan_test'); sys.stdout.flush()"`,
+                description: "Orphan stdout holder via python fork",
+                timeout: TIMEOUT_MS,
+              },
+              ctx,
+            ),
+          )
+          const elapsed = Date.now() - before
+
+          // 1. 输出里要有 python 打印的内容
+          expect(result.output).toContain("orphan_test")
+          // 2. 必须包含超时提示
+          expect(result.output).toContain("bash tool terminated command after exceeding timeout")
+          // 3. 关键：整体必须在超时 + 8 秒清理窗口内完成
+          expect(elapsed).toBeLessThan(TIMEOUT_MS + 8000)
+        },
+      })
+    },
+    20_000,
+  )
+
+  test.skipIf(process.platform === "win32")(
+    "returns within timeout when subshell holds stdout open without output",
+    async () => {
+      await Instance.provide({
+        directory: projectRoot,
+        fn: async () => {
+          const bash = await initBash()
+          const TIMEOUT_MS = 1500
+
+          const before = Date.now()
+          const result = await Effect.runPromise(
+            bash.execute(
+              {
+                // 什么都不打印：python3 fork 一个 sleep 孙子进程然后直接退出。
+                // 孙子进程继承 stdout fd，pipe 永不 EOF。
+                command: `python3 -c "import subprocess; subprocess.Popen(['sleep','60'])"`,
+                description: "Silent orphan stdout holder",
+                timeout: TIMEOUT_MS,
+              },
+              ctx,
+            ),
+          )
+          const elapsed = Date.now() - before
+
+          expect(result.output).toContain("bash tool terminated command after exceeding timeout")
+          expect(elapsed).toBeLessThan(TIMEOUT_MS + 8000)
+        },
+      })
+    },
+    20_000,
+  )
+})

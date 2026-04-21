@@ -3113,3 +3113,206 @@ describe("ProviderTransform.variants", () => {
     })
   })
 })
+
+describe("ProviderTransform.message - anthropic reasoning must not be final block", () => {
+  // 回归测试：修复前，流式响应被中断后 assistant 消息末尾可能只有 reasoning 块，
+  // 重放历史对话时 Anthropic API 报 400:
+  //   "The final block in an assistant message cannot be 'thinking'."
+  //
+  // 修复要求：normalizeMessages 必须保证 assistant 消息最后一个 part
+  //           不是 reasoning / redacted_thinking 类型。
+
+  const anthropicModel = {
+    id: "anthropic/claude-opus-4-5",
+    providerID: "anthropic",
+    api: {
+      id: "claude-opus-4-5-20250514",
+      url: "https://api.anthropic.com",
+      npm: "@ai-sdk/anthropic",
+    },
+    name: "Claude Opus 4.5",
+    capabilities: {
+      temperature: true,
+      reasoning: true,
+      attachment: true,
+      toolcall: true,
+      input: { text: true, audio: false, image: true, video: false, pdf: true },
+      output: { text: true, audio: false, image: false, video: false, pdf: false },
+      interleaved: false,
+    },
+    cost: { input: 0.015, output: 0.075, cache: { read: 0.0015, write: 0.01875 } },
+    limit: { context: 200000, output: 16000 },
+    status: "active",
+    options: {},
+    headers: {},
+  } as any
+
+  test("reasoning-only message gets a text fallback appended", () => {
+    // 场景：用户在 thinking 过程中 Esc 取消，session 里只剩一条纯 reasoning 消息。
+    // 重放时不能直接发给 Anthropic，必须补一个 text 结尾。
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Let me think about the workspace-card section..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
+
+    expect(result).toHaveLength(1)
+    const parts = result[0].content as any[]
+    const lastType = parts[parts.length - 1].type
+    expect(lastType).not.toBe("reasoning")
+    expect(lastType).not.toBe("redacted_thinking")
+    // reasoning 内容本身要保留（signature 链路需要它）
+    expect(parts.some((p: any) => p.type === "reasoning")).toBe(true)
+  })
+
+  test("reasoning trailing after text gets reordered so text is last", () => {
+    // 场景：正常的 [text, reasoning] 顺序（极少见，但可能由流式并发产生）
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Here is my answer." },
+          { type: "reasoning", text: "Wait, let me double-check..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
+
+    expect(result).toHaveLength(1)
+    const parts = result[0].content as any[]
+    const lastType = parts[parts.length - 1].type
+    expect(lastType).not.toBe("reasoning")
+    expect(lastType).not.toBe("redacted_thinking")
+    // text 内容必须保留
+    expect(parts.some((p: any) => p.type === "text" && p.text === "Here is my answer.")).toBe(true)
+  })
+
+  test("reasoning trailing after tool-call gets reordered so tool-call is last", () => {
+    // 场景：[tool-call, reasoning] — Anthropic 要求 tool-call 为最后，reasoning 也不能收尾
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "tool-call", toolCallId: "tc_1", toolName: "bash", input: { command: "ls" } },
+          { type: "reasoning", text: "I ran ls to check the files..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
+
+    expect(result).toHaveLength(1)
+    const parts = result[0].content as any[]
+    const lastType = parts[parts.length - 1].type
+    // 可以是 tool-call 或 text（补的兜底），但不能是 reasoning
+    expect(lastType).not.toBe("reasoning")
+    expect(lastType).not.toBe("redacted_thinking")
+  })
+
+  test("multiple trailing reasoning blocks all moved before the anchor", () => {
+    // 场景：连续多个 reasoning 块在 text 之后（interleaved thinking 的边界情况）
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Starting analysis." },
+          { type: "reasoning", text: "Step 1..." },
+          { type: "reasoning", text: "Step 2..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
+
+    expect(result).toHaveLength(1)
+    const parts = result[0].content as any[]
+    const lastType = parts[parts.length - 1].type
+    expect(lastType).not.toBe("reasoning")
+    expect(lastType).not.toBe("redacted_thinking")
+    // 两个 reasoning 块都要保留
+    expect(parts.filter((p: any) => p.type === "reasoning")).toHaveLength(2)
+  })
+
+  test("valid [reasoning, text] order is left unchanged", () => {
+    // 场景：正常顺序，不需要改动
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Thinking..." },
+          { type: "text", text: "Final answer." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, anthropicModel, {}) as any[]
+
+    expect(result).toHaveLength(1)
+    expect(result[0].content).toHaveLength(2)
+    expect(result[0].content[0]).toMatchObject({ type: "reasoning", text: "Thinking..." })
+    expect(result[0].content[1]).toMatchObject({ type: "text", text: "Final answer." })
+  })
+
+  test("bedrock anthropic model gets the same protection", () => {
+    const bedrockModel = {
+      ...anthropicModel,
+      id: "amazon-bedrock/anthropic.claude-opus-4-5",
+      providerID: "amazon-bedrock",
+      api: {
+        id: "anthropic.claude-opus-4-5-20250514",
+        url: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        npm: "@ai-sdk/amazon-bedrock",
+      },
+    }
+
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Bedrock thinking that got interrupted..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, bedrockModel, {}) as any[]
+
+    const parts = result[0].content as any[]
+    const lastType = parts[parts.length - 1].type
+    expect(lastType).not.toBe("reasoning")
+    expect(lastType).not.toBe("redacted_thinking")
+  })
+
+  test("non-anthropic provider is not affected", () => {
+    // OpenAI 没有这个限制，transform 不该动它的消息
+    const openaiModel = {
+      ...anthropicModel,
+      providerID: "openai",
+      api: {
+        id: "gpt-4o",
+        url: "https://api.openai.com",
+        npm: "@ai-sdk/openai",
+      },
+    }
+
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "reasoning", text: "Thinking..." },
+        ],
+      },
+    ] as any[]
+
+    const result = ProviderTransform.message(msgs, openaiModel, {}) as any[]
+
+    // OpenAI 路径不经过该 transform，原样返回
+    expect(result[0].content).toHaveLength(1)
+    expect(result[0].content[0].type).toBe("reasoning")
+  })
+})

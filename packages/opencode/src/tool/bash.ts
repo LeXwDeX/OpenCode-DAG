@@ -17,7 +17,7 @@ import { Shell } from "@/shell/shell"
 import { BashArity } from "@/permission/arity"
 import * as Truncate from "./truncate"
 import { Plugin } from "@/plugin"
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
 
@@ -444,7 +444,7 @@ export const BashTool = Tool.define(
         Effect.gen(function* () {
           const handle = yield* spawner.spawn(cmd(input.shell, input.name, input.command, input.cwd, input.env))
 
-          yield* Effect.forkScoped(
+          const reader = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
               const size = Buffer.byteLength(chunk, "utf-8")
               list.push({ text: chunk, size })
@@ -515,6 +515,18 @@ export const BashTool = Tool.define(
           if (exit.kind === "timeout") {
             expired = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          }
+
+          // When aborted/timed out, the child may leave grandchildren holding
+          // the stdout pipe fd (e.g. detached background jobs, Popen without
+          // close_fds). The merged output stream would then never EOF, and
+          // Effect.scoped would block forever waiting for the reader fiber.
+          // Give the reader a short grace window to drain, then force-interrupt.
+          if (exit.kind !== "exit") {
+            yield* Fiber.await(reader).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.catch(() => Fiber.interrupt(reader)),
+            )
           }
 
           return exit.kind === "exit" ? exit.code : null
