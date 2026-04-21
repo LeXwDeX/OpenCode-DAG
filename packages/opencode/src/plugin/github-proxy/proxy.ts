@@ -14,13 +14,17 @@ const log = Log.create({ service: "plugin.github-proxy" })
 type ApiAuthWithMeta = { type: "api"; key: string; metadata?: Record<string, string> }
 
 function fix(model: Model, url: string): Model {
+  // 即使 /copilot/models 解析失败走 fallback，Claude 仍必须走 anthropic messages API，
+  // 否则 thinking block 的 signature 链路会在 @ai-sdk/github-copilot 侧丢失，
+  // 引发上游 "Invalid signature in thinking block"。
+  const isClaude = model.api.id.includes("claude")
   return {
     ...model,
     providerID: "github-proxy",
     api: {
       ...model.api,
-      url,
-      npm: "@ai-sdk/github-copilot",
+      url: isClaude ? `${url}/v1` : url,
+      npm: isClaude ? "@ai-sdk/anthropic" : "@ai-sdk/github-copilot",
     },
   }
 }
