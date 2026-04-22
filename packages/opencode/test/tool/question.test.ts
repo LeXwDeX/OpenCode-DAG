@@ -1,5 +1,6 @@
 import { describe, expect } from "bun:test"
-import { Effect, Fiber, Layer } from "effect"
+import { Effect, Exit, Cause, Fiber, Layer } from "effect"
+import z from "zod"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -82,6 +83,86 @@ describe("tool.question", () => {
 
         const result = yield* Fiber.join(fiber)
         expect(result.output).toContain(`"What is your favorite animal?"="Dog"`)
+      }),
+    ),
+  )
+
+  // ── formatValidationError tests ───────────────────────────────────────────
+
+  it.live("formatValidationError: should explain missing question field with hint and example", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const toolInfo = yield* QuestionTool
+        const tool = yield* toolInfo.init()
+
+        // Parse real bad input: LLM puts text in "header" but omits "question"
+        const parseResult = tool.parameters.safeParse({
+          questions: [{ header: "Deploy target", options: [{ label: "Vercel", description: "Edge" }] }],
+        })
+        expect(parseResult.success).toBe(false)
+        if (parseResult.success) return
+
+        expect(tool.formatValidationError).toBeDefined()
+        const message = tool.formatValidationError!(parseResult.error)
+
+        // Must surface the offending path
+        expect(message).toContain("questions.0.question")
+        // Must call out the required-field hint
+        expect(message).toContain('"question" is REQUIRED')
+        // Must include field spec with all required fields
+        expect(message).toContain("header")
+        expect(message).toContain("options")
+        // Must include a runnable call example
+        expect(message).toContain("Correct call example")
+        expect(message).toContain('"question":')
+        // Must end with re-issue instruction
+        expect(message).toContain("Please re-issue the tool call")
+      }),
+    ),
+  )
+
+  it.live("execute with missing question field should die with formatValidationError output", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const toolInfo = yield* QuestionTool
+        const tool = yield* toolInfo.init()
+
+        // Simulate LLM call that puts text only in "header" and omits "question"
+        const badArgs = { questions: [{ header: "Deploy target", options: [{ label: "Vercel", description: "Edge" }] }] }
+
+        // Effect.exit captures the Die defect as Exit.Failure(Cause.Die(error))
+        const exit = yield* Effect.exit(tool.execute(badArgs as any, ctx))
+        expect(Exit.isFailure(exit)).toBe(true)
+        if (!Exit.isFailure(exit)) return
+
+        const defect = Cause.squash(exit.cause)
+        expect(defect).toBeInstanceOf(Error)
+        const msg = (defect as Error).message
+        // The formatted message must reach the caller through the full execute path
+        expect(msg).toContain('"question" is REQUIRED')
+        expect(msg).toContain("Correct call example")
+        expect(msg).toContain("Please re-issue the tool call")
+      }),
+    ),
+  )
+
+  it.live("formatValidationError: missing options field should surface correct path", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        const toolInfo = yield* QuestionTool
+        const tool = yield* toolInfo.init()
+
+        // Parse bad input: "options" is also a required field
+        const parseResult = tool.parameters.safeParse({
+          questions: [{ question: "Which environment?", header: "Env" }],
+        })
+        expect(parseResult.success).toBe(false)
+        if (parseResult.success) return
+
+        const message = tool.formatValidationError!(parseResult.error)
+        expect(message).toContain("questions.0.options")
+        expect(message).toContain('"options" is REQUIRED')
+        expect(message).toContain("Correct call example")
       }),
     ),
   )
