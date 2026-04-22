@@ -177,7 +177,9 @@ async function summaryAssistant(sessionID: SessionID, parentID: MessageID, root:
 }
 
 async function lastCompactionPart(sessionID: SessionID) {
-  return (await svc.messages({ sessionID })).at(-2)?.parts.find((item): item is MessageV2.CompactionPart => item.type === "compaction")
+  return (await svc.messages({ sessionID }))
+    .at(-2)
+    ?.parts.find((item): item is MessageV2.CompactionPart => item.type === "compaction")
 }
 
 function fake(
