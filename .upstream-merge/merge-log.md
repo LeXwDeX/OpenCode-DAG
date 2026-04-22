@@ -167,3 +167,54 @@ config 相关 (2): `672ee28635` `ef90b93205`
 
 ---
 
+## Session 2026-04-22 — 整体 merge upstream/dev (271 commits)
+
+**策略**：整体 `git merge --no-ff upstream/dev`（基于 Round 3 重建后的干净历史）
+**范围**：`c026e25088..ed3d364ebd`，共 271 个 non-merge 上游提交
+**前置**：先把本地未提交的 question 工具修复（formatValidationError）单独 commit
+
+### 冲突文件 (7 个) 与解决方式
+
+| 文件 | 解决方式 |
+|---|---|
+| `bun.lock` | `--theirs`，事后 `bun install` 重新生成 |
+| `packages/opencode/package.json` | 取较新 ai-sdk 版本号（fork 与上游各有更新） |
+| `packages/opencode/src/index.ts` | 保留两边：StartupTrace + ensureProcessMetadata |
+| `packages/opencode/src/cli/cmd/tui/thread.ts` | 保留两边 import |
+| `packages/opencode/src/config/mcp.ts` | 采纳上游 Effect Schema 版本（已含 environment 字段），timeout 描述改回 30s |
+| `packages/opencode/src/config/config.ts` | `--theirs` + 重新插入 4 处 StartupTrace.mark + 1 处 import |
+| `packages/opencode/test/session/prompt-effect.test.ts` | 接受上游删除 |
+
+### 关键上游变更
+
+- 大规模 zod → Effect Schema 迁移：`config/mcp.ts`、provider schema、MessageV2 系列（User/Assistant/Part/ToolPart/Format）、ConfigPermission、Snapshot、LSP
+- `Npm` 模块从 `@opencode-ai/shared/npm` 迁回 `@/npm`
+- npm install API 从字符串数组改成对象数组（`{ name, version }`）
+- 新增：Mistral reasoning variant、roslyn-language-server、LLM Gateway provider、codex 5.5、Bun 1.3.13、terminal Nerd Font
+
+### Fork 接线验证
+
+- ✅ `SettingsHook` (hook/settings.ts、session/prompt.ts) 完整
+- ✅ `GithubProxyAuthPlugin` (plugin/github-proxy/proxy.ts、plugin/index.ts) 完整
+- ✅ `GithubProxyQuota` (cli/cmd/tui/feature-plugins/github-proxy/quota-status.tsx、tui/plugin/internal.ts) 完整
+- ✅ `StartupTrace` (util/startup-trace.ts) 8 处调用全保留
+
+### 验证结果
+
+- `bun install`：成功，55 packages installed
+- `bun typecheck`：1 error (test/session/prompt.test.ts，**上游引入**，非 fork 回归)
+  - 对比合并前 baseline 64 errors（全在 sdk/copilot），上游已清理 → **零 fork 回归**
+
+### 提交
+
+- `14310e8a5e` 修复：question 工具增加 formatValidationError 友好提示（fork 自有）
+- `e72d96fd81` merge: upstream/dev (anomalyco) c026e25088..upstream HEAD
+- `2461d13811` 维护: 重新生成 bun.lock 同步上游依赖
+
+### Merge point 更新
+
+- **旧值**：`c026e25088bcd8668fba7333f97be03b70971f30`
+- **新值**：`ed3d364ebd44185ad1207d40364cc2e06137eade`（upstream/dev HEAD @ 2026-04-22）
+
+---
+
