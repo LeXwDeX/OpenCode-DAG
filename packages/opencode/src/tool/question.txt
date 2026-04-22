@@ -4,7 +4,37 @@ Use this tool when you need to ask the user questions during execution. This all
 3. Get decisions on implementation choices as you work
 4. Offer choices to the user about what direction to take.
 
-Usage notes:
-- When `custom` is enabled (default), a "Type your own answer" option is added automatically; don't include "Other" or catch-all options
-- Answers are returned as arrays of labels; set `multiple: true` to allow selecting more than one
-- If you recommend a specific option, make that the first option in the list and add "(Recommended)" at the end of the label
+REQUIRED fields per question item (DO NOT OMIT):
+- question (string)  The full question sentence the user will read.
+- header   (string)  A very short label (max 30 chars). It is a badge/title, NOT a substitute for "question".
+- options  (array)   Each option must have { label: string, description: string }.
+
+Optional fields:
+- multiple (boolean) Allow selecting multiple choices. Default false.
+- custom   (boolean) Default true. When true, a "Type your own answer" option is auto-added; do NOT include "Other" or catch-all options yourself.
+
+Common mistakes to avoid:
+- Putting the question text into "header" and leaving "question" empty/undefined. Both are required and serve different purposes.
+- Forgetting "description" inside an option object.
+- Returning a single object instead of an array for "questions".
+
+Recommendation styling:
+- If you recommend a specific option, place it first and append "(Recommended)" to its label.
+
+Answers:
+- Returned as arrays of selected labels. Set "multiple": true to allow more than one selection.
+
+Correct call example:
+{
+  "questions": [
+    {
+      "question": "Which deployment target should we use?",
+      "header": "Deploy target",
+      "options": [
+        { "label": "Vercel (Recommended)", "description": "Edge runtime, zero-config" },
+        { "label": "Cloudflare Pages", "description": "Workers + KV integration" }
+      ],
+      "multiple": false
+    }
+  ]
+}
