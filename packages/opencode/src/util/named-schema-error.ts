@@ -32,12 +32,7 @@ export function namedSchemaError<Tag extends string, Fields extends Schema.Struc
     static readonly Schema = wire
     static readonly tag = tag
     public static isInstance(input: unknown): input is NamedSchemaError {
-      return (
-        typeof input === "object" &&
-        input !== null &&
-        "name" in input &&
-        (input as { name: unknown }).name === tag
-      )
+      return typeof input === "object" && input !== null && "name" in input && (input as { name: unknown }).name === tag
     }
 
     public override readonly name: Tag = tag
