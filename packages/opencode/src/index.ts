@@ -39,8 +39,10 @@ import { PluginCommand } from "./cli/cmd/plug"
 import { Heap } from "./cli/heap"
 import { drizzle } from "drizzle-orm/bun-sqlite"
 import { StartupTrace } from "./util"
+import { ensureProcessMetadata } from "./util/opencode-process"
 
 StartupTrace.mark("process.start")
+const processMetadata = ensureProcessMetadata("main")
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {
@@ -111,6 +113,8 @@ const cli = yargs(args)
     Log.Default.info("opencode", {
       version: InstallationVersion,
       args: process.argv.slice(2),
+      process_role: processMetadata.processRole,
+      run_id: processMetadata.runID,
     })
 
     const marker = path.join(Global.Path.data, "opencode.db")

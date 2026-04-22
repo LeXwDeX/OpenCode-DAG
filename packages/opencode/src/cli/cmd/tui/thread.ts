@@ -16,6 +16,7 @@ import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { writeHeapSnapshot } from "v8"
 import { TuiConfig } from "./config/tui"
 import { StartupTrace } from "@/util"
+import { OPENCODE_PROCESS_ROLE, OPENCODE_RUN_ID, ensureRunID, sanitizedProcessEnv } from "@/util/opencode-process"
 
 declare global {
   const OPENCODE_WORKER_PATH: string
@@ -130,11 +131,13 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      const env = sanitizedProcessEnv({
+        [OPENCODE_PROCESS_ROLE]: "worker",
+        [OPENCODE_RUN_ID]: ensureRunID(),
+      })
 
       const worker = new Worker(file, {
-        env: Object.fromEntries(
-          Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
-        ),
+        env,
       })
       worker.onerror = (e) => {
         Log.Default.error("thread error", {
