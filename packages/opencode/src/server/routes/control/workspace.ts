@@ -26,9 +26,7 @@ export const WorkspaceRoutes = lazy(() =>
             description: "Workspace adaptors",
             content: {
               "application/json": {
-                schema: resolver(
-                  z.array(zodObject(WorkspaceAdaptorEntry)),
-                ),
+                schema: resolver(z.array(zodObject(WorkspaceAdaptorEntry))),
               },
             },
           },
