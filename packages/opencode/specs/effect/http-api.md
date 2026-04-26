@@ -181,7 +181,7 @@ Use raw Effect HTTP routes where `HttpApi` does not fit. The goal is deleting Ho
 | `mcp`                     | `bridged`         | status, add, OAuth, connect/disconnect                                                             |
 | `workspace`               | `bridged` partial | adaptor/list/status; create/remove/session-restore remain                                          |
 | top-level instance routes | `bridged`         | path, vcs, command, agent, skill, lsp, formatter, dispose                                          |
-| experimental JSON routes  | `bridged` partial | console reads, tool ids, worktree list/mutations, resource list; global session list remains later |
+| experimental JSON routes  | `bridged` partial | console, tool, worktree list/mutations, resource list; global session list remains later          |
 | `session`                 | `later/special`   | large stateful surface plus streaming                                                              |
 | `sync`                    | `later`           | process/control side effects                                                                       |
 | `event`                   | `special`         | SSE                                                                                                |
@@ -259,9 +259,9 @@ This checklist tracks bridge parity only. Checked routes are available through t
 
 - [x] `GET /experimental/console` - active Console provider metadata.
 - [x] `GET /experimental/console/orgs` - switchable Console orgs.
-- [ ] `POST /experimental/console/switch` - switch active Console org.
+- [x] `POST /experimental/console/switch` - switch active Console org.
 - [x] `GET /experimental/tool/ids` - tool IDs.
-- [ ] `GET /experimental/tool` - tools for provider/model.
+- [x] `GET /experimental/tool` - tools for provider/model.
 - [x] `GET /experimental/worktree` - list worktrees.
 - [x] `POST /experimental/worktree` - create worktree.
 - [x] `DELETE /experimental/worktree` - remove worktree.
@@ -350,7 +350,7 @@ Prefer smaller PRs from here so route behavior and SDK/OpenAPI fallout stays rev
 1. [x] Bridge `PATCH /project/:projectID`.
 2. [x] Bridge MCP add/connect/disconnect routes.
 3. [x] Bridge MCP OAuth routes: start, callback, authenticate, remove.
-4. [ ] Bridge experimental console switch and tool list routes.
+4. [x] Bridge experimental console switch and tool list routes.
 5. [ ] Bridge experimental global session list.
 6. [ ] Bridge workspace create/remove/session-restore routes.
 7. [ ] Bridge sync start/replay/history routes.
