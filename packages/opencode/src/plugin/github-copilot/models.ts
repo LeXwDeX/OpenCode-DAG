@@ -17,18 +17,23 @@ export const schema = z.object({
         .optional(),
       capabilities: z.object({
         family: z.string(),
-        limits: z.object({
-          max_context_window_tokens: z.number(),
-          max_output_tokens: z.number(),
-          max_prompt_tokens: z.number(),
-          vision: z
-            .object({
-              max_prompt_image_size: z.number(),
-              max_prompt_images: z.number(),
-              supported_media_types: z.array(z.string()),
-            })
-            .optional(),
-        }),
+        // Some upstream models may return limits as undefined or with missing fields;
+        // default to 0 so the model is still usable (just without precise token budgets).
+        limits: z
+          .object({
+            max_context_window_tokens: z.number().optional().default(0),
+            max_output_tokens: z.number().optional().default(0),
+            max_prompt_tokens: z.number().optional().default(0),
+            vision: z
+              .object({
+                max_prompt_image_size: z.number(),
+                max_prompt_images: z.number(),
+                supported_media_types: z.array(z.string()),
+              })
+              .optional(),
+          })
+          .optional()
+          .default({ max_context_window_tokens: 0, max_output_tokens: 0, max_prompt_tokens: 0 }),
         supports: z.object({
           adaptive_thinking: z.boolean().optional(),
           max_thinking_budget: z.number().optional(),

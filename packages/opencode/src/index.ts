@@ -115,7 +115,6 @@ const cli = yargs(args)
       run_id: processMetadata.runID,
     })
 
-    StartupTrace.boot("migration.check.start")
     // Marker MUST point at the real DB file. Database.Path resolves through
     // getChannelPath(), which appends a `-<channel>` suffix on non-prod
     // channels (local/dev/snapshot/...). Hardcoding "opencode.db" here meant

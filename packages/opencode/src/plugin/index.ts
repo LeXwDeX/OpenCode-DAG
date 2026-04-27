@@ -164,7 +164,19 @@ export const layer = Layer.effect(
         if (Flag.OPENCODE_PURE && cfg.plugin_origins?.length) {
           log.info("skipping external plugins in pure mode", { count: cfg.plugin_origins.length })
         }
-        if (plugins.length) yield* config.waitForDependencies()
+        if (plugins.length) {
+          // npm install fibers can be slow on cold boot (observed 80+ seconds in WSL with
+          // large repos). Cap the wait so the server-proxy can start accepting requests.
+          // Plugins from a previous run usually have deps cached, so a short timeout is safe.
+          yield* config.waitForDependencies().pipe(
+            Effect.timeout("15 seconds"),
+            Effect.catch(() =>
+              Effect.sync(() => {
+                log.warn("plugin dependency wait timed out after 15s, proceeding anyway")
+              }),
+            ),
+          )
+        }
 
         const loaded = yield* Effect.promise(() =>
           PluginLoader.loadExternal({
