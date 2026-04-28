@@ -907,14 +907,7 @@ describe("ProviderTransform.schema - moonshot $ref siblings", () => {
             aspects: {
               description: "Optional. Specific aspects to focus on. If empty, all aspects may be varied.",
               items: {
-                enum: [
-                  "VARIANT_ASPECT_UNSPECIFIED",
-                  "LAYOUT",
-                  "COLOR_SCHEME",
-                  "IMAGES",
-                  "TEXT_FONT",
-                  "TEXT_CONTENT",
-                ],
+                enum: ["VARIANT_ASPECT_UNSPECIFIED", "LAYOUT", "COLOR_SCHEME", "IMAGES", "TEXT_FONT", "TEXT_CONTENT"],
                 type: "string",
               },
               type: "array",
@@ -977,31 +970,28 @@ describe("ProviderTransform.schema - moonshot $ref siblings", () => {
   })
 
   test("converts tuple-style array items to a single item schema", () => {
-    const result = ProviderTransform.schema(
-      moonshotModel,
-      {
-        type: "object",
-        properties: {
-          codeSpec: {
-            type: "object",
-            properties: {
-              accessibility: {
-                type: "object",
-                properties: {
-                  renderedSize: {
-                    description: "Rendered size [width, height] in px",
-                    type: "array",
-                    items: [{ type: "number" }, { type: "number" }],
-                    minItems: 2,
-                    maxItems: 2,
-                  },
+    const result = ProviderTransform.schema(moonshotModel, {
+      type: "object",
+      properties: {
+        codeSpec: {
+          type: "object",
+          properties: {
+            accessibility: {
+              type: "object",
+              properties: {
+                renderedSize: {
+                  description: "Rendered size [width, height] in px",
+                  type: "array",
+                  items: [{ type: "number" }, { type: "number" }],
+                  minItems: 2,
+                  maxItems: 2,
                 },
               },
             },
           },
         },
-      } as any,
-    ) as any
+      },
+    } as any) as any
 
     expect(result.properties.codeSpec.properties.accessibility.properties.renderedSize.items).toEqual({
       type: "number",
