@@ -475,7 +475,10 @@ export const Persist = {
   },
 }
 
-export function removePersisted(target: { storage?: string; legacyStorageNames?: string[]; key: string }, platform?: Platform) {
+export function removePersisted(
+  target: { storage?: string; legacyStorageNames?: string[]; key: string },
+  platform?: Platform,
+) {
   const isDesktop = platform?.platform === "desktop" && !!platform.storage
 
   if (isDesktop) {
@@ -556,7 +559,9 @@ export function persisted<T>(
 
     const current = currentStorage as AsyncStorage
     const legacyStore = legacyStorage as AsyncStorage | undefined
-    const legacyStores = legacyStorageNames.map((name) => platform.storage?.(name) as AsyncStorage | undefined).filter((x) => !!x)
+    const legacyStores = legacyStorageNames
+      .map((name) => platform.storage?.(name) as AsyncStorage | undefined)
+      .filter((x) => !!x)
 
     const api: AsyncStorage = {
       getItem: async (key) => {

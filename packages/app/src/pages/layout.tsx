@@ -65,7 +65,13 @@ import { Titlebar } from "@/components/titlebar"
 import { useServer } from "@/context/server"
 import { useLanguage, type Locale } from "@/context/language"
 import { pathKey } from "@/utils/path-key"
-import { displayName, effectiveWorkspaceOrder, errorMessage, latestRootSession, sortedRootSessions } from "./layout/helpers"
+import {
+  displayName,
+  effectiveWorkspaceOrder,
+  errorMessage,
+  latestRootSession,
+  sortedRootSessions,
+} from "./layout/helpers"
 import {
   collectNewSessionDeepLinks,
   collectOpenProjectDeepLinks,
@@ -640,8 +646,7 @@ export default function Layout(props: ParentProps) {
       if (!expanded) continue
       const key = pathKey(directory)
       const project = projects.find(
-        (item) =>
-          pathKey(item.worktree) === key || item.sandboxes?.some((sandbox) => pathKey(sandbox) === key),
+        (item) => pathKey(item.worktree) === key || item.sandboxes?.some((sandbox) => pathKey(sandbox) === key),
       )
       if (!project) continue
       if (project.vcs === "git" && layout.sidebar.workspaces(project.worktree)()) continue
@@ -1218,10 +1223,7 @@ export default function Layout(props: ParentProps) {
     const key = pathKey(directory)
     const project = layout.projects
       .list()
-      .find(
-        (item) =>
-          pathKey(item.worktree) === key || item.sandboxes?.some((sandbox) => pathKey(sandbox) === key),
-      )
+      .find((item) => pathKey(item.worktree) === key || item.sandboxes?.some((sandbox) => pathKey(sandbox) === key))
     if (project) return project.worktree
 
     const known = Object.entries(store.workspaceOrder).find(
@@ -1634,7 +1636,7 @@ export default function Layout(props: ParentProps) {
     })
 
     const handleDelete = () => {
-    const leaveDeletedWorkspace = !!params.dir && pathKey(currentDir()) === pathKey(props.directory)
+      const leaveDeletedWorkspace = !!params.dir && pathKey(currentDir()) === pathKey(props.directory)
       if (leaveDeletedWorkspace) {
         navigateWithSidebarReset(`/${base64Encode(props.root)}/session`)
       }
@@ -1863,9 +1865,7 @@ export default function Layout(props: ParentProps) {
     const active = currentProject()
     const directory = pathKey(active?.worktree ?? "") === pathKey(project.worktree) ? currentDir() : undefined
     const extra =
-      directory &&
-      pathKey(directory) !== pathKey(local) &&
-      !dirs.some((item) => pathKey(item) === pathKey(directory))
+      directory && pathKey(directory) !== pathKey(local) && !dirs.some((item) => pathKey(item) === pathKey(directory))
         ? directory
         : undefined
     const pending = extra ? WorktreeState.get(extra)?.status === "pending" : false
