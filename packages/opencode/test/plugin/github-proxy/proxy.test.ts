@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, mock, test } from "bun:test"
 import { GithubProxyAuthPlugin } from "@/plugin/github-proxy/proxy"
+import { MessageV2 } from "@/session/message-v2"
 
 const originalFetch = globalThis.fetch
 
@@ -171,6 +172,230 @@ describe("github-proxy / loader fetch interception", () => {
     expect(headers["authorization"]).toBeUndefined()
     // The capital-A Authorization from our injection survives
     expect(headers["Authorization"]).toBe("Bearer secret-key")
+  })
+
+  // 计费规则：GitHub Copilot 按用户 prompt 提交计费，agent 自发请求不扣。
+  // 工具返图时 opencode 合成一条 role:"user" + SYNTHETIC_ATTACHMENT_PROMPT 的消息把图喂回模型，
+  // 这本质是 agent loop 的一步，必须标 agent 否则会被多扣 1 次。
+  describe("synthetic attachment prompt → agent (billing correctness)", () => {
+    async function captureHeaders(url: string, body: unknown) {
+      let captured: { init?: RequestInit } | null = null
+      globalThis.fetch = mock((_u: any, init?: RequestInit) => {
+        captured = { init }
+        return Promise.resolve(new Response("{}", { status: 200 }))
+      }) as unknown as typeof fetch
+      const f = await makeFetch({ proxyUrl: "http://p.local" })
+      await f!(url, { method: "POST", body: JSON.stringify(body) } as any)
+      return captured!.init!.headers as Record<string, string>
+    }
+
+    test("Completions API: synthetic user-role attachment msg → agent", async () => {
+      const headers = await captureHeaders("https://p.local/copilot/v1/chat/completions", {
+        messages: [
+          { role: "user", content: "show me the screenshot" },
+          { role: "assistant", content: "calling tool..." },
+          { role: "tool", content: "tool result" },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
+              { type: "image_url", image_url: { url: "data:image/png;base64,xxx" } },
+            ],
+          },
+        ],
+      })
+      expect(headers["x-initiator"]).toBe("agent")
+      // 同时确认 vision header 仍被注入（合成附件本身就带图）
+      expect(headers["Copilot-Vision-Request"]).toBe("true")
+    })
+
+    test("Completions API: string-content synthetic prompt → agent", async () => {
+      const headers = await captureHeaders("https://p.local/copilot/v1/chat/completions", {
+        messages: [
+          { role: "user", content: "go" },
+          { role: "user", content: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
+        ],
+      })
+      expect(headers["x-initiator"]).toBe("agent")
+    })
+
+    test("Responses API: synthetic input_text attachment item → agent (GPT-5 path)", async () => {
+      const headers = await captureHeaders("https://p.local/copilot/responses", {
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "look" }] },
+          {
+            role: "user",
+            content: [
+              { type: "input_text", text: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
+              { type: "input_image", image_url: "data:image/png;base64,yyy" },
+            ],
+          },
+        ],
+      })
+      expect(headers["x-initiator"]).toBe("agent")
+    })
+
+    test("Messages API: synthetic user msg with text+image → agent (Claude path)", async () => {
+      const headers = await captureHeaders("https://p.local/copilot/v1/messages", {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "go" }] },
+          { role: "assistant", content: [{ type: "text", text: "calling..." }] },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: MessageV2.SYNTHETIC_ATTACHMENT_PROMPT },
+              { type: "image", source: { type: "base64", media_type: "image/png", data: "zzz" } },
+            ],
+          },
+        ],
+      })
+      expect(headers["x-initiator"]).toBe("agent")
+    })
+
+    test("Completions API: real user prompt with image is NOT mistaken as synthetic", async () => {
+      const headers = await captureHeaders("https://p.local/copilot/v1/chat/completions", {
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "what is in this image?" },
+              { type: "image_url", image_url: { url: "data:image/png;base64,real" } },
+            ],
+          },
+        ],
+      })
+      expect(headers["x-initiator"]).toBe("user")
+      expect(headers["Copilot-Vision-Request"]).toBe("true")
+    })
+  })
+})
+
+// chat.params 必须为 anthropic 模型关闭 toolStreaming。
+// 否则 @ai-sdk/anthropic 会注入 GA 字段 eager_input_streaming，
+// 被 Copilot /v1/messages shim 拒绝（"Extra inputs are not permitted"），导致 Claude 不可用。
+describe("github-proxy / chat.params", () => {
+  test("disables toolStreaming for anthropic models", async () => {
+    const hooks = await GithubProxyAuthPlugin(baseInput as never)
+    const output: any = { options: {} }
+    await hooks["chat.params"]!(
+      {
+        model: { providerID: "github-proxy", api: { id: "claude-opus-4.7", npm: "@ai-sdk/anthropic" } },
+      } as any,
+      output,
+    )
+    expect(output.options.toolStreaming).toBe(false)
+  })
+
+  test("does NOT disable toolStreaming for non-anthropic models", async () => {
+    const hooks = await GithubProxyAuthPlugin(baseInput as never)
+    const output: any = { options: {} }
+    await hooks["chat.params"]!(
+      {
+        model: { providerID: "github-proxy", api: { id: "gpt-5", npm: "@ai-sdk/github-copilot" } },
+      } as any,
+      output,
+    )
+    expect(output.options.toolStreaming).toBeUndefined()
+  })
+
+  test("clears maxOutputTokens for gpt models", async () => {
+    const hooks = await GithubProxyAuthPlugin(baseInput as never)
+    const output: any = { options: {}, maxOutputTokens: 4096 }
+    await hooks["chat.params"]!(
+      {
+        model: { providerID: "github-proxy", api: { id: "gpt-5-mini", npm: "@ai-sdk/github-copilot" } },
+      } as any,
+      output,
+    )
+    expect(output.maxOutputTokens).toBeUndefined()
+  })
+
+  test("ignores non-github-proxy models", async () => {
+    const hooks = await GithubProxyAuthPlugin(baseInput as never)
+    const output: any = { options: {}, maxOutputTokens: 4096 }
+    await hooks["chat.params"]!(
+      {
+        model: { providerID: "anthropic", api: { id: "claude-opus-4.7", npm: "@ai-sdk/anthropic" } },
+      } as any,
+      output,
+    )
+    expect(output.options.toolStreaming).toBeUndefined()
+    expect(output.maxOutputTokens).toBe(4096)
+  })
+})
+
+// chat.headers 必须把 auto-compaction 续聊也识别为 agent。
+// 续聊由一条 type:"text" + synthetic:true + metadata.compaction_continue:true 的合成 part 触发，
+// 仅检查 part.type === "compaction" 会漏掉续聊请求 → 误扣 1 次。
+describe("github-proxy / chat.headers compaction detection", () => {
+  function makeHooksWithSdk(parts: any[]) {
+    const sdk = {
+      session: {
+        message: () => Promise.resolve({ data: { parts } }),
+        get: () => Promise.resolve({ data: {} }),
+      },
+    }
+    return GithubProxyAuthPlugin({ ...baseInput, client: sdk } as never)
+  }
+
+  test("compaction part → x-initiator=agent", async () => {
+    const hooks = await makeHooksWithSdk([{ type: "compaction" }])
+    const output: any = { headers: {} }
+    await hooks["chat.headers"]!(
+      {
+        model: { providerID: "github-proxy", api: { npm: "@ai-sdk/github-copilot" } },
+        message: { sessionID: "s1", id: "m1" },
+        sessionID: "s1",
+      } as any,
+      output,
+    )
+    expect(output.headers["x-initiator"]).toBe("agent")
+  })
+
+  test("synthetic text part with compaction_continue=true → x-initiator=agent", async () => {
+    const hooks = await makeHooksWithSdk([
+      { type: "text", synthetic: true, metadata: { compaction_continue: true }, text: "..." },
+    ])
+    const output: any = { headers: {} }
+    await hooks["chat.headers"]!(
+      {
+        model: { providerID: "github-proxy", api: { npm: "@ai-sdk/github-copilot" } },
+        message: { sessionID: "s1", id: "m1" },
+        sessionID: "s1",
+      } as any,
+      output,
+    )
+    expect(output.headers["x-initiator"]).toBe("agent")
+  })
+
+  test("synthetic text part WITHOUT compaction_continue → header NOT set to agent (preserves user attribution)", async () => {
+    const hooks = await makeHooksWithSdk([
+      { type: "text", synthetic: true, metadata: {}, text: "..." },
+    ])
+    const output: any = { headers: {} }
+    await hooks["chat.headers"]!(
+      {
+        model: { providerID: "github-proxy", api: { npm: "@ai-sdk/github-copilot" } },
+        message: { sessionID: "s1", id: "m1" },
+        sessionID: "s1",
+      } as any,
+      output,
+    )
+    expect(output.headers["x-initiator"]).toBeUndefined()
+  })
+
+  test("anthropic model also gets anthropic-beta header", async () => {
+    const hooks = await makeHooksWithSdk([])
+    const output: any = { headers: {} }
+    await hooks["chat.headers"]!(
+      {
+        model: { providerID: "github-proxy", api: { npm: "@ai-sdk/anthropic" } },
+        message: { sessionID: "s1", id: "m1" },
+        sessionID: "s1",
+      } as any,
+      output,
+    )
+    expect(output.headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14")
   })
 })
 

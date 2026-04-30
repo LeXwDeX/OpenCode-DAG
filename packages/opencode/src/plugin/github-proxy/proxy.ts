@@ -4,12 +4,28 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { iife } from "@/util/iife"
 import * as Log from "@opencode-ai/core/util/log"
 import { CopilotModels } from "../github-copilot/models"
+import { MessageV2 } from "@/session/message-v2"
 
 const log = Log.create({ service: "plugin.github-proxy" })
 
 // SDK v1 Auth union 不在 ApiAuth 上暴露 metadata，但运行时 Auth.Api schema 含此字段。
 // 用本地类型桥接，避免依赖内部模块。
 type ApiAuthWithMeta = { type: "api"; key: string; metadata?: Record<string, string> }
+
+// 工具调用返图时，opencode 会合成一条 role:"user" 的消息携带 SYNTHETIC_ATTACHMENT_PROMPT
+// 把图片喂回模型继续 agent loop。这条消息虽然 role 是 user，语义上是 agent 自发，
+// 必须识别出来标记为 agent，否则会被 Copilot 计入用户提示次数误扣。
+// 与 plugin/github-copilot/copilot.ts:imgMsg 保持一致。
+function imgMsg(msg: any): boolean {
+  if (msg?.role !== "user") return false
+  const content = msg.content
+  if (typeof content === "string") return content === MessageV2.SYNTHETIC_ATTACHMENT_PROMPT
+  if (!Array.isArray(content)) return false
+  return content.some(
+    (part: any) =>
+      (part?.type === "text" || part?.type === "input_text") && part.text === MessageV2.SYNTHETIC_ATTACHMENT_PROMPT,
+  )
+}
 
 function fix(model: Model, url: string): Model {
   // 即使 /copilot/models 解析失败走 fallback，Claude 仍必须走 anthropic messages API，
@@ -107,7 +123,7 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
                       (msg: any) =>
                         Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image_url"),
                     ),
-                    isAgent: last?.role !== "user",
+                    isAgent: last?.role !== "user" || imgMsg(last),
                   }
                 }
 
@@ -119,7 +135,7 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
                       (item: any) =>
                         Array.isArray(item?.content) && item.content.some((part: any) => part.type === "input_image"),
                     ),
-                    isAgent: last?.role !== "user",
+                    isAgent: last?.role !== "user" || imgMsg(last),
                   }
                 }
 
@@ -140,7 +156,7 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
                               part.content.some((nested: any) => nested?.type === "image")),
                         ),
                     ),
-                    isAgent: !(last?.role === "user" && hasNonToolCalls),
+                    isAgent: !(last?.role === "user" && hasNonToolCalls) || imgMsg(last),
                   }
                 }
               } catch {}
@@ -238,6 +254,13 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
       if (incoming.model.api.id.includes("gpt")) {
         output.maxOutputTokens = undefined
       }
+
+      // GitHub Copilot 的 /v1/messages shim 拒绝 GA 字段 `eager_input_streaming`
+      // ("Extra inputs are not permitted")。关闭 @ai-sdk/anthropic 的默认行为，
+      // 否则经 proxy 走 Copilot 上游的 Claude 模型会请求失败。
+      if (incoming.model.api.npm === "@ai-sdk/anthropic") {
+        output.options.toolStreaming = false
+      }
     },
     "chat.headers": async (incoming, output) => {
       if (!incoming.model.providerID.includes("github-proxy")) return
@@ -259,7 +282,15 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
         })
         .catch(() => undefined)
 
-      if (parts?.data.parts?.some((part) => part.type === "compaction")) {
+      if (
+        parts?.data.parts?.some(
+          (part) =>
+            part.type === "compaction" ||
+            // auto-compaction 通过一条合成 user text part 续聊。把这条带标记的续聊
+            // 视作 agent 自发，避免被计为额外的用户提示扣次。
+            (part.type === "text" && part.synthetic && part.metadata?.compaction_continue === true),
+        )
+      ) {
         output.headers["x-initiator"] = "agent"
         return
       }
