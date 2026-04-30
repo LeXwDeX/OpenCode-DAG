@@ -12,7 +12,10 @@ import {
   HttpServerResponse,
 } from "effect/unstable/http"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
-import { ServerAuthConfig, authorizationRouterMiddleware } from "../../src/server/routes/instance/httpapi/middleware/authorization"
+import {
+  ServerAuthConfig,
+  authorizationRouterMiddleware,
+} from "../../src/server/routes/instance/httpapi/middleware/authorization"
 import { ExperimentalHttpApiServer } from "../../src/server/routes/instance/httpapi/server"
 import { serveUIEffect } from "../../src/server/routes/ui"
 import { Server } from "../../src/server/server"
@@ -69,11 +72,7 @@ function app(input?: { password?: string; username?: string }) {
   }
 }
 
-function uiApp(input?: {
-  password?: string
-  username?: string
-  client?: Layer.Layer<HttpClient.HttpClient>
-}) {
+function uiApp(input?: { password?: string; username?: string; client?: Layer.Layer<HttpClient.HttpClient> }) {
   const handler = HttpRouter.toWebHandler(
     HttpRouter.add("*", "/*", (request) =>
       serveUIEffect(request).pipe(
@@ -121,9 +120,12 @@ describe("HttpApi UI fallback", () => {
     let proxiedUrl: string | undefined
 
     const response = await uiApp({
-      client: httpClient(new Response("<html>opencode</html>", { headers: { "content-type": "text/html" } }), (request) => {
-        proxiedUrl = request.url
-      }),
+      client: httpClient(
+        new Response("<html>opencode</html>", { headers: { "content-type": "text/html" } }),
+        (request) => {
+          proxiedUrl = request.url
+        },
+      ),
     }).request("/")
 
     expect(response.status).toBe(200)
@@ -197,9 +199,7 @@ describe("HttpApi UI fallback", () => {
       password: "secret",
       username: "opencode",
       client: httpClient(new Response("<html>opencode</html>", { headers: { "content-type": "text/html" } })),
-    }).request(
-      `/?auth_token=${btoa("opencode:secret")}`,
-    )
+    }).request(`/?auth_token=${btoa("opencode:secret")}`)
 
     expect(response.status).toBe(200)
     expect(await response.text()).toBe("<html>opencode</html>")

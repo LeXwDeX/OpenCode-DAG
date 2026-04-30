@@ -123,9 +123,7 @@ const instanceRoutes = Layer.mergeAll(rawInstanceRoutes, instanceApiRoutes).pipe
 
 const uiRoute = HttpRouter.add("*", "/*", (request) =>
   serveUIEffect(request).pipe(Effect.provide(AppFileSystem.defaultLayer), Effect.provide(FetchHttpClient.layer)),
-).pipe(
-  Layer.provide(authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuthConfig.defaultLayer))),
-)
+).pipe(Layer.provide(authorizationRouterMiddleware.layer.pipe(Layer.provide(ServerAuthConfig.defaultLayer))))
 
 export const routes = Layer.mergeAll(rootApiRoutes, instanceRoutes, uiRoute).pipe(
   Layer.provide([

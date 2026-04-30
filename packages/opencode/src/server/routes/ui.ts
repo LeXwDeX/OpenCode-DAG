@@ -22,19 +22,13 @@ const csp = (hash = "") =>
   `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'${hash ? ` 'sha256-${hash}'` : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; media-src 'self' data:; connect-src 'self' data:`
 
 function themePreloadHash(body: string) {
-  return body.match(
-    /<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(['"])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i,
-  )
+  return body.match(/<script\b(?![^>]*\bsrc\s*=)[^>]*\bid=(['"])oc-theme-preload-script\1[^>]*>([\s\S]*?)<\/script>/i)
 }
 
 function requestBody(request: HttpServerRequest.HttpServerRequest) {
   if (request.method === "GET" || request.method === "HEAD") return HttpBody.empty
   const len = request.headers["content-length"]
-  return HttpBody.stream(
-    request.stream,
-    request.headers["content-type"],
-    len === undefined ? undefined : Number(len),
-  )
+  return HttpBody.stream(request.stream, request.headers["content-type"], len === undefined ? undefined : Number(len))
 }
 
 function proxyResponseHeaders(headers: Record<string, string>) {
@@ -116,10 +110,7 @@ export function serveUIEffect(request: HttpServerRequest.HttpServerRequest) {
     if (response.headers["content-type"]?.includes("text/html")) {
       const body = yield* response.text
       const match = themePreloadHash(body)
-      headers.set(
-        "Content-Security-Policy",
-        csp(match ? createHash("sha256").update(match[2]).digest("base64") : ""),
-      )
+      headers.set("Content-Security-Policy", csp(match ? createHash("sha256").update(match[2]).digest("base64") : ""))
       return HttpServerResponse.text(body, { status: response.status, headers })
     }
 
