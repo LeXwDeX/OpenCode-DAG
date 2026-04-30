@@ -265,6 +265,8 @@ describe("tool.write", () => {
     it.live("throws error when OS denies write access", () =>
       provideTmpdirInstance((dir) =>
         Effect.gen(function* () {
+          // chmod 0o444 does not prevent root from writing — skip under root (WSL/CI).
+          if (process.getuid?.() === 0) return
           const readonlyPath = path.join(dir, "readonly.txt")
           yield* Effect.promise(() => fs.writeFile(readonlyPath, "test", "utf-8"))
           yield* Effect.promise(() => fs.chmod(readonlyPath, 0o444))

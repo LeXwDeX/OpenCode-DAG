@@ -258,6 +258,8 @@ test("skips migration when tui.json already exists", async () => {
 })
 
 test("continues loading tui config when legacy source cannot be stripped", async () => {
+  // chmod 0o444 does not block root writes — skip under root (WSL/CI).
+  if (process.getuid?.() === 0) return
   await using tmp = await tmpdir({
     init: async (dir) => {
       await Bun.write(path.join(dir, "opencode.json"), JSON.stringify({ theme: "readonly-theme" }, null, 2))

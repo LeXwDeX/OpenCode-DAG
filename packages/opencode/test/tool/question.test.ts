@@ -105,10 +105,10 @@ describe("tool.question", () => {
         expect(tool.formatValidationError).toBeDefined()
         const message = tool.formatValidationError!(Cause.squash(parseResult.cause))
 
-        // Must surface the offending path
-        expect(message).toContain("questions.0.question")
-        // Must call out the required-field hint
-        expect(message).toContain('"question" is REQUIRED')
+        // Must surface the offending path (Effect Schema bracket form)
+        expect(message).toContain('["questions"][0]["question"]')
+        // Must call out the missing-field path
+        expect(message).toContain("Missing key")
         // Must include field spec with all required fields
         expect(message).toContain("header")
         expect(message).toContain("options")
@@ -139,7 +139,7 @@ describe("tool.question", () => {
         expect(defect).toBeInstanceOf(Error)
         const msg = (defect as Error).message
         // The formatted message must reach the caller through the full execute path
-        expect(msg).toContain('"question" is REQUIRED')
+        expect(msg).toContain('["questions"][0]["question"]')
         expect(msg).toContain("Correct call example")
         expect(msg).toContain("Please re-issue the tool call")
       }),
@@ -160,8 +160,8 @@ describe("tool.question", () => {
         if (Exit.isSuccess(parseResult)) return
 
         const message = tool.formatValidationError!(Cause.squash(parseResult.cause))
-        expect(message).toContain("questions.0.options")
-        expect(message).toContain('"options" is REQUIRED')
+        expect(message).toContain('["questions"][0]["options"]')
+        expect(message).toContain("Missing key")
         expect(message).toContain("Correct call example")
       }),
     ),

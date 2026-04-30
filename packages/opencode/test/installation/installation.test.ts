@@ -1,5 +1,16 @@
-import { describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 import { Effect, Layer, Stream } from "effect"
+
+// Force the official npm registry so the test is deterministic regardless of the
+// developer's ~/.npmrc (e.g. corporate mirrors). npm config honors env > rc files.
+const SAVED_NPM_REGISTRY = process.env.npm_config_registry
+beforeAll(() => {
+  process.env.npm_config_registry = "https://registry.npmjs.org/"
+})
+afterAll(() => {
+  if (SAVED_NPM_REGISTRY === undefined) delete process.env.npm_config_registry
+  else process.env.npm_config_registry = SAVED_NPM_REGISTRY
+})
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { Installation } from "../../src/installation"
