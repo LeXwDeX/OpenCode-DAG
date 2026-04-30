@@ -49,10 +49,11 @@
 | `5bdf76454` | Layer 注入修补 | `bun test test/tool/ test/permission/ test/session/` | 不出现 `Service not found: SettingsHook` 错误；ToolRegistry 默认 layer 自包含 |
 | `d3b2e1868` | prompt.test.ts 接入 | `bun test test/session/prompt.test.ts -t "hook"` | 现有覆盖路径不回退 |
 
-**已知覆盖缺口**（写入"已知局限"，作为下一阶段 backlog）：
-- 9 事件中目前仅 `UserPromptSubmit` 有完整集成测试（prompt.test.ts）
-- 其他 8 事件缺独立单元测试，依赖上层会话集成路径间接验证
-- 后续若要达到 release 级别置信度，需在 `test/hook/<event>.test.ts` 各起一个最小 fixture（settings.json → 事件触发 → assert exec/transform 副作用）
+**已知覆盖缺口**（已补齐，commit `27510b442`）：
+- ~~9 事件中目前仅 `UserPromptSubmit` 有完整集成测试（prompt.test.ts）~~
+- ~~其他 8 事件缺独立单元测试，依赖上层会话集成路径间接验证~~
+- ✅ `test/hook/settings.test.ts`：单文件 + 8 describe 块覆盖 PreToolUse / PostToolUse / Notification / Stop / SubagentStop / PreCompact / SessionStart / SessionEnd 共 18 个 case；通过临时 `settings.json` 注入 shell hook，`cat > captured.json` 抓取 envelope，stdout JSON 注入控制 `TriggerResult` 字段
+- 设计偏离：原计划列 8 文件 per-event；实际改为单文件多 describe，因 9 事件共享同一 `trigger` 管道（仅 envelope/matcher/result 字段分支不同），分文件会大量重复 fixture
 
 **手动验证**：
 - 在 `~/.opencode/settings.json` 配置一个 `PreToolUse` hook 拦截 `bash` → 执行任意 bash 工具被拒
@@ -138,8 +139,8 @@ bun run dev
 
 ## 9. 已知缺口（不阻塞 fork.1 release，列入 backlog）
 
-1. `test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Notification/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd）
-2. TUI Quota 自动化：需 mock Solid render + 假 `auth.json` 注入；目前完全靠手测
-3. 端到端冒烟脚本：可考虑用 `webapp-testing` skill / Playwright 包装 §6
+1. ~~`test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Notification/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd）~~ — ✅ 已完成（commit `27510b442`，单文件 8 describe 形式覆盖 18 个 case）
+2. TUI Quota 自动化：当前完全靠手测；可行路径是把 `quota.tsx` 中纯函数（`readQuotaAuth` / `parseCopilotQuota` / `parseProxyQuota` / `fetchQuota`）提取并 export，再单测 fetch mock + JSON 解析。组件渲染（Solid + opentui Slot）不在自动化范围
+3. 端到端冒烟脚本：~~可考虑用 `webapp-testing` skill / Playwright 包装 §6~~ — 修正：TUI 是终端应用而非 web，Playwright 不适用；可用 `node-pty` + expect-style 断言包装 §6，但工程量较大，目前继续手动
 4. **OPENTUI 升级（决策：保守保持 0.1.105）**：上游已发 `@opentui/{core,solid}@0.2.1`（跨 minor，预期 breaking）。当前 fork 在 0.1.105 上验证稳定，升级收益不明确、风险高。后续若要升 0.2.x，须新开探路分支跑全套手动 TUI 冒烟（§6）+ 自动化测试，并按 breaking change 清单逐项迁移。
 5. **其他依赖升级**：上游 v1.14.30 基线本身已携带较新依赖快照；除非出现安全 CVE 或具体功能需要，本 fork 不主动追依赖升级，避免引入与稳定性补丁无关的风险面。
