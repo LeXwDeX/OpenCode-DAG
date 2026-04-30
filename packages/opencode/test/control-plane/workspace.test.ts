@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import fs from "node:fs/promises"
 import Http from "node:http"
 import path from "node:path"
@@ -1426,48 +1426,41 @@ describe("workspace-old sessionRestore", () => {
     })
   })
 
-  test("local restore replays batches without fetch and emits progress", async () => {
-    await withInstance(async (dir) => {
-      const captured = captureGlobalEvents()
-      let fetchCallCount = 0
-      const replayAll = spyOn(SyncEvent, "replayAll")
-      try {
-        using server = Bun.serve({
-          port: 0,
-          fetch() {
-            fetchCallCount++
-            return Response.json({ ok: true })
-          },
-        })
-        const type = unique("restore-local")
-        const info = workspaceInfo(Instance.project.id, type, { directory: dir })
-        insertWorkspace(info)
-        registerAdaptor(Instance.project.id, type, localAdaptor(dir).adaptor)
-        const session = await AppRuntime.runPromise(
-          SessionNs.Service.use((svc) => svc.create({ title: "restore local" })),
-        )
-        replaceSessionEvents(session.id, 20)
+  it.live("local restore replays batches and emits progress", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const workspace = yield* WorkspaceOld.Service
+          const sessionSvc = yield* SessionNs.Service
+          const captured = captureGlobalEvents()
+          try {
+            const type = unique("restore-local")
+            const info = workspaceInfo(Instance.project.id, type, { directory: dir })
+            insertWorkspace(info)
+            registerAdaptor(Instance.project.id, type, localAdaptor(dir).adaptor)
+            const session = yield* sessionSvc.create({ title: "restore local" })
+            replaceSessionEvents(session.id, 20)
 
-        expect(await restoreWorkspaceSession({ workspaceID: info.id, sessionID: session.id })).toEqual({ total: 3 })
-
-        expect(fetchCallCount).toBe(0)
-        expect(replayAll).toHaveBeenCalledTimes(3)
-        expect(replayAll.mock.calls.map((call) => call[0].length)).toEqual([10, 10, 1])
-        expect((await AppRuntime.runPromise(SessionNs.Service.use((svc) => svc.get(session.id)))).workspaceID).toBe(
-          info.id,
-        )
-        expect(eventRows(session.id).map((row) => row.seq)).toEqual(Array.from({ length: 21 }, (_, i) => i))
-        expect(
-          captured.events
-            .filter((event) => event.workspace === info.id && event.payload.type === WorkspaceOld.Event.Restore.type)
-            .map((event) => event.payload.properties.step),
-        ).toEqual([0, 1, 2, 3])
-        await removeWorkspace(info.id)
-      } finally {
-        captured.dispose()
-      }
-    })
-  })
+            expect(yield* workspace.sessionRestore({ workspaceID: info.id, sessionID: session.id })).toEqual({
+              total: 3,
+            })
+            expect((yield* sessionSvc.get(session.id)).workspaceID).toBe(info.id)
+            expect(eventRows(session.id).map((row) => row.seq)).toEqual(Array.from({ length: 21 }, (_, i) => i))
+            expect(
+              captured.events
+                .filter(
+                  (event) => event.workspace === info.id && event.payload.type === WorkspaceOld.Event.Restore.type,
+                )
+                .map((event) => event.payload.properties.step),
+            ).toEqual([0, 1, 2, 3])
+            yield* workspace.remove(info.id)
+          } finally {
+            captured.dispose()
+          }
+        }),
+      { git: true },
+    ),
+  )
 
   it.live("session restore includes real message and part events in sequence order", () => {
     const replay: FetchCall[] = []

@@ -21,6 +21,7 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
   Effect.gen(function* () {
     const workspace = yield* Workspace.Service
     const scope = yield* Scope.Scope
+    const sync = yield* SyncEvent.Service
 
     const start = Effect.fn("SyncHttpApi.start")(function* () {
       yield* workspace
@@ -45,7 +46,7 @@ export const syncHandlers = HttpApiBuilder.group(InstanceHttpApi, "sync", (handl
         last: events.at(-1)?.seq,
         directory: ctx.payload.directory,
       })
-      SyncEvent.replayAll(events)
+      yield* sync.replayAll(events)
       log.info("sync replay complete", {
         sessionID: source,
         events: events.length,

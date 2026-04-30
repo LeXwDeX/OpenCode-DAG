@@ -94,7 +94,7 @@ export const SyncRoutes = lazy(() =>
           last: events.at(-1)?.seq,
           directory: body.directory,
         })
-        SyncEvent.replayAll(events)
+        await AppRuntime.runPromise(SyncEvent.use.replayAll(events))
 
         log.info("sync replay complete", {
           sessionID: source,

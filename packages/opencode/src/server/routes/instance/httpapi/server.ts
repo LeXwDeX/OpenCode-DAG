@@ -31,6 +31,7 @@ import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { SessionShare } from "@/share/session"
 import { Skill } from "@/skill"
+import { SyncEvent } from "@/sync"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
@@ -147,6 +148,7 @@ export const routes = Layer.mergeAll(rootApiRoutes, instanceRoutes).pipe(
     SessionRunState.defaultLayer,
     SessionStatus.defaultLayer,
     SessionSummary.defaultLayer,
+    SyncEvent.defaultLayer,
     Skill.defaultLayer,
     Todo.defaultLayer,
     ToolRegistry.defaultLayer,
