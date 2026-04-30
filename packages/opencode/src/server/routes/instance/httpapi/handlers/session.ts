@@ -6,6 +6,7 @@ import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Instance } from "@/project/instance"
+import { SettingsHook } from "@/hook/settings"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
@@ -179,7 +180,20 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       yield* Effect.promise(() =>
         Instance.restore(instance, () =>
           AppRuntime.runPromise(
-            Session.Service.use((svc) => svc.remove(ctx.params.sessionID)).pipe(Effect.provide(Session.defaultLayer)),
+            Effect.gen(function* () {
+              // SessionEnd hook (Claude Code compatible) — fires before the
+              // session is actually removed. CC `reason` enum is open: use
+              // "other" as the conservative default for explicit deletion.
+              const settingsHook = yield* SettingsHook.Service
+              yield* settingsHook
+                .trigger(
+                  { event: "SessionEnd", reason: "other" },
+                  { sessionID: ctx.params.sessionID, transcriptPath: "" },
+                )
+                .pipe(Effect.ignore)
+              const session = yield* Session.Service
+              yield* session.remove(ctx.params.sessionID)
+            }).pipe(Effect.provide(Session.defaultLayer)),
           ),
         ),
       )

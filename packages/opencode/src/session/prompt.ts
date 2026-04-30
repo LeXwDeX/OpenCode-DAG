@@ -424,13 +424,24 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   { args },
                 )
                 // PreToolUse hook (Claude Code compatible)
-                const preHook = yield* settingsHook.trigger("PreToolUse", item.id, args)
+                const preHook = yield* settingsHook.trigger(
+                  { event: "PreToolUse", toolName: item.id, toolInput: args },
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
                 if (preHook.blocked) {
                   return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
                 }
                 const result = yield* item.execute(args, ctx)
                 // PostToolUse hook
-                const postHook = yield* settingsHook.trigger("PostToolUse", item.id, args)
+                const postHook = yield* settingsHook.trigger(
+                  {
+                    event: "PostToolUse",
+                    toolName: item.id,
+                    toolInput: args,
+                    toolResponse: result.output,
+                  },
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
                 const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
                 const output = {
                   ...result,
@@ -479,7 +490,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               )
               yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
               // PreToolUse hook (Claude Code compatible)
-              const preHook = yield* settingsHook.trigger("PreToolUse", key, args)
+              const preHook = yield* settingsHook.trigger(
+                { event: "PreToolUse", toolName: key, toolInput: args },
+                { sessionID: ctx.sessionID, transcriptPath: "" },
+              )
               if (preHook.blocked) {
                 return {
                   title: "",
@@ -495,7 +509,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 catch: (e) => new Error(`MCP tool "${key}" failed: ${e instanceof Error ? e.message : String(e)}`),
               })
               // PostToolUse hook
-              const postHook = yield* settingsHook.trigger("PostToolUse", key, args)
+              const postHook = yield* settingsHook.trigger(
+                {
+                  event: "PostToolUse",
+                  toolName: key,
+                  toolInput: args,
+                  toolResponse: result,
+                },
+                { sessionID: ctx.sessionID, transcriptPath: "" },
+              )
               const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
               yield* plugin.trigger(
                 "tool.execute.after",
@@ -1293,6 +1315,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         const message = yield* createUserMessage(input)
         yield* sessions.touch(input.sessionID)
 
+        // UserPromptSubmit hook (Claude Code compatible) — fires once per user turn,
+        // after the user message is persisted and before the agent loop starts.
+        const userText = input.parts
+          .filter((p): p is MessageV2.TextPartInput => p.type === "text")
+          .map((p) => p.text)
+          .join("\n")
+        const submitHook = yield* settingsHook.trigger(
+          { event: "UserPromptSubmit", prompt: userText },
+          { sessionID: input.sessionID, transcriptPath: "" },
+        )
+        if (submitHook.blocked) {
+          log.warn("UserPromptSubmit blocked by hook", { reason: submitHook.blocked.reason })
+          return message
+        }
+
         const permissions: Permission.Ruleset = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {
           permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
@@ -1303,7 +1340,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (input.noReply === true) return message
-        return yield* loop({ sessionID: input.sessionID })
+        const final = yield* loop({ sessionID: input.sessionID })
+        // Stop hook — fires after the agent loop finishes its turn.
+        yield* settingsHook
+          .trigger(
+            { event: "Stop", stopHookActive: false },
+            { sessionID: input.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.ignore)
+        return final
       },
     )
 

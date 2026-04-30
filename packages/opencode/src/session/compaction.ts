@@ -11,6 +11,7 @@ import { SessionProcessor } from "./processor"
 import { Agent } from "@/agent/agent"
 import { Plugin } from "@/plugin"
 import { Config } from "@/config/config"
+import { SettingsHook } from "@/hook/settings"
 import { NotFoundError } from "@/storage/storage"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Effect, Layer, Context, Schema } from "effect"
@@ -215,6 +216,7 @@ export const layer: Layer.Layer<
   | Plugin.Service
   | SessionProcessor.Service
   | Provider.Service
+  | SettingsHook.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -225,6 +227,7 @@ export const layer: Layer.Layer<
     const plugin = yield* Plugin.Service
     const processors = yield* SessionProcessor.Service
     const provider = yield* Provider.Service
+    const settingsHook = yield* SettingsHook.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: MessageV2.Assistant["tokens"]
@@ -393,6 +396,19 @@ export const layer: Layer.Layer<
         cfg,
         model,
       })
+      // PreCompact hook (Claude Code compatible) — fires before compaction
+      // begins. CC's `trigger` field is "auto" or "manual"; map from input.auto.
+      // A blocking decision aborts the compaction silently (callers retry next
+      // turn). Non-blocking failures are ignored.
+      const preCompact = yield* settingsHook.trigger(
+        { event: "PreCompact", trigger: input.auto ? "auto" : "manual", customInstructions: "" },
+        { sessionID: input.sessionID, transcriptPath: "" },
+      )
+      if (preCompact.blocked) {
+        log.warn("PreCompact blocked by hook", { reason: preCompact.blocked.reason })
+        return "stop" as const
+      }
+
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(
         "experimental.session.compacting",
@@ -603,6 +619,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Plugin.defaultLayer),
     Layer.provide(Bus.layer),
     Layer.provide(Config.defaultLayer),
+    Layer.provide(SettingsHook.defaultLayer),
   ),
 )
 

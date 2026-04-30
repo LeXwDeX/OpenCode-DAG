@@ -3,6 +3,7 @@ import { SessionID } from "@/session/schema"
 import { SyncEvent } from "@/sync"
 import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
+import { SettingsHook } from "@/hook/settings"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import * as ShareNext from "./share-next"
 
@@ -20,6 +21,7 @@ export const layer = Layer.effect(
     const cfg = yield* Config.Service
     const session = yield* Session.Service
     const shareNext = yield* ShareNext.Service
+    const settingsHook = yield* SettingsHook.Service
     const scope = yield* Scope.Scope
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
@@ -39,6 +41,17 @@ export const layer = Layer.effect(
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
+      // SessionStart hook (Claude Code compatible) — fires for top-level
+      // sessions only. Sub-agent sessions (parentID set) are excluded; CC has
+      // no SubagentStart event. Failures never abort session creation.
+      if (!result.parentID) {
+        yield* settingsHook
+          .trigger(
+            { event: "SessionStart", source: "startup" },
+            { sessionID: result.id, transcriptPath: "" },
+          )
+          .pipe(Effect.ignore)
+      }
       if (result.parentID) return result
       const conf = yield* cfg.get()
       if (!(Flag.OPENCODE_AUTO_SHARE || conf.share === "auto")) return result
@@ -54,6 +67,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(ShareNext.defaultLayer),
   Layer.provide(Session.defaultLayer),
   Layer.provide(Config.defaultLayer),
+  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export * as SessionShare from "./session"

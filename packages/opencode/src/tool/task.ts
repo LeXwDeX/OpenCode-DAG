@@ -6,6 +6,7 @@ import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
+import { SettingsHook } from "@/hook/settings"
 import { Effect, Schema } from "effect"
 
 export interface TaskPromptOps {
@@ -33,6 +34,7 @@ export const TaskTool = Tool.define(
     const agent = yield* Agent.Service
     const config = yield* Config.Service
     const sessions = yield* Session.Service
+    const settingsHook = yield* SettingsHook.Service
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -143,6 +145,16 @@ export const TaskTool = Tool.define(
               },
               parts,
             })
+
+            // SubagentStop hook (Claude Code compatible) — fires when a sub-agent
+            // task spawned via the Task tool finishes its turn. Failure to run a
+            // hook never aborts the parent flow.
+            yield* settingsHook
+              .trigger(
+                { event: "SubagentStop", stopHookActive: false },
+                { sessionID: nextSession.id, transcriptPath: "" },
+              )
+              .pipe(Effect.ignore)
 
             return {
               title: params.description,
