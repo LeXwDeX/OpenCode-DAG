@@ -21,6 +21,7 @@ import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
 import { Question } from "@/question"
 import { Permission } from "@/permission"
+import { SettingsHook } from "@/hook/settings"
 import { Todo } from "@/session/todo"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
@@ -70,6 +71,7 @@ export const AppLayer = Layer.mergeAll(
   Discovery.defaultLayer,
   Question.defaultLayer,
   Permission.defaultLayer,
+  SettingsHook.defaultLayer,
   Todo.defaultLayer,
   Session.defaultLayer,
   SessionStatus.defaultLayer,
