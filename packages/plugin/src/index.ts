@@ -153,6 +153,8 @@ export type AuthHook = {
               type: "success"
               key: string
               provider?: string
+              /** Persisted alongside ApiAuth.key; available on ctx.auth.metadata at runtime. */
+              metadata?: Record<string, string>
             }
           | {
               type: "failed"
