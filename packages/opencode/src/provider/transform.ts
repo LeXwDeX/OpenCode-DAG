@@ -1067,11 +1067,7 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
     model.api.npm === "@ai-sdk/openai-compatible" ||
     model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/anthropic"
-  const key =
-    sdkKey(model.api.npm) ??
-    (usesDotSplitOptions
-      ? model.providerID.split(".")[0]
-      : model.providerID)
+  const key = sdkKey(model.api.npm) ?? (usesDotSplitOptions ? model.providerID.split(".")[0] : model.providerID)
   // @ai-sdk/azure delegates to OpenAIChatLanguageModel which reads from
   // providerOptions["openai"], but OpenAIResponsesLanguageModel checks
   // "azure" first. Pass both so model options work on either code path.
