@@ -141,3 +141,5 @@ bun run dev
 1. `test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Notification/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd）
 2. TUI Quota 自动化：需 mock Solid render + 假 `auth.json` 注入；目前完全靠手测
 3. 端到端冒烟脚本：可考虑用 `webapp-testing` skill / Playwright 包装 §6
+4. **OPENTUI 升级（决策：保守保持 0.1.105）**：上游已发 `@opentui/{core,solid}@0.2.1`（跨 minor，预期 breaking）。当前 fork 在 0.1.105 上验证稳定，升级收益不明确、风险高。后续若要升 0.2.x，须新开探路分支跑全套手动 TUI 冒烟（§6）+ 自动化测试，并按 breaking change 清单逐项迁移。
+5. **其他依赖升级**：上游 v1.14.30 基线本身已携带较新依赖快照；除非出现安全 CVE 或具体功能需要，本 fork 不主动追依赖升级，避免引入与稳定性补丁无关的风险面。
