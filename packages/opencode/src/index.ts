@@ -115,8 +115,17 @@ const cli = yargs(args)
       run_id: processMetadata.runID,
     })
 
-    const marker = path.join(Global.Path.data, "opencode.db")
-    if (!(await Filesystem.exists(marker))) {
+    StartupTrace.boot("migration.check.start")
+    // Marker MUST point at the real DB file. Database.Path resolves through
+    // getChannelPath(), which appends a `-<channel>` suffix on non-prod
+    // channels (local/dev/snapshot/...). Hardcoding "opencode.db" here meant
+    // the marker never existed on those channels, so JsonMigration re-ran on
+    // every startup whenever ~/.local/share/opencode was empty/new.
+    if (!(await Filesystem.exists(Database.Path))) {
+      // First-time launch: JsonMigration + drizzle are lazy-imported. Database
+      // module itself is already eager-loaded at the top of this file (needed
+      // by the process.on("exit") hook), but `Database.Client()` is still
+      // lazy and only opens the connection here.
       const tty = process.stderr.isTTY
       process.stderr.write("Performing one time database migration, may take a few minutes..." + EOL)
       const width = 36
