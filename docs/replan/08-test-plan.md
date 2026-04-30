@@ -83,7 +83,9 @@
 
 ### 5.2 TUI Quota 状态栏
 
-无自动化测试（依赖 `auth.json` + 网络 + Solid 渲染）；走手动清单：
+**自动化覆盖**（commit `c9edab9fa`）：`bun test test/cli/cmd/tui/feature-plugins/session/quota-fetch.test.ts` → 17 case 覆盖 auth 读取 / 两种响应解析 / fetch 错误降级。
+
+**手动清单**（Solid 渲染 + opentui Slot 仍需手测）：
 
 | 场景 | 操作 | 期望 |
 |---|---|---|
@@ -140,7 +142,7 @@ bun run dev
 ## 9. 已知缺口（不阻塞 fork.1 release，列入 backlog）
 
 1. ~~`test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Notification/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd）~~ — ✅ 已完成（commit `27510b442`，单文件 8 describe 形式覆盖 18 个 case）
-2. TUI Quota 自动化：当前完全靠手测；可行路径是把 `quota.tsx` 中纯函数（`readQuotaAuth` / `parseCopilotQuota` / `parseProxyQuota` / `fetchQuota`）提取并 export，再单测 fetch mock + JSON 解析。组件渲染（Solid + opentui Slot）不在自动化范围
+2. ~~TUI Quota 自动化：当前完全靠手测；可行路径是把 `quota.tsx` 中纯函数（`readQuotaAuth` / `parseCopilotQuota` / `parseProxyQuota` / `fetchQuota`）提取并 export，再单测 fetch mock + JSON 解析。组件渲染（Solid + opentui Slot）不在自动化范围~~ — ✅ 已完成（commit `c9edab9fa`）：纯函数抽离至 `quota-fetch.ts`，`test/cli/cmd/tui/feature-plugins/session/quota-fetch.test.ts` 17 case 覆盖；Solid 渲染仍走 §5.2 手测
 3. 端到端冒烟脚本：~~可考虑用 `webapp-testing` skill / Playwright 包装 §6~~ — 修正：TUI 是终端应用而非 web，Playwright 不适用；可用 `node-pty` + expect-style 断言包装 §6，但工程量较大，目前继续手动
 4. **OPENTUI 升级（决策：保守保持 0.1.105）**：上游已发 `@opentui/{core,solid}@0.2.1`（跨 minor，预期 breaking）。当前 fork 在 0.1.105 上验证稳定，升级收益不明确、风险高。后续若要升 0.2.x，须新开探路分支跑全套手动 TUI 冒烟（§6）+ 自动化测试，并按 breaking change 清单逐项迁移。
 5. **其他依赖升级**：上游 v1.14.30 基线本身已携带较新依赖快照；除非出现安全 CVE 或具体功能需要，本 fork 不主动追依赖升级，避免引入与稳定性补丁无关的风险面。
