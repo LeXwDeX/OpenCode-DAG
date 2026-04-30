@@ -463,9 +463,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 { args },
               )
               yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.promise(() =>
-                execute(args, opts),
-              )
+              const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.tryPromise({
+                try: () => execute(args, opts),
+                catch: (e) => new Error(`MCP tool "${key}" failed: ${e instanceof Error ? e.message : String(e)}`),
+              })
               yield* plugin.trigger(
                 "tool.execute.after",
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
@@ -519,7 +520,16 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 yield* input.processor.completeToolCall(opts.toolCallId, output)
               }
               return output
-            }),
+            }).pipe(
+              Effect.catch((e: unknown) =>
+                Effect.succeed({
+                  title: "",
+                  metadata: {} as Record<string, unknown>,
+                  output: `MCP tool error: ${e instanceof Error ? e.message : String(e)}`,
+                  content: [{ type: "text" as const, text: `MCP tool error: ${e instanceof Error ? e.message : String(e)}` }],
+                }),
+              ),
+            ),
           )
         tools[key] = item
       }

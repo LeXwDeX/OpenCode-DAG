@@ -113,6 +113,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           await put(saveProvider, {
             type: "api",
             key: result.key,
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata as Record<string, string> } : {}),
           })
         }
         spinner.stop("Login successful")
@@ -145,6 +146,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
           await put(saveProvider, {
             type: "api",
             key: result.key,
+            ...("metadata" in result && result.metadata ? { metadata: result.metadata as Record<string, string> } : {}),
           })
         }
         prompts.log.success("Login successful")
@@ -157,11 +159,17 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
 
   if (method.type === "api") {
     if (method.authorize) {
-      const key = await prompts.password({
-        message: "Enter your API key",
-        validate: (x) => (x && x.length > 0 ? undefined : "Required"),
-      })
-      if (prompts.isCancel(key)) throw new UI.CancelledError()
+      // Plugin prompts 已在上方收集了所需字段（如 apiKey）；
+      // 仅当 plugin 未定义 prompts 时才回退到通用 password 提示。
+      let key = ""
+      if (!method.prompts?.length) {
+        const entered = await prompts.password({
+          message: "Enter your API key",
+          validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+        })
+        if (prompts.isCancel(entered)) throw new UI.CancelledError()
+        key = entered
+      }
 
       const result = await method.authorize(inputs)
       if (result.type === "failed") {
@@ -172,6 +180,7 @@ async function handlePluginAuth(plugin: { auth: PluginAuth }, provider: string, 
         await put(saveProvider, {
           type: "api",
           key: result.key ?? key,
+          ...("metadata" in result && result.metadata ? { metadata: result.metadata as Record<string, string> } : {}),
         })
         prompts.log.success("Login successful")
       }

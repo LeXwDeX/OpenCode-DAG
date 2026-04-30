@@ -93,6 +93,38 @@ function normalizeMessages(
       .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
   }
 
+  // Anthropic 硬规定：assistant 消息的最后一个 content block 不能是 thinking / redacted_thinking。
+  // 流式响应被中断（Esc 取消、网络断、超时）时，session 里可能只剩 reasoning 块，
+  // 重放时会触发 400: "The final block in an assistant message cannot be 'thinking'."
+  //
+  // 策略：
+  //   1. 若消息只有 reasoning → 追加一个空 text 兜底（保留 signature 链路）
+  //   2. 若末尾有 reasoning 但前面有 text/tool-call/... → 把末尾的 reasoning 重排到非末尾位置
+  //   3. 末尾已合法 → 不动
+  msgs = msgs.map((msg) => {
+    if (msg.role !== "assistant" || !Array.isArray(msg.content)) return msg
+    const parts = msg.content
+    if (parts.length === 0) return msg
+
+    let lastValidIdx = -1
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const t = (parts[i] as { type: string }).type
+      if (t !== "reasoning" && t !== "redacted_thinking") {
+        lastValidIdx = i
+        break
+      }
+    }
+
+    if (lastValidIdx === -1) {
+      return { ...msg, content: [...parts, { type: "text", text: " " } as (typeof parts)[number]] }
+    }
+    if (lastValidIdx === parts.length - 1) return msg
+    const head = parts.slice(0, lastValidIdx)
+    const anchor = parts[lastValidIdx]
+    const trailing = parts.slice(lastValidIdx + 1)
+    return { ...msg, content: [...head, ...trailing, anchor] }
+  })
+
   if (model.api.id.includes("claude")) {
     const scrub = (id: string) => id.replace(/[^a-zA-Z0-9_-]/g, "_")
     msgs = msgs.map((msg) => {

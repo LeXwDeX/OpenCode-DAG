@@ -170,7 +170,15 @@ export const TaskTool = Tool.define(
       description: DESCRIPTION,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
-        run(params, ctx).pipe(Effect.orDie),
+        run(params, ctx).pipe(
+          Effect.catch((e: unknown) =>
+            Effect.succeed({
+              title: params.description,
+              metadata: {} as any,
+              output: `Task failed: ${e instanceof Error ? e.message : String(e)}`,
+            }),
+          ),
+        ),
     }
   }),
 )
