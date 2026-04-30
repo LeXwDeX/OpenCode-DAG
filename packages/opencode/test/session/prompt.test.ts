@@ -12,6 +12,7 @@ import { Config } from "@/config/config"
 import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { Permission } from "../../src/permission"
+import { SettingsHook } from "../../src/hook/settings"
 import { Plugin } from "../../src/plugin"
 import { Provider as ProviderSvc } from "@/provider/provider"
 import { Env } from "../../src/env"
@@ -161,6 +162,7 @@ function makeHttp() {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
+    SettingsHook.defaultLayer,
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
