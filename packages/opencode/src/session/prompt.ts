@@ -1739,6 +1739,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(SessionProcessor.defaultLayer),
     Layer.provide(Command.defaultLayer),
     Layer.provide(Permission.defaultLayer),
+    Layer.provide(SettingsHook.defaultLayer),
     Layer.provide(MCP.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(ToolRegistry.defaultLayer),

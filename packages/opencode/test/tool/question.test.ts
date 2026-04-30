@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Effect, Exit, Cause, Fiber, Layer } from "effect"
+import { Effect, Exit, Cause, Fiber, Layer, Schema } from "effect"
 import z from "zod"
 import { QuestionTool } from "../../src/tool/question"
 import { Question } from "../../src/question"
@@ -96,14 +96,14 @@ describe("tool.question", () => {
         const tool = yield* toolInfo.init()
 
         // Parse real bad input: LLM puts text in "header" but omits "question"
-        const parseResult = tool.parameters.safeParse({
+        const parseResult = Schema.decodeUnknownExit(tool.parameters)({
           questions: [{ header: "Deploy target", options: [{ label: "Vercel", description: "Edge" }] }],
         })
-        expect(parseResult.success).toBe(false)
-        if (parseResult.success) return
+        expect(Exit.isFailure(parseResult)).toBe(true)
+        if (Exit.isSuccess(parseResult)) return
 
         expect(tool.formatValidationError).toBeDefined()
-        const message = tool.formatValidationError!(parseResult.error)
+        const message = tool.formatValidationError!(Cause.squash(parseResult.cause))
 
         // Must surface the offending path
         expect(message).toContain("questions.0.question")
@@ -153,13 +153,13 @@ describe("tool.question", () => {
         const tool = yield* toolInfo.init()
 
         // Parse bad input: "options" is also a required field
-        const parseResult = tool.parameters.safeParse({
+        const parseResult = Schema.decodeUnknownExit(tool.parameters)({
           questions: [{ question: "Which environment?", header: "Env" }],
         })
-        expect(parseResult.success).toBe(false)
-        if (parseResult.success) return
+        expect(Exit.isFailure(parseResult)).toBe(true)
+        if (Exit.isSuccess(parseResult)) return
 
-        const message = tool.formatValidationError!(parseResult.error)
+        const message = tool.formatValidationError!(Cause.squash(parseResult.cause))
         expect(message).toContain("questions.0.options")
         expect(message).toContain('"options" is REQUIRED')
         expect(message).toContain("Correct call example")

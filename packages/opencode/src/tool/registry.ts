@@ -45,6 +45,7 @@ import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { Bus } from "../bus"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
+import { SettingsHook } from "@/hook/settings"
 import { Permission } from "@/permission"
 
 const log = Log.create({ service: "tool.registry" })
@@ -81,6 +82,7 @@ export const layer: Layer.Layer<
   | Provider.Service
   | LSP.Service
   | Instruction.Service
+  | SettingsHook.Service
   | AppFileSystem.Service
   | Bus.Service
   | HttpClient.HttpClient
@@ -334,6 +336,7 @@ export const defaultLayer = Layer.suspend(() =>
     Layer.provide(Provider.defaultLayer),
     Layer.provide(LSP.defaultLayer),
     Layer.provide(Instruction.defaultLayer),
+    Layer.provide(SettingsHook.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(Bus.layer),
     Layer.provide(FetchHttpClient.layer),

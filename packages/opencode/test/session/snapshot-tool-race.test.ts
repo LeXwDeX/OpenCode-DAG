@@ -55,6 +55,7 @@ import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "../../src/file/ripgrep"
 import { Format } from "../../src/format"
+import { SettingsHook } from "../../src/hook/settings"
 
 void Log.init({ print: false })
 
@@ -114,6 +115,7 @@ function makeHttp() {
     AgentSvc.defaultLayer,
     Command.defaultLayer,
     Permission.defaultLayer,
+    SettingsHook.defaultLayer,
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
@@ -126,6 +128,7 @@ function makeHttp() {
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
     Layer.provide(Skill.defaultLayer),
+    Layer.provide(SettingsHook.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
