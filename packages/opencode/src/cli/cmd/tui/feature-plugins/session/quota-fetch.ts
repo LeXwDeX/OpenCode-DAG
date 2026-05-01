@@ -7,8 +7,8 @@ export interface QuotaAuth {
   quotaUrl: string
   token: string
   provider: "github-proxy" | "github-copilot"
-  /** github-copilot 直连模式使用 "token <gho>" 认证头格式 */
-  authHeaderPrefix: "Bearer" | "token"
+  /** github-copilot 直连模式也使用 "Bearer <refresh>" 认证头格式（与 copilot plugin 一致） */
+  authHeaderPrefix: "Bearer"
 }
 
 export interface QuotaInfo {
@@ -52,7 +52,7 @@ export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null>
           quotaUrl: `${apiBase}/copilot_internal/user`,
           token: refresh,
           provider: "github-copilot",
-          authHeaderPrefix: "token",
+          authHeaderPrefix: "Bearer",
         }
       }
     }
