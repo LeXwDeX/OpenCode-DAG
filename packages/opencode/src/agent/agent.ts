@@ -45,6 +45,7 @@ export const Info = Schema.Struct({
   prompt: Schema.optional(Schema.String),
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
+  todo_reminder: Schema.optional(Schema.Boolean),
 })
   .annotate({ identifier: "Agent" })
   .pipe(withStatics((s) => ({ zod: zod(s) })))
@@ -256,6 +257,7 @@ export const layer = Layer.effect(
           item.hidden = value.hidden ?? item.hidden
           item.name = value.name ?? item.name
           item.steps = value.steps ?? item.steps
+          item.todo_reminder = value.todo_reminder ?? item.todo_reminder
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }

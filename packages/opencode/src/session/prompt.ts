@@ -54,6 +54,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect/bridge"
+import { Todo } from "./todo"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -67,6 +68,34 @@ IMPORTANT:
 - This tool provides your final answer - no further actions are taken after calling it`
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
+
+// Render the current TODO list as an ephemeral system-reminder. Injected fresh
+// before every LLM step (see insertReminders) so long sessions / repeated
+// compaction can never erase the agent's own plan from its working context.
+// Status order is in_progress → pending → completed so the active item is
+// visible at a glance. Returns "" when there are no todos so callers can skip.
+export function renderTodoReminder(todos: ReadonlyArray<Todo.Info>): string {
+  if (todos.length === 0) return ""
+  const order = { in_progress: 0, pending: 1, completed: 2, cancelled: 3 } as const
+  const sorted = [...todos].sort(
+    (a, b) =>
+      (order[a.status as keyof typeof order] ?? 9) - (order[b.status as keyof typeof order] ?? 9),
+  )
+  const marker = (status: string) => {
+    if (status === "completed") return "[x]"
+    if (status === "in_progress") return "[→]"
+    if (status === "cancelled") return "[-]"
+    return "[ ]"
+  }
+  const lines = sorted.map((t) => `- ${marker(t.status)} ${t.content}`)
+  return [
+    "<system-reminder>",
+    "Current TODO list (auto-injected each step — do not lose track):",
+    ...lines,
+    "Continue working on the in_progress item; mark it completed immediately upon finishing, then advance to the next pending item.",
+    "</system-reminder>",
+  ].join("\n")
+}
 
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
@@ -110,6 +139,7 @@ export const layer = Layer.effect(
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
     const settingsHook = yield* SettingsHook.Service
+    const todo = yield* Todo.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
     })
@@ -223,13 +253,13 @@ export const layer = Layer.effect(
         .pipe(Effect.catchCause((cause) => elog.error("failed to generate title", { error: Cause.squash(cause) })))
     })
 
-    const insertReminders = Effect.fn("SessionPrompt.insertReminders")(function* (input: {
+    const insertPlanReminders = Effect.fn("SessionPrompt.insertPlanReminders")(function* (input: {
       messages: MessageV2.WithParts[]
       agent: Agent.Info
       session: Session.Info
     }) {
       const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
-      if (!userMessage) return input.messages
+      if (!userMessage) return
 
       if (!Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE) {
         if (input.agent.name === "plan") {
@@ -253,13 +283,13 @@ export const layer = Layer.effect(
             synthetic: true,
           })
         }
-        return input.messages
+        return
       }
 
       const assistantMessage = input.messages.findLast((msg) => msg.info.role === "assistant")
       if (input.agent.name !== "plan" && assistantMessage?.info.agent === "plan") {
         const plan = Session.plan(input.session)
-        if (!(yield* fsys.existsSafe(plan))) return input.messages
+        if (!(yield* fsys.existsSafe(plan))) return
         const part = yield* sessions.updatePart({
           id: PartID.ascending(),
           messageID: userMessage.info.id,
@@ -269,10 +299,10 @@ export const layer = Layer.effect(
           synthetic: true,
         })
         userMessage.parts.push(part)
-        return input.messages
+        return
       }
 
-      if (input.agent.name !== "plan" || assistantMessage?.info.agent === "plan") return input.messages
+      if (input.agent.name !== "plan" || assistantMessage?.info.agent === "plan") return
 
       const plan = Session.plan(input.session)
       const exists = yield* fsys.existsSafe(plan)
@@ -355,6 +385,41 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         synthetic: true,
       })
       userMessage.parts.push(part)
+    })
+
+    // Inject the current TODO list as an ephemeral system-reminder before
+    // every LLM step. Built-in: opt-out per agent via `todo_reminder: false`.
+    // Synthetic part — never persisted to history, never compacted away,
+    // always re-rendered fresh from Todo.Service so the LLM sees the latest
+    // status even after long sessions or aggressive compaction.
+    const insertTodoReminder = Effect.fn("SessionPrompt.insertTodoReminder")(function* (input: {
+      messages: MessageV2.WithParts[]
+      agent: Agent.Info
+      session: Session.Info
+    }) {
+      if (input.agent.todo_reminder === false) return
+      const userMessage = input.messages.findLast((msg) => msg.info.role === "user")
+      if (!userMessage) return
+      const todos = yield* todo.get(input.session.id)
+      const text = renderTodoReminder(todos)
+      if (text === "") return
+      userMessage.parts.push({
+        id: PartID.ascending(),
+        messageID: userMessage.info.id,
+        sessionID: userMessage.info.sessionID,
+        type: "text",
+        text,
+        synthetic: true,
+      })
+    })
+
+    const insertReminders = Effect.fn("SessionPrompt.insertReminders")(function* (input: {
+      messages: MessageV2.WithParts[]
+      agent: Agent.Info
+      session: Session.Info
+    }) {
+      yield* insertPlanReminders(input)
+      yield* insertTodoReminder(input)
       return input.messages
     })
 
@@ -1759,6 +1824,7 @@ export const defaultLayer = Layer.suspend(() =>
         LLM.defaultLayer,
         Bus.layer,
         CrossSpawnSpawner.defaultLayer,
+        Todo.defaultLayer,
       ),
     ),
   ),

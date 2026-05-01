@@ -47,6 +47,10 @@ const AgentSchema = Schema.StructWithRest(
     }),
     maxSteps: Schema.optional(PositiveInt).annotate({ description: "@deprecated Use 'steps' field instead." }),
     permission: Schema.optional(ConfigPermission.Info),
+    todo_reminder: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Inject the current TODO list as an ephemeral system-reminder before each LLM call so long sessions don't drift away from the plan (default: true). Set to false to opt out per-agent.",
+    }),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
 )
@@ -68,6 +72,7 @@ const KNOWN_KEYS = new Set([
   "permission",
   "disable",
   "tools",
+  "todo_reminder",
 ])
 
 // Post-parse normalisation:
