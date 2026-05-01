@@ -1980,3 +1980,82 @@ it.live(
     ),
   30_000,
 )
+
+// E2E coverage for the TODO ephemeral system-reminder injection.
+// renderTodoReminder is unit-tested separately; these tests assert the wiring:
+// once todos exist on a session, the rendered <system-reminder> reaches the
+// LLM call payload via insertTodoReminder → loop → streamText.
+it.live(
+  "injects current TODO list as a system-reminder into the next LLM request",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const todo = yield* Todo.Service
+        const chat = yield* sessions.create({
+          title: "todo-reminder",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        yield* todo.update({
+          sessionID: chat.id,
+          todos: [
+            { content: "ship the fix", status: "in_progress", priority: "high" },
+            { content: "write the tests", status: "pending", priority: "medium" },
+          ],
+        })
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "go" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+
+        const hits = yield* llm.hits
+        expect(hits.length).toBeGreaterThan(0)
+        // The reminder is appended as a synthetic text part on the user message,
+        // so it must surface inside the request body sent to the test LLM.
+        const wireText = JSON.stringify(hits[0].body)
+        expect(wireText).toContain("<system-reminder>")
+        expect(wireText).toContain("Current TODO list")
+        expect(wireText).toContain("ship the fix")
+        expect(wireText).toContain("write the tests")
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)
+
+it.live(
+  "skips TODO reminder injection when there are no todos for the session",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "todo-reminder-empty",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "go" }],
+        })
+        yield* llm.text("ok")
+        yield* prompt.loop({ sessionID: chat.id })
+
+        const hits = yield* llm.hits
+        const wireText = JSON.stringify(hits[0]?.body ?? {})
+        expect(wireText).not.toContain("Current TODO list")
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)

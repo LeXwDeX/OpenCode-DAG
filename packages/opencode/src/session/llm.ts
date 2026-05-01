@@ -2,7 +2,7 @@ import { Provider } from "@/provider/provider"
 import * as Log from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer, Record } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool, tool, jsonSchema } from "ai"
+import { streamText, wrapLanguageModel, type ModelMessage, type SystemModelMessage, type Tool, tool, jsonSchema } from "ai"
 import { mergeDeep, pipe } from "remeda"
 import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
@@ -145,19 +145,18 @@ const live: Layer.Layer<
       }
 
       const isWorkflow = language instanceof GitLabWorkflowLanguageModel
-      const messages = isOpenaiOauth
-        ? input.messages
-        : isWorkflow
-          ? input.messages
-          : [
-              ...system.map(
-                (x): ModelMessage => ({
-                  role: "system",
-                  content: x,
-                }),
-              ),
-              ...input.messages,
-            ]
+      // ai-sdk v6 prints a "System messages in the prompt or messages fields"
+      // warning whenever role:"system" appears inside `messages`. Pass the
+      // collected system prompts via the dedicated `system` parameter instead;
+      // an array preserves the 2-part structure required for prompt caching.
+      // OpenAI OAuth uses `options.instructions` (set above), and the GitLab
+      // Workflow language model embeds system prompts in its own way — both
+      // continue to receive an empty top-level `system`.
+      const messages = input.messages
+      const systemParam: SystemModelMessage[] =
+        isOpenaiOauth || isWorkflow
+          ? []
+          : system.map((x): SystemModelMessage => ({ role: "system", content: x }))
 
       // Defense-in-depth: repair any orphaned tool-calls (tool_use without a
       // matching tool_result) before handing off to streamText. This prevents
@@ -389,6 +388,7 @@ const live: Layer.Layer<
           ...headers,
         },
         maxRetries: input.retries ?? 0,
+        system: systemParam,
         messages,
         model: wrapLanguageModel({
           model: language,
