@@ -138,10 +138,7 @@ const live: Layer.Layer<
             sessionID: input.sessionID,
             providerOptions: item.options,
           })
-      const options = mergeOptions(
-        mergeOptions(mergeOptions(base, input.model.options), input.agent.options),
-        variant,
-      )
+      const options = mergeOptions(mergeOptions(mergeOptions(base, input.model.options), input.agent.options), variant)
       if (isOpenaiOauth) {
         options.instructions = system.join("\n")
       }
