@@ -4,17 +4,18 @@
 #
 # Usage:
 #   1. Go to Actions → "fork-release" → Run workflow
-#   2. Pick the branch (replan/v1.14.30) and optionally set a version
+#   2. Pick the branch and optionally set a version
 #   3. Download artifacts from the completed run
 #   4. Or: set create_release=true to auto-create a GitHub Release with assets
 
 name: fork-release
 
 on:
+  # Manual trigger — the primary way to build releases
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. 1.14.30-fork.2). Leave blank for auto-generated preview version."
+        description: "Release version (e.g. 1.14.30-fork.2). Leave blank for auto."
         required: false
         type: string
       create_release:
@@ -22,12 +23,19 @@ on:
         required: false
         type: boolean
         default: false
+  # Also run on push to dev so the workflow registers in Actions UI on first push
+  push:
+    branches: [dev]
+    paths:
+      - ".github/workflows/fork-release.yml"
 
 permissions:
   contents: write
 
 jobs:
   build-cli:
+    # Skip the actual build when triggered by push (registration-only)
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
       matrix:
@@ -68,7 +76,6 @@ jobs:
               if command -v zip &>/dev/null; then
                 zip -r "../../${base}.zip" .
               else
-                # Windows fallback: use 7z or powershell
                 pwsh -Command "Compress-Archive -Path '*' -DestinationPath '../../${base}.zip'" 2>/dev/null || 7z a "../../${base}.zip" . || true
               fi
               cd ../..
@@ -114,3 +121,10 @@ jobs:
             --notes "Fork release from branch ${{ github.ref_name }}" \
             --target "${{ github.sha }}" \
             release-assets/*
+
+  # No-op job for push-triggered runs — just registers the workflow in Actions UI
+  register:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Workflow registered in Actions UI"
