@@ -1,7 +1,7 @@
 // quota-fetch.test.ts — TUI Quota 自动化测试，覆盖 quota.tsx 抽离的纯逻辑
-//   - readQuotaAuth：2 种 auth 来源（github-proxy / github-copilot）+ 异常分支
+//   - readQuotaAuths：2 种 auth 来源（github-proxy / github-copilot）+ 异常分支
 //   - parseProxyQuota / parseCopilotQuota：正常解析 + 字段缺失返回 null
-//   - fetchQuota：正常 200 + 非 200 + fetch 抛错（含 timeout）
+//   - fetchQuota：正常 200 + 非 200 + fetch 抛错（含 timeout）+ fallback 降级
 // 不覆盖：Solid 组件渲染、setInterval 调度、opentui Slot 逻辑（需手测，见 08-test-plan §5.2）
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
@@ -11,7 +11,7 @@ import {
   fetchQuota,
   parseCopilotQuota,
   parseProxyQuota,
-  readQuotaAuth,
+  readQuotaAuths,
   type QuotaAuth,
 } from "@/cli/cmd/tui/feature-plugins/session/quota-fetch"
 
@@ -21,7 +21,7 @@ afterEach(() => {
   globalThis.fetch = originalFetch
 })
 
-describe("readQuotaAuth", () => {
+describe("readQuotaAuths", () => {
   let dir: string
   beforeEach(async () => {
     dir = await mkdtemp(path.join(os.tmpdir(), "quota-auth-"))
@@ -30,7 +30,7 @@ describe("readQuotaAuth", () => {
     await rm(dir, { recursive: true, force: true })
   })
 
-  test("github-proxy 优先，去尾斜杠后拼 /copilot/quota", async () => {
+  test("github-proxy 排第一，去尾斜杠后拼 /copilot/quota", async () => {
     await writeFile(
       path.join(dir, "auth.json"),
       JSON.stringify({
@@ -41,8 +41,8 @@ describe("readQuotaAuth", () => {
         },
       }),
     )
-    const auth = await readQuotaAuth(dir)
-    expect(auth).toEqual({
+    const auths = await readQuotaAuths(dir)
+    expect(auths[0]).toEqual({
       quotaUrl: "http://internal:8000/copilot/quota",
       token: "sk-test",
       provider: "github-proxy",
@@ -50,7 +50,21 @@ describe("readQuotaAuth", () => {
     })
   })
 
-  test("缺 proxyUrl 时降级到 github-copilot oauth", async () => {
+  test("同时有 proxy 和 copilot → 两条都返回，proxy 排第一", async () => {
+    await writeFile(
+      path.join(dir, "auth.json"),
+      JSON.stringify({
+        "github-proxy": { type: "api", key: "sk-test", metadata: { proxyUrl: "http://p:8000" } },
+        "github-copilot": { type: "oauth", refresh: "gho_test" },
+      }),
+    )
+    const auths = await readQuotaAuths(dir)
+    expect(auths.length).toBe(2)
+    expect(auths[0].provider).toBe("github-proxy")
+    expect(auths[1].provider).toBe("github-copilot")
+  })
+
+  test("缺 proxyUrl 时只返回 github-copilot", async () => {
     await writeFile(
       path.join(dir, "auth.json"),
       JSON.stringify({
@@ -58,12 +72,13 @@ describe("readQuotaAuth", () => {
         "github-copilot": { type: "oauth", refresh: "gho_test" },
       }),
     )
-    const auth = await readQuotaAuth(dir)
-    expect(auth).toEqual({
+    const auths = await readQuotaAuths(dir)
+    expect(auths.length).toBe(1)
+    expect(auths[0]).toEqual({
       quotaUrl: "https://api.github.com/copilot_internal/user",
       token: "gho_test",
       provider: "github-copilot",
-      authHeaderPrefix: "token",
+      authHeaderPrefix: "Bearer",
     })
   })
 
@@ -78,22 +93,22 @@ describe("readQuotaAuth", () => {
         },
       }),
     )
-    const auth = await readQuotaAuth(dir)
-    expect(auth?.quotaUrl).toBe("https://api.ghes.corp.io/copilot_internal/user")
+    const auths = await readQuotaAuths(dir)
+    expect(auths[0]?.quotaUrl).toBe("https://api.ghes.corp.io/copilot_internal/user")
   })
 
-  test("auth.json 不存在 → 返回 null", async () => {
-    expect(await readQuotaAuth(dir)).toBeNull()
+  test("auth.json 不存在 → 返回 []", async () => {
+    expect(await readQuotaAuths(dir)).toEqual([])
   })
 
-  test("auth.json 非法 JSON → 返回 null", async () => {
+  test("auth.json 非法 JSON → 返回 []", async () => {
     await writeFile(path.join(dir, "auth.json"), "{not json")
-    expect(await readQuotaAuth(dir)).toBeNull()
+    expect(await readQuotaAuths(dir)).toEqual([])
   })
 
-  test("无任何 provider 配置 → 返回 null", async () => {
+  test("无任何 provider 配置 → 返回 []", async () => {
     await writeFile(path.join(dir, "auth.json"), JSON.stringify({ other: { type: "api" } }))
-    expect(await readQuotaAuth(dir)).toBeNull()
+    expect(await readQuotaAuths(dir)).toEqual([])
   })
 })
 
@@ -120,22 +135,34 @@ describe("parseProxyQuota", () => {
 })
 
 describe("parseCopilotQuota", () => {
-  test("percentRemaining 翻转为 used 数值，entitlement 固定 100", () => {
+  test("snake_case 字段解析，remaining 翻转为 used 数值", () => {
     expect(
       parseCopilotQuota({
-        quotaSnapshots: { premiumInteractions: { percentRemaining: 75 } },
+        quota_snapshots: { premium_interactions: { remaining: 30, entitlement: 300 } },
       }),
-    ).toEqual({ remaining: 25, entitlement: 100, accounts_active: 0, accounts_total: 0 })
+    ).toEqual({ remaining: 270, entitlement: 300, accounts_active: 0, accounts_total: 0 })
   })
 
-  test("缺 quotaSnapshots → null", () => {
+  test("remaining 0 时 used = entitlement（全部用完）", () => {
+    expect(
+      parseCopilotQuota({
+        quota_snapshots: { premium_interactions: { remaining: 0, entitlement: 100 } },
+      }),
+    ).toEqual({ remaining: 100, entitlement: 100, accounts_active: 0, accounts_total: 0 })
+  })
+
+  test("缺 quota_snapshots → null", () => {
     expect(parseCopilotQuota({})).toBeNull()
   })
 
-  test("percentRemaining 非 number → null", () => {
+  test("缺 premium_interactions → null", () => {
+    expect(parseCopilotQuota({ quota_snapshots: {} })).toBeNull()
+  })
+
+  test("remaining 非 number → null", () => {
     expect(
       parseCopilotQuota({
-        quotaSnapshots: { premiumInteractions: { percentRemaining: "75" } },
+        quota_snapshots: { premium_interactions: { remaining: "30", entitlement: 100 } },
       }),
     ).toBeNull()
   })
@@ -152,7 +179,7 @@ describe("fetchQuota", () => {
     quotaUrl: "https://api.github.com/copilot_internal/user",
     token: "gho_test",
     provider: "github-copilot",
-    authHeaderPrefix: "token",
+    authHeaderPrefix: "Bearer",
   }
 
   test("github-proxy 200 → parseProxyQuota，header 注入 Bearer", async () => {
@@ -161,7 +188,7 @@ describe("fetchQuota", () => {
       captured = { url: String(url), headers: (init?.headers ?? {}) as Record<string, string> }
       return new Response(JSON.stringify({ remaining: 20, entitlement: 100 }), { status: 200 })
     }) as unknown as typeof fetch
-    const q = await fetchQuota(proxyAuth)
+    const q = await fetchQuota([proxyAuth])
     expect(q).toEqual({ remaining: 20, entitlement: 100, accounts_active: 0, accounts_total: 0 })
     expect(captured!.url).toBe("http://internal:8000/copilot/quota")
     expect(captured!.headers.Authorization).toBe("Bearer sk-test")
@@ -172,29 +199,60 @@ describe("fetchQuota", () => {
     globalThis.fetch = mock(async (_url: string | URL, init?: RequestInit) => {
       captured = (init?.headers ?? {}) as Record<string, string>
       return new Response(
-        JSON.stringify({ quotaSnapshots: { premiumInteractions: { percentRemaining: 60 } } }),
+        JSON.stringify({
+          quota_snapshots: { premium_interactions: { remaining: 60, entitlement: 300 } },
+        }),
         { status: 200 },
       )
     }) as unknown as typeof fetch
-    const q = await fetchQuota(copilotAuth)
-    expect(q).toEqual({ remaining: 40, entitlement: 100, accounts_active: 0, accounts_total: 0 })
-    expect(captured.Authorization).toBe("token gho_test")
+    const q = await fetchQuota([copilotAuth])
+    // remaining=60 → used=300-60=240
+    expect(q).toEqual({ remaining: 240, entitlement: 300, accounts_active: 0, accounts_total: 0 })
+    expect(captured.Authorization).toBe("Bearer gho_test")
   })
 
-  test("非 200 → 返回 null（不抛）", async () => {
-    globalThis.fetch = mock(async () => new Response("nope", { status: 503 })) as unknown as typeof fetch
-    expect(await fetchQuota(proxyAuth)).toBeNull()
-  })
-
-  test("fetch 抛错（如 timeout）→ 返回 null", async () => {
-    globalThis.fetch = mock(async () => {
-      throw new Error("AbortError")
+  test("proxy 失败（非 200）→ 降级到 copilot", async () => {
+    let callCount = 0
+    globalThis.fetch = mock(async (url: string | URL) => {
+      callCount++
+      if (String(url).includes("internal:8000")) return new Response("nope", { status: 503 })
+      return new Response(
+        JSON.stringify({
+          quota_snapshots: { premium_interactions: { remaining: 30, entitlement: 300 } },
+        }),
+        { status: 200 },
+      )
     }) as unknown as typeof fetch
-    expect(await fetchQuota(proxyAuth)).toBeNull()
+    const q = await fetchQuota([proxyAuth, copilotAuth])
+    expect(callCount).toBe(2)
+    expect(q).toEqual({ remaining: 270, entitlement: 300, accounts_active: 0, accounts_total: 0 })
+  })
+
+  test("proxy 抛错 → 降级到 copilot", async () => {
+    globalThis.fetch = mock(async (url: string | URL) => {
+      if (String(url).includes("internal:8000")) throw new Error("connection refused")
+      return new Response(
+        JSON.stringify({
+          quota_snapshots: { premium_interactions: { remaining: 30, entitlement: 300 } },
+        }),
+        { status: 200 },
+      )
+    }) as unknown as typeof fetch
+    const q = await fetchQuota([proxyAuth, copilotAuth])
+    expect(q).toEqual({ remaining: 270, entitlement: 300, accounts_active: 0, accounts_total: 0 })
+  })
+
+  test("所有 auth 均失败 → 返回 null", async () => {
+    globalThis.fetch = mock(async () => new Response("nope", { status: 503 })) as unknown as typeof fetch
+    expect(await fetchQuota([proxyAuth, copilotAuth])).toBeNull()
+  })
+
+  test("空 auth 列表 → 返回 null", async () => {
+    expect(await fetchQuota([])).toBeNull()
   })
 
   test("响应 JSON 字段不完整 → 返回 null", async () => {
     globalThis.fetch = mock(async () => new Response(JSON.stringify({}), { status: 200 })) as unknown as typeof fetch
-    expect(await fetchQuota(proxyAuth)).toBeNull()
+    expect(await fetchQuota([proxyAuth])).toBeNull()
   })
 })

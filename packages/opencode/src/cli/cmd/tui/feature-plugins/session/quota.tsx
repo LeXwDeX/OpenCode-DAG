@@ -1,5 +1,5 @@
 // quota.tsx — 在 session prompt 右侧显示 Copilot premium request 配额。
-// 支持两种 auth 来源：
+// 支持两种 auth 来源（按优先级依次尝试）：
 //  1. github-proxy（type:"api"，metadata.proxyUrl + key 走 /copilot/quota）
 //  2. github-copilot（type:"oauth"，refresh token 走 GitHub /copilot_internal/user）
 //
@@ -8,7 +8,7 @@
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createSignal, onCleanup } from "solid-js"
 import { Global } from "@opencode-ai/core/global"
-import { fetchQuota, readQuotaAuth, type QuotaAuth, type QuotaInfo } from "./quota-fetch"
+import { fetchQuota, readQuotaAuths, type QuotaAuth, type QuotaInfo } from "./quota-fetch"
 
 const id = "internal:session-quota"
 
@@ -29,10 +29,10 @@ function QuotaView(props: { api: TuiPluginApi }) {
         return t.textMuted
     }
   }
-  const [quotaAuth, setQuotaAuth] = createSignal<QuotaAuth | null>(null)
+  const [quotaAuths, setQuotaAuths] = createSignal<QuotaAuth[]>([])
 
   function applyQuota(q: QuotaInfo) {
-    // 后端 remaining 字段实际是 used（已用量），需翻转为真正的剩余量
+    // QuotaInfo.remaining 存的是「已用量」，翻转得到真实剩余量
     const actual = q.entitlement - q.remaining
     const pct = Math.round((actual / Math.max(q.entitlement, 1)) * 100)
     setTone(pct > 30 ? "success" : pct > 10 ? "warning" : "error")
@@ -46,13 +46,13 @@ function QuotaView(props: { api: TuiPluginApi }) {
   // 启动：读 auth → 首次拉取
   // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
   // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
-  readQuotaAuth(Global.Path.data).then((auth) => {
-    if (!auth) {
+  readQuotaAuths(Global.Path.data).then((auths) => {
+    if (auths.length === 0) {
       setLabel("")
       return
     }
-    setQuotaAuth(auth)
-    fetchQuota(auth).then((q) => {
+    setQuotaAuths(auths)
+    fetchQuota(auths).then((q) => {
       if (q) applyQuota(q)
       else setLabel("")
     })
@@ -60,9 +60,9 @@ function QuotaView(props: { api: TuiPluginApi }) {
 
   // 每 60 秒刷新
   const timer = setInterval(async () => {
-    const auth = quotaAuth()
-    if (!auth) return
-    const q = await fetchQuota(auth)
+    const auths = quotaAuths()
+    if (auths.length === 0) return
+    const q = await fetchQuota(auths)
     if (q) applyQuota(q)
   }, 60_000)
   onCleanup(() => clearInterval(timer))

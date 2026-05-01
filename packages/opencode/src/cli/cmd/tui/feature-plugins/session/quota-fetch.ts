@@ -18,10 +18,11 @@ export interface QuotaInfo {
   accounts_total: number
 }
 
-export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null> {
+export async function readQuotaAuths(stateDir: string): Promise<QuotaAuth[]> {
   try {
     const text = await readFile(path.join(stateDir, "auth.json"), "utf-8")
     const data = JSON.parse(text) as Record<string, unknown>
+    const result: QuotaAuth[] = []
 
     // 优先：github-proxy（带 proxyUrl 的内置 /copilot/quota 端点）
     const proxyEntry = data["github-proxy"] as Record<string, unknown> | undefined
@@ -30,16 +31,16 @@ export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null>
       const proxyUrl = meta?.proxyUrl
       const apiKey = proxyEntry.key as string | undefined
       if (proxyUrl && apiKey) {
-        return {
+        result.push({
           quotaUrl: `${proxyUrl.replace(/\/+$/, "")}/copilot/quota`,
           token: apiKey,
           provider: "github-proxy",
           authHeaderPrefix: "Bearer",
-        }
+        })
       }
     }
 
-    // 回退：github-copilot 直连模式（GitHub API 取 quota）
+    // 备选：github-copilot 直连模式（GitHub API 取 quota）
     const copilotEntry = data["github-copilot"] as Record<string, unknown> | undefined
     if (copilotEntry?.type === "oauth") {
       const refresh = copilotEntry.refresh as string | undefined
@@ -48,34 +49,36 @@ export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null>
         const apiBase = enterpriseUrl
           ? `https://api.${enterpriseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`
           : "https://api.github.com"
-        return {
+        result.push({
           quotaUrl: `${apiBase}/copilot_internal/user`,
           token: refresh,
           provider: "github-copilot",
           authHeaderPrefix: "Bearer",
-        }
+        })
       }
     }
 
-    return null
+    return result
   } catch {
-    return null
+    return []
   }
 }
 
-/** 从 GitHub Copilot API 响应解析 quota（百分比模式） */
+/** 从 GitHub Copilot API 响应解析 quota（snake_case 字段，直连 GitHub API） */
 export function parseCopilotQuota(data: Record<string, unknown>): QuotaInfo | null {
-  const snapshots = data.quotaSnapshots as Record<string, unknown> | undefined
-  const premium = snapshots?.premiumInteractions as Record<string, unknown> | undefined
+  const snapshots = data.quota_snapshots as Record<string, unknown> | undefined
+  const premium = snapshots?.premium_interactions as Record<string, unknown> | undefined
   if (!premium) return null
 
-  const percentRemaining = typeof premium.percentRemaining === "number" ? premium.percentRemaining : null
-  if (percentRemaining === null) return null
+  const actualRemaining = typeof premium.remaining === "number" ? premium.remaining : null
+  const entitlement = typeof premium.entitlement === "number" ? premium.entitlement : null
+  if (actualRemaining === null || entitlement === null) return null
 
-  // 百分比转 entitlement/remaining 数值，与 proxy 格式统一
+  // 归一化：QuotaInfo.remaining 存的是「已用量」，与 proxy 格式保持一致
+  // GitHub API 返回的 remaining 是「剩余量」，需翻转
   return {
-    remaining: 100 - percentRemaining,
-    entitlement: 100,
+    remaining: entitlement - actualRemaining,
+    entitlement,
     accounts_active: 0,
     accounts_total: 0,
   }
@@ -94,16 +97,20 @@ export function parseProxyQuota(data: Record<string, unknown>): QuotaInfo | null
   }
 }
 
-export async function fetchQuota(auth: QuotaAuth): Promise<QuotaInfo | null> {
-  try {
-    const resp = await fetch(auth.quotaUrl, {
-      headers: { Authorization: `${auth.authHeaderPrefix} ${auth.token}` },
-      signal: AbortSignal.timeout(5_000),
-    })
-    if (!resp.ok) return null
-    const data = (await resp.json()) as Record<string, unknown>
-    return auth.provider === "github-copilot" ? parseCopilotQuota(data) : parseProxyQuota(data)
-  } catch {
-    return null
+export async function fetchQuota(auths: QuotaAuth[]): Promise<QuotaInfo | null> {
+  for (const auth of auths) {
+    try {
+      const resp = await fetch(auth.quotaUrl, {
+        headers: { Authorization: `${auth.authHeaderPrefix} ${auth.token}` },
+        signal: AbortSignal.timeout(5_000),
+      })
+      if (!resp.ok) continue
+      const data = (await resp.json()) as Record<string, unknown>
+      const info = auth.provider === "github-copilot" ? parseCopilotQuota(data) : parseProxyQuota(data)
+      if (info) return info
+    } catch {
+      // 继续尝试下一个
+    }
   }
+  return null
 }
