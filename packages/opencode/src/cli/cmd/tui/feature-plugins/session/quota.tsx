@@ -7,6 +7,7 @@
 // 因此组件在数据就绪前显示 "⊘ …" 占位。
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createSignal, onCleanup } from "solid-js"
+import { Global } from "@opencode-ai/core/global"
 import { fetchQuota, readQuotaAuth, type QuotaAuth, type QuotaInfo } from "./quota-fetch"
 
 const id = "internal:session-quota"
@@ -43,7 +44,9 @@ function QuotaView(props: { api: TuiPluginApi }) {
   }
 
   // 启动：读 auth → 首次拉取
-  readQuotaAuth(props.api.state.path.state).then((auth) => {
+  // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
+  // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
+  readQuotaAuth(Global.Path.data).then((auth) => {
     if (!auth) {
       setLabel("")
       return
