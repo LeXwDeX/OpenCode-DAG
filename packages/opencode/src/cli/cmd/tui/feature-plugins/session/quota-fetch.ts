@@ -7,54 +7,61 @@ export interface QuotaAuth {
   quotaUrl: string
   token: string
   provider: "github-proxy" | "github-copilot"
-  /** github-copilot 直连模式使用 "token <gho>" 认证头格式 */
-  authHeaderPrefix: "Bearer" | "token"
 }
 
 export interface QuotaInfo {
-  remaining: number
+  /** 已用量（consumed count）。proxy 直接读响应字段；copilot 由 entitlement-remaining 换算 */
+  used: number
   entitlement: number
   accounts_active: number
   accounts_total: number
 }
 
-export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null> {
+/**
+ * 按 providerID 精确读取对应的 QuotaAuth。
+ * providerID 以 "github-proxy" 或 "github-copilot" 开头均可（支持子变体）。
+ */
+export async function readQuotaAuthForProvider(
+  stateDir: string,
+  providerID: string,
+): Promise<QuotaAuth | null> {
   try {
     const text = await readFile(path.join(stateDir, "auth.json"), "utf-8")
     const data = JSON.parse(text) as Record<string, unknown>
 
-    // 优先：github-proxy（带 proxyUrl 的内置 /copilot/quota 端点）
-    const proxyEntry = data["github-proxy"] as Record<string, unknown> | undefined
-    if (proxyEntry?.type === "api") {
-      const meta = proxyEntry.metadata as Record<string, string> | undefined
-      const proxyUrl = meta?.proxyUrl
-      const apiKey = proxyEntry.key as string | undefined
-      if (proxyUrl && apiKey) {
-        return {
-          quotaUrl: `${proxyUrl.replace(/\/+$/, "")}/copilot/quota`,
-          token: apiKey,
-          provider: "github-proxy",
-          authHeaderPrefix: "Bearer",
-        }
+    if (providerID.startsWith("github-proxy")) {
+      const entry = data["github-proxy"] as Record<string, unknown> | undefined
+      if (entry?.type === "api") {
+        const meta = entry.metadata as Record<string, string> | undefined
+        const proxyUrl = meta?.proxyUrl
+        const apiKey = entry.key as string | undefined
+        if (proxyUrl && apiKey)
+          return {
+            quotaUrl: `${proxyUrl.replace(/\/+$/, "")}/copilot/quota`,
+            token: apiKey,
+            provider: "github-proxy",
+          }
       }
+      return null
     }
 
-    // 回退：github-copilot 直连模式（GitHub API 取 quota）
-    const copilotEntry = data["github-copilot"] as Record<string, unknown> | undefined
-    if (copilotEntry?.type === "oauth") {
-      const refresh = copilotEntry.refresh as string | undefined
-      if (refresh) {
-        const enterpriseUrl = copilotEntry.enterpriseUrl as string | undefined
-        const apiBase = enterpriseUrl
-          ? `https://api.${enterpriseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`
-          : "https://api.github.com"
-        return {
-          quotaUrl: `${apiBase}/copilot_internal/user`,
-          token: refresh,
-          provider: "github-copilot",
-          authHeaderPrefix: "token",
+    if (providerID.startsWith("github-copilot")) {
+      const entry = data["github-copilot"] as Record<string, unknown> | undefined
+      if (entry?.type === "oauth") {
+        const refresh = entry.refresh as string | undefined
+        if (refresh) {
+          const enterpriseUrl = entry.enterpriseUrl as string | undefined
+          const apiBase = enterpriseUrl
+            ? `https://api.${enterpriseUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}`
+            : "https://api.github.com"
+          return {
+            quotaUrl: `${apiBase}/copilot_internal/user`,
+            token: refresh,
+            provider: "github-copilot",
+          }
         }
       }
+      return null
     }
 
     return null
@@ -63,31 +70,27 @@ export async function readQuotaAuth(stateDir: string): Promise<QuotaAuth | null>
   }
 }
 
-/** 从 GitHub Copilot API 响应解析 quota（百分比模式） */
+/** 从 GitHub Copilot API 响应解析 quota（snake_case 字段） */
 export function parseCopilotQuota(data: Record<string, unknown>): QuotaInfo | null {
-  const snapshots = data.quotaSnapshots as Record<string, unknown> | undefined
-  const premium = snapshots?.premiumInteractions as Record<string, unknown> | undefined
+  const snapshots = data.quota_snapshots as Record<string, unknown> | undefined
+  const premium = snapshots?.premium_interactions as Record<string, unknown> | undefined
   if (!premium) return null
 
-  const percentRemaining = typeof premium.percentRemaining === "number" ? premium.percentRemaining : null
-  if (percentRemaining === null) return null
+  const actualRemaining = typeof premium.remaining === "number" ? premium.remaining : null
+  const entitlement = typeof premium.entitlement === "number" ? premium.entitlement : null
+  if (actualRemaining === null || entitlement === null) return null
 
-  // 百分比转 entitlement/remaining 数值，与 proxy 格式统一
-  return {
-    remaining: 100 - percentRemaining,
-    entitlement: 100,
-    accounts_active: 0,
-    accounts_total: 0,
-  }
+  // GitHub API 返回「剩余量」，换算为「已用量」
+  return { used: entitlement - actualRemaining, entitlement, accounts_active: 0, accounts_total: 0 }
 }
 
-/** 从 github-proxy 自定义 /copilot/quota 端点响应解析 */
+/** 从 github-proxy /copilot/quota 端点解析 quota */
 export function parseProxyQuota(data: Record<string, unknown>): QuotaInfo | null {
   const remaining = typeof data.remaining === "number" ? data.remaining : null
   const entitlement = typeof data.entitlement === "number" ? data.entitlement : null
   if (remaining === null || entitlement === null) return null
   return {
-    remaining,
+    used: entitlement - remaining,
     entitlement,
     accounts_active: typeof data.accounts_active === "number" ? data.accounts_active : 0,
     accounts_total: typeof data.accounts_total === "number" ? data.accounts_total : 0,
@@ -97,8 +100,8 @@ export function parseProxyQuota(data: Record<string, unknown>): QuotaInfo | null
 export async function fetchQuota(auth: QuotaAuth): Promise<QuotaInfo | null> {
   try {
     const resp = await fetch(auth.quotaUrl, {
-      headers: { Authorization: `${auth.authHeaderPrefix} ${auth.token}` },
-      signal: AbortSignal.timeout(5_000),
+      headers: { Authorization: `Bearer ${auth.token}` },
+      signal: AbortSignal.timeout(2_000),
     })
     if (!resp.ok) return null
     const data = (await resp.json()) as Record<string, unknown>

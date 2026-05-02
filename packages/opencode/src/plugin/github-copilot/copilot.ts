@@ -162,6 +162,38 @@ export async function CopilotAuthPlugin(input: PluginInput): Promise<Hooks> {
             delete headers["x-api-key"]
             delete headers["authorization"]
 
+            // 临时调试：定位 premium 配额异常消耗。记录每次发出的 x-initiator + 请求形态。
+            // 用完即删，不要长期保留。
+            try {
+              const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body
+              const lastMsg = body?.messages?.[body.messages.length - 1] ?? body?.input?.[body.input.length - 1]
+              const lastRole = lastMsg?.role ?? "unknown"
+              const lastContentTypes = Array.isArray(lastMsg?.content)
+                ? lastMsg.content.map((p: any) => p?.type).join(",")
+                : typeof lastMsg?.content === "string"
+                  ? "string"
+                  : "none"
+              const lastTextSample =
+                Array.isArray(lastMsg?.content)
+                  ? lastMsg.content.find((p: any) => p?.type === "text" || p?.type === "input_text")?.text?.slice(0, 80)
+                  : typeof lastMsg?.content === "string"
+                    ? lastMsg.content.slice(0, 80)
+                    : undefined
+              log.info("copilot fetch", {
+                url: url.replace(/^https?:\/\/[^/]+/, ""),
+                xInitiator: headers["x-initiator"],
+                hookHeader: (init?.headers as Record<string, string>)?.["x-initiator"],
+                isAgent,
+                isVision,
+                lastRole,
+                lastContentTypes,
+                lastTextSample,
+                msgCount: body?.messages?.length ?? body?.input?.length,
+              })
+            } catch (err) {
+              log.error("copilot fetch debug log failed", { err })
+            }
+
             return fetch(request, {
               ...init,
               headers,
