@@ -127,12 +127,10 @@ export const layer: Layer.Layer<Service, never, AppFileSystem.Service | HttpClie
       )
     })
 
-    const loadFromDisk = fs
-      .readJson(Flag.OPENCODE_MODELS_PATH ?? filepath)
-      .pipe(
-        Effect.catch(() => Effect.succeed(undefined)),
-        Effect.map((v) => v as Record<string, Provider> | undefined),
-      )
+    const loadFromDisk = fs.readJson(Flag.OPENCODE_MODELS_PATH ?? filepath).pipe(
+      Effect.catch(() => Effect.succeed(undefined)),
+      Effect.map((v) => v as Record<string, Provider> | undefined),
+    )
 
     // Bundled at build time; absent in dev — `tryPromise` covers both.
     const loadSnapshot = Effect.tryPromise({

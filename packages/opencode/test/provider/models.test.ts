@@ -154,10 +154,9 @@ describe("ModelsDev Service", () => {
         state,
         Effect.gen(function* () {
           const svc = yield* ModelsDev.Service
-          return yield* Effect.all(
-            [svc.get(), svc.get(), svc.get(), svc.get(), svc.get()],
-            { concurrency: "unbounded" },
-          )
+          return yield* Effect.all([svc.get(), svc.get(), svc.get(), svc.get(), svc.get()], {
+            concurrency: "unbounded",
+          })
         }),
       )
       for (const result of results) expect(result).toEqual(fixture)
