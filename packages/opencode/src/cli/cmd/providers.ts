@@ -310,9 +310,9 @@ export const ProvidersLoginCommand = effectCmd({
     prompts.intro("Add credential")
     if (args.url) {
       const url = args.url.replace(/\/+$/, "")
-      const wellknown = (yield* Effect.promise(() =>
-        fetch(`${url}/.well-known/opencode`).then((x) => x.json()),
-      )) as { auth: { command: string[]; env: string } }
+      const wellknown = (yield* Effect.promise(() => fetch(`${url}/.well-known/opencode`).then((x) => x.json()))) as {
+        auth: { command: string[]; env: string }
+      }
       prompts.log.info(`Running \`${wellknown.auth.command.join(" ")}\``)
       const proc = Process.spawn(wellknown.auth.command, { stdout: "pipe", stderr: "inherit" })
       if (!proc.stdout) {
