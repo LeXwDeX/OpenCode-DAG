@@ -56,20 +56,20 @@ function normalizeMessages(
     msgs = msgs
       .map((msg) => {
         if (typeof msg.content === "string") {
-          if (msg.content === "") return undefined
+          if (msg.content.trim() === "") return undefined
           return msg
         }
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
           if (part.type === "text" || part.type === "reasoning") {
-            return part.text !== ""
+            return part.text.trim() !== ""
           }
           return true
         })
         if (filtered.length === 0) return undefined
         return { ...msg, content: filtered }
       })
-      .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
+      .filter((msg): msg is ModelMessage => msg !== undefined && (typeof msg.content !== "string" || msg.content.trim() !== ""))
   }
 
   // Bedrock specific transforms
@@ -77,20 +77,20 @@ function normalizeMessages(
     msgs = msgs
       .map((msg) => {
         if (typeof msg.content === "string") {
-          if (msg.content === "") return undefined
+          if (msg.content.trim() === "") return undefined
           return msg
         }
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
           if (part.type === "text" || part.type === "reasoning") {
-            return part.text !== ""
+            return part.text.trim() !== ""
           }
           return true
         })
         if (filtered.length === 0) return undefined
         return { ...msg, content: filtered }
       })
-      .filter((msg): msg is ModelMessage => msg !== undefined && msg.content !== "")
+      .filter((msg): msg is ModelMessage => msg !== undefined && (typeof msg.content !== "string" || msg.content.trim() !== ""))
   }
 
   // Anthropic 硬规定：assistant 消息的最后一个 content block 不能是 thinking / redacted_thinking。
@@ -116,7 +116,7 @@ function normalizeMessages(
     }
 
     if (lastValidIdx === -1) {
-      return { ...msg, content: [...parts, { type: "text", text: " " } as (typeof parts)[number]] }
+      return { ...msg, content: [...parts, { type: "text", text: "..." } as (typeof parts)[number]] }
     }
     if (lastValidIdx === parts.length - 1) return msg
     const head = parts.slice(0, lastValidIdx)
