@@ -1,4 +1,6 @@
 import { cmd } from "./cmd"
+import { effectCmd } from "../effect-cmd"
+import { Cause } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js"
@@ -65,35 +67,31 @@ function oauthServers(config: Config.Info) {
   )
 }
 
-async function listState() {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const cfg = yield* Config.Service
-      const mcp = yield* MCP.Service
-      const config = yield* cfg.get()
-      const statuses = yield* mcp.status()
-      const stored = yield* Effect.all(
-        Object.fromEntries(configuredServers(config).map(([name]) => [name, mcp.hasStoredTokens(name)])),
-        { concurrency: "unbounded" },
-      )
-      return { config, statuses, stored }
-    }),
-  )
+function listState() {
+  return Effect.gen(function* () {
+    const cfg = yield* Config.Service
+    const mcp = yield* MCP.Service
+    const config = yield* cfg.get()
+    const statuses = yield* mcp.status()
+    const stored = yield* Effect.all(
+      Object.fromEntries(configuredServers(config).map(([name]) => [name, mcp.hasStoredTokens(name)])),
+      { concurrency: "unbounded" },
+    )
+    return { config, statuses, stored }
+  })
 }
 
-async function authState() {
-  return AppRuntime.runPromise(
-    Effect.gen(function* () {
-      const cfg = yield* Config.Service
-      const mcp = yield* MCP.Service
-      const config = yield* cfg.get()
-      const auth = yield* Effect.all(
-        Object.fromEntries(oauthServers(config).map(([name]) => [name, mcp.getAuthStatus(name)])),
-        { concurrency: "unbounded" },
-      )
-      return { config, auth }
-    }),
-  )
+function authState() {
+  return Effect.gen(function* () {
+    const cfg = yield* Config.Service
+    const mcp = yield* MCP.Service
+    const config = yield* cfg.get()
+    const auth = yield* Effect.all(
+      Object.fromEntries(oauthServers(config).map(([name]) => [name, mcp.getAuthStatus(name)])),
+      { concurrency: "unbounded" },
+    )
+    return { config, auth }
+  })
 }
 
 export const McpCommand = cmd({
@@ -110,73 +108,68 @@ export const McpCommand = cmd({
   async handler() {},
 })
 
-export const McpListCommand = cmd({
+export const McpListCommand = effectCmd({
   command: "list",
   aliases: ["ls"],
   describe: "list MCP servers and their status",
-  async handler() {
-    await WithInstance.provide({
-      directory: process.cwd(),
-      async fn() {
-        UI.empty()
-        prompts.intro("MCP Servers")
+  handler: Effect.fn("Cli.mcp.list")(function* () {
+    UI.empty()
+    prompts.intro("MCP Servers")
 
-        const { config, statuses, stored } = await listState()
-        const servers = configuredServers(config)
+    const { config, statuses, stored } = yield* listState()
+    const servers = configuredServers(config)
 
-        if (servers.length === 0) {
-          prompts.log.warn("No MCP servers configured")
-          prompts.outro("Add servers with: opencode mcp add")
-          return
+    if (servers.length === 0) {
+      prompts.log.warn("No MCP servers configured")
+      prompts.outro("Add servers with: opencode mcp add")
+      return
+    }
+
+    for (const [name, serverConfig] of servers) {
+      const status = statuses[name]
+      const hasOAuth = isMcpRemote(serverConfig) && !!serverConfig.oauth
+      const hasStoredTokens = stored[name]
+
+      let statusIcon: string
+      let statusText: string
+      let hint = ""
+
+      if (!status) {
+        statusIcon = "○"
+        statusText = "not initialized"
+      } else if (status.status === "connected") {
+        statusIcon = "✓"
+        statusText = "connected"
+        if (hasOAuth && hasStoredTokens) {
+          hint = " (OAuth)"
         }
+      } else if (status.status === "disabled") {
+        statusIcon = "○"
+        statusText = "disabled"
+      } else if (status.status === "needs_auth") {
+        statusIcon = "⚠"
+        statusText = "needs authentication"
+      } else if (status.status === "needs_client_registration") {
+        statusIcon = "✗"
+        statusText = "needs client registration"
+        hint = "\n    " + status.error
+      } else {
+        statusIcon = "✗"
+        statusText = "failed"
+        hint = "\n    " + status.error
+      }
 
-        for (const [name, serverConfig] of servers) {
-          const status = statuses[name]
-          const hasOAuth = isMcpRemote(serverConfig) && !!serverConfig.oauth
-          const hasStoredTokens = stored[name]
+      const typeHint = serverConfig.type === "remote" ? serverConfig.url : serverConfig.command.join(" ")
+      prompts.log.info(
+        `${statusIcon} ${name} ${UI.Style.TEXT_DIM}${statusText}${hint}\n    ${UI.Style.TEXT_DIM}${typeHint}`,
+      )
+    }
 
-          let statusIcon: string
-          let statusText: string
-          let hint = ""
-
-          if (!status) {
-            statusIcon = "○"
-            statusText = "not initialized"
-          } else if (status.status === "connected") {
-            statusIcon = "✓"
-            statusText = "connected"
-            if (hasOAuth && hasStoredTokens) {
-              hint = " (OAuth)"
-            }
-          } else if (status.status === "disabled") {
-            statusIcon = "○"
-            statusText = "disabled"
-          } else if (status.status === "needs_auth") {
-            statusIcon = "⚠"
-            statusText = "needs authentication"
-          } else if (status.status === "needs_client_registration") {
-            statusIcon = "✗"
-            statusText = "needs client registration"
-            hint = "\n    " + status.error
-          } else {
-            statusIcon = "✗"
-            statusText = "failed"
-            hint = "\n    " + status.error
-          }
-
-          const typeHint = serverConfig.type === "remote" ? serverConfig.url : serverConfig.command.join(" ")
-          prompts.log.info(
-            `${statusIcon} ${name} ${UI.Style.TEXT_DIM}${statusText}${hint}\n    ${UI.Style.TEXT_DIM}${typeHint}`,
-          )
-        }
-
-        prompts.outro(`${servers.length} server(s)`)
-      },
-    })
-  },
+    prompts.outro(`${servers.length} server(s)`)
+  }),
 })
 
-export const McpAuthCommand = cmd({
+export const McpAuthCommand = effectCmd({
   command: "auth [name]",
   describe: "authenticate with an OAuth-enabled MCP server",
   builder: (yargs) =>
@@ -186,105 +179,106 @@ export const McpAuthCommand = cmd({
         type: "string",
       })
       .command(McpAuthListCommand),
-  async handler(args) {
-    await WithInstance.provide({
-      directory: process.cwd(),
-      async fn() {
-        UI.empty()
-        prompts.intro("MCP OAuth Authentication")
+  handler: Effect.fn("Cli.mcp.auth")(function* (args) {
+    UI.empty()
+    prompts.intro("MCP OAuth Authentication")
 
-        const { config, auth } = await authState()
-        const mcpServers = config.mcp ?? {}
-        const servers = oauthServers(config)
+    const { config, auth } = yield* authState()
+    const mcpServers = config.mcp ?? {}
+    const servers = oauthServers(config)
 
-        if (servers.length === 0) {
-          prompts.log.warn("No OAuth-capable MCP servers configured")
-          prompts.log.info("Remote MCP servers support OAuth by default. Add a remote server in opencode.json:")
-          prompts.log.info(`
+    if (servers.length === 0) {
+      prompts.log.warn("No OAuth-capable MCP servers configured")
+      prompts.log.info("Remote MCP servers support OAuth by default. Add a remote server in opencode.json:")
+      prompts.log.info(`
   "mcp": {
     "my-server": {
       "type": "remote",
       "url": "https://example.com/mcp"
     }
   }`)
-          prompts.outro("Done")
-          return
+      prompts.outro("Done")
+      return
+    }
+
+    let serverName = args.name
+    if (!serverName) {
+      // Build options with auth status
+      const options = servers.map(([name, cfg]) => {
+        const authStatus = auth[name]
+        const icon = getAuthStatusIcon(authStatus)
+        const statusText = getAuthStatusText(authStatus)
+        const url = cfg.url
+        return {
+          label: `${icon} ${name} (${statusText})`,
+          value: name,
+          hint: url,
         }
+      })
 
-        let serverName = args.name
-        if (!serverName) {
-          // Build options with auth status
-          const options = servers.map(([name, cfg]) => {
-            const authStatus = auth[name]
-            const icon = getAuthStatusIcon(authStatus)
-            const statusText = getAuthStatusText(authStatus)
-            const url = cfg.url
-            return {
-              label: `${icon} ${name} (${statusText})`,
-              value: name,
-              hint: url,
-            }
-          })
+      const selected = yield* Effect.promise(() =>
+        prompts.select({
+          message: "Select MCP server to authenticate",
+          options,
+        }),
+      )
+      if (prompts.isCancel(selected)) throw new UI.CancelledError()
+      serverName = selected
+    }
 
-          const selected = await prompts.select({
-            message: "Select MCP server to authenticate",
-            options,
-          })
-          if (prompts.isCancel(selected)) throw new UI.CancelledError()
-          serverName = selected
-        }
+    const serverConfig = mcpServers[serverName]
+    if (!serverConfig) {
+      prompts.log.error(`MCP server not found: ${serverName}`)
+      prompts.outro("Done")
+      return
+    }
 
-        const serverConfig = mcpServers[serverName]
-        if (!serverConfig) {
-          prompts.log.error(`MCP server not found: ${serverName}`)
-          prompts.outro("Done")
-          return
-        }
+    if (!isMcpRemote(serverConfig) || serverConfig.oauth === false) {
+      prompts.log.error(`MCP server ${serverName} is not an OAuth-capable remote server`)
+      prompts.outro("Done")
+      return
+    }
 
-        if (!isMcpRemote(serverConfig) || serverConfig.oauth === false) {
-          prompts.log.error(`MCP server ${serverName} is not an OAuth-capable remote server`)
-          prompts.outro("Done")
-          return
-        }
+    // Check if already authenticated
+    const authStatus = auth[serverName] ?? (yield* MCP.Service.use((mcp) => mcp.getAuthStatus(serverName)))
+    if (authStatus === "authenticated") {
+      const confirm = yield* Effect.promise(() =>
+        prompts.confirm({
+          message: `${serverName} already has valid credentials. Re-authenticate?`,
+        }),
+      )
+      if (prompts.isCancel(confirm) || !confirm) {
+        prompts.outro("Cancelled")
+        return
+      }
+    } else if (authStatus === "expired") {
+      prompts.log.warn(`${serverName} has expired credentials. Re-authenticating...`)
+    }
 
-        // Check if already authenticated
-        const authStatus =
-          auth[serverName] ?? (await AppRuntime.runPromise(MCP.Service.use((mcp) => mcp.getAuthStatus(serverName))))
-        if (authStatus === "authenticated") {
-          const confirm = await prompts.confirm({
-            message: `${serverName} already has valid credentials. Re-authenticate?`,
-          })
-          if (prompts.isCancel(confirm) || !confirm) {
-            prompts.outro("Cancelled")
-            return
-          }
-        } else if (authStatus === "expired") {
-          prompts.log.warn(`${serverName} has expired credentials. Re-authenticating...`)
-        }
+    const spinner = prompts.spinner()
+    spinner.start("Starting OAuth flow...")
 
-        const spinner = prompts.spinner()
-        spinner.start("Starting OAuth flow...")
+    // Subscribe to browser open failure events to show URL for manual opening
+    const unsubscribe = Bus.subscribe(MCP.BrowserOpenFailed, (evt) => {
+      if (evt.properties.mcpName === serverName) {
+        spinner.stop("Could not open browser automatically")
+        prompts.log.warn("Please open this URL in your browser to authenticate:")
+        prompts.log.info(evt.properties.url)
+        spinner.start("Waiting for authorization...")
+      }
+    })
 
-        // Subscribe to browser open failure events to show URL for manual opening
-        const unsubscribe = Bus.subscribe(MCP.BrowserOpenFailed, (evt) => {
-          if (evt.properties.mcpName === serverName) {
-            spinner.stop("Could not open browser automatically")
-            prompts.log.warn("Please open this URL in your browser to authenticate:")
-            prompts.log.info(evt.properties.url)
-            spinner.start("Waiting for authorization...")
-          }
-        })
-
-        try {
-          const status = await AppRuntime.runPromise(MCP.Service.use((mcp) => mcp.authenticate(serverName)))
-
-          if (status.status === "connected") {
-            spinner.stop("Authentication successful!")
-          } else if (status.status === "needs_client_registration") {
-            spinner.stop("Authentication failed", 1)
-            prompts.log.error(status.error)
-            prompts.log.info("Add clientId to your MCP server config:")
-            prompts.log.info(`
+    yield* MCP.Service.use((mcp) => mcp.authenticate(serverName))
+      .pipe(
+        Effect.tap((status) =>
+          Effect.sync(() => {
+            if (status.status === "connected") {
+              spinner.stop("Authentication successful!")
+            } else if (status.status === "needs_client_registration") {
+              spinner.stop("Authentication failed", 1)
+              prompts.log.error(status.error)
+              prompts.log.info("Add clientId to your MCP server config:")
+              prompts.log.info(`
   "mcp": {
     "${serverName}": {
       "type": "remote",
@@ -295,61 +289,59 @@ export const McpAuthCommand = cmd({
       }
     }
   }`)
-          } else if (status.status === "failed") {
+            } else if (status.status === "failed") {
+              spinner.stop("Authentication failed", 1)
+              prompts.log.error(status.error)
+            } else {
+              spinner.stop("Unexpected status: " + status.status, 1)
+            }
+          }),
+        ),
+        Effect.catchCause((cause) =>
+          Effect.sync(() => {
             spinner.stop("Authentication failed", 1)
-            prompts.log.error(status.error)
-          } else {
-            spinner.stop("Unexpected status: " + status.status, 1)
-          }
-        } catch (error) {
-          spinner.stop("Authentication failed", 1)
-          prompts.log.error(error instanceof Error ? error.message : String(error))
-        } finally {
-          unsubscribe()
-        }
+            const error = Cause.squash(cause)
+            prompts.log.error(error instanceof Error ? error.message : String(error))
+          }),
+        ),
+        Effect.ensuring(Effect.sync(() => unsubscribe())),
+      )
 
-        prompts.outro("Done")
-      },
-    })
-  },
+    prompts.outro("Done")
+  }),
 })
 
-export const McpAuthListCommand = cmd({
+export const McpAuthListCommand = effectCmd({
   command: "list",
   aliases: ["ls"],
   describe: "list OAuth-capable MCP servers and their auth status",
-  async handler() {
-    await WithInstance.provide({
-      directory: process.cwd(),
-      async fn() {
-        UI.empty()
-        prompts.intro("MCP OAuth Status")
+  handler: Effect.fn("Cli.mcp.auth.list")(function* () {
+    UI.empty()
+    prompts.intro("MCP OAuth Status")
 
-        const { config, auth } = await authState()
-        const servers = oauthServers(config)
+    const { config, auth } = yield* authState()
+    const servers = oauthServers(config)
 
-        if (servers.length === 0) {
-          prompts.log.warn("No OAuth-capable MCP servers configured")
-          prompts.outro("Done")
-          return
-        }
+    if (servers.length === 0) {
+      prompts.log.warn("No OAuth-capable MCP servers configured")
+      prompts.outro("Done")
+      return
+    }
 
-        for (const [name, serverConfig] of servers) {
-          const authStatus = auth[name]
-          const icon = getAuthStatusIcon(authStatus)
-          const statusText = getAuthStatusText(authStatus)
-          const url = serverConfig.url
+    for (const [name, serverConfig] of servers) {
+      const authStatus = auth[name]
+      const icon = getAuthStatusIcon(authStatus)
+      const statusText = getAuthStatusText(authStatus)
+      const url = serverConfig.url
 
-          prompts.log.info(`${icon} ${name} ${UI.Style.TEXT_DIM}${statusText}\n    ${UI.Style.TEXT_DIM}${url}`)
-        }
+      prompts.log.info(`${icon} ${name} ${UI.Style.TEXT_DIM}${statusText}\n    ${UI.Style.TEXT_DIM}${url}`)
+    }
 
-        prompts.outro(`${servers.length} OAuth-capable server(s)`)
-      },
-    })
-  },
+    prompts.outro(`${servers.length} OAuth-capable server(s)`)
+  }),
 })
 
-export const McpLogoutCommand = cmd({
+export const McpLogoutCommand = effectCmd({
   command: "logout [name]",
   describe: "remove OAuth credentials for an MCP server",
   builder: (yargs) =>
@@ -357,57 +349,54 @@ export const McpLogoutCommand = cmd({
       describe: "name of the MCP server",
       type: "string",
     }),
-  async handler(args) {
-    await WithInstance.provide({
-      directory: process.cwd(),
-      async fn() {
-        UI.empty()
-        prompts.intro("MCP OAuth Logout")
+  handler: Effect.fn("Cli.mcp.logout")(function* (args) {
+    UI.empty()
+    prompts.intro("MCP OAuth Logout")
 
-        const credentials = await AppRuntime.runPromise(McpAuth.Service.use((auth) => auth.all()))
-        const serverNames = Object.keys(credentials)
+    const credentials = yield* McpAuth.Service.use((auth) => auth.all())
+    const serverNames = Object.keys(credentials)
 
-        if (serverNames.length === 0) {
-          prompts.log.warn("No MCP OAuth credentials stored")
-          prompts.outro("Done")
-          return
-        }
+    if (serverNames.length === 0) {
+      prompts.log.warn("No MCP OAuth credentials stored")
+      prompts.outro("Done")
+      return
+    }
 
-        let serverName = args.name
-        if (!serverName) {
-          const selected = await prompts.select({
-            message: "Select MCP server to logout",
-            options: serverNames.map((name) => {
-              const entry = credentials[name]
-              const hasTokens = !!entry.tokens
-              const hasClient = !!entry.clientInfo
-              let hint = ""
-              if (hasTokens && hasClient) hint = "tokens + client"
-              else if (hasTokens) hint = "tokens"
-              else if (hasClient) hint = "client registration"
-              return {
-                label: name,
-                value: name,
-                hint,
-              }
-            }),
-          })
-          if (prompts.isCancel(selected)) throw new UI.CancelledError()
-          serverName = selected
-        }
+    let serverName = args.name
+    if (!serverName) {
+      const selected = yield* Effect.promise(() =>
+        prompts.select({
+          message: "Select MCP server to logout",
+          options: serverNames.map((name) => {
+            const entry = credentials[name]
+            const hasTokens = !!entry.tokens
+            const hasClient = !!entry.clientInfo
+            let hint = ""
+            if (hasTokens && hasClient) hint = "tokens + client"
+            else if (hasTokens) hint = "tokens"
+            else if (hasClient) hint = "client registration"
+            return {
+              label: name,
+              value: name,
+              hint,
+            }
+          }),
+        }),
+      )
+      if (prompts.isCancel(selected)) throw new UI.CancelledError()
+      serverName = selected
+    }
 
-        if (!credentials[serverName]) {
-          prompts.log.error(`No credentials found for: ${serverName}`)
-          prompts.outro("Done")
-          return
-        }
+    if (!credentials[serverName]) {
+      prompts.log.error(`No credentials found for: ${serverName}`)
+      prompts.outro("Done")
+      return
+    }
 
-        await AppRuntime.runPromise(MCP.Service.use((mcp) => mcp.removeAuth(serverName)))
-        prompts.log.success(`Removed OAuth credentials for ${serverName}`)
-        prompts.outro("Done")
-      },
-    })
-  },
+    yield* MCP.Service.use((mcp) => mcp.removeAuth(serverName))
+    prompts.log.success(`Removed OAuth credentials for ${serverName}`)
+    prompts.outro("Done")
+  }),
 })
 
 async function resolveConfigPath(baseDir: string, global = false) {
