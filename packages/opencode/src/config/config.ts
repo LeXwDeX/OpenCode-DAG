@@ -70,11 +70,7 @@ function normalizeLoadedConfig(data: unknown, source: string) {
   return copy
 }
 
-async function substituteWellKnownRemoteConfig(input: {
-  value: unknown
-  dir: string
-  source: string
-}) {
+async function substituteWellKnownRemoteConfig(input: { value: unknown; dir: string; source: string }) {
   if (!isRecord(input.value) || typeof input.value.url !== "string") return
 
   const url = await ConfigVariable.substitute({
@@ -543,7 +539,8 @@ export const layer = Layer.effect(
               ? ((yield* Effect.promise(async () => {
                   log.debug("fetching remote config", { url: remote.url })
                   const response = await fetch(remote.url, { headers: remote.headers })
-                  if (!response.ok) throw new Error(`failed to fetch remote config from ${remote.url}: ${response.status}`)
+                  if (!response.ok)
+                    throw new Error(`failed to fetch remote config from ${remote.url}: ${response.status}`)
                   const data = await response.json()
                   return isRecord(data) && isRecord(data.config) ? data.config : data
                 })) as Record<string, unknown>)
