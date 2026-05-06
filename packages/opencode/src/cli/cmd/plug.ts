@@ -216,16 +216,23 @@ export const PluginCommand = cmd({
     })
     let ok = true
 
-    await Instance.provide({
-      directory: process.cwd(),
-      fn: async () => {
-        ok = await run({
-          vcs: Instance.project.vcs,
-          worktree: Instance.worktree,
-          directory: Instance.directory,
-        })
-      },
-    })
+    try {
+      await Instance.provide({
+        directory: process.cwd(),
+        fn: async () => {
+          ok = await run({
+            vcs: Instance.project.vcs,
+            worktree: Instance.worktree,
+            directory: Instance.directory,
+          })
+        },
+      })
+    } catch (err) {
+      UI.error(errorMessage(err))
+      process.exitCode = 1
+      outro("Done")
+      return
+    }
 
     outro("Done")
     if (!ok) process.exitCode = 1
