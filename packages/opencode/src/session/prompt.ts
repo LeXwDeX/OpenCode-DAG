@@ -35,9 +35,11 @@ import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
 import { NamedError } from "@opencode-ai/core/util/error"
+import { errorMessage } from "@/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
+import { Question } from "@/question"
 import { SettingsHook } from "@/hook/settings"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
@@ -72,6 +74,30 @@ const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested struc
 // Render the current TODO list as an ephemeral system-reminder. Injected fresh
 // before every LLM step (see insertReminders) so long sessions / repeated
 // compaction can never erase the agent's own plan from its working context.
+/**
+ * Extract a concise, actionable one-liner from a tool execution error.
+ * Goal: tell the LLM exactly what went wrong in minimal tokens so it can retry correctly.
+ */
+function formatToolError(toolName: string, error: unknown): string {
+  const msg = errorMessage(error)
+
+  // Schema / parameter validation errors
+  if (msg.includes("called with invalid arguments")) {
+    // Extract the first specific issue line (e.g. "path: questions[0].header | code: missing")
+    const issueMatch = msg.match(/path:\s*([^\n|]+)\|\s*code:\s*([^\n]+)/)
+    if (issueMatch) return `Tool "${toolName}" parameter error: ${issueMatch[1].trim()} — ${issueMatch[2].trim()}`
+    // Generic validation: grab the part after "invalid arguments:"
+    const afterColon = msg.match(/invalid arguments:\s*(.+?)(?:\n|$)/)
+    if (afterColon) return `Tool "${toolName}" parameter error: ${afterColon[1].slice(0, 120)}`
+    return `Tool "${toolName}" parameter error. Check required fields and types.`
+  }
+
+  // Runtime errors: use first meaningful line, capped
+  const firstLine = msg.split("\n")[0]
+  const reason = firstLine.length > 120 ? firstLine.slice(0, 117) + "..." : firstLine
+  return `Tool "${toolName}" execution error: ${reason}`
+}
+
 // Status order is in_progress → pending → completed so the active item is
 // visible at a glance. Returns "" when there are no todos so callers can skip.
 export function renderTodoReminder(todos: ReadonlyArray<Todo.Info>): string {
@@ -480,59 +506,71 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           description: item.description,
           inputSchema: jsonSchema(schema),
           execute(args, options) {
-            return run.promise(
-              Effect.gen(function* () {
-                const ctx = context(args, options)
-                yield* plugin.trigger(
-                  "tool.execute.before",
-                  { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
-                  { args },
-                )
-                // PreToolUse hook (Claude Code compatible)
-                const preHook = yield* settingsHook.trigger(
-                  { event: "PreToolUse", toolName: item.id, toolInput: args },
-                  { sessionID: ctx.sessionID, transcriptPath: "" },
-                )
-                if (preHook.blocked) {
-                  return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
-                }
-                const result = yield* item.execute(args, ctx)
-                // PostToolUse hook
-                const postHook = yield* settingsHook.trigger(
-                  {
-                    event: "PostToolUse",
-                    toolName: item.id,
-                    toolInput: args,
-                    toolResponse: result.output,
-                  },
-                  { sessionID: ctx.sessionID, transcriptPath: "" },
-                )
-                const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
-                const output = {
-                  ...result,
-                  output:
-                    hookContexts.length > 0
-                      ? result.output +
-                        hookContexts.map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`).join("")
-                      : result.output,
-                  attachments: result.attachments?.map((attachment) => ({
-                    ...attachment,
-                    id: PartID.ascending(),
-                    sessionID: ctx.sessionID,
-                    messageID: input.processor.message.id,
-                  })),
-                }
-                yield* plugin.trigger(
-                  "tool.execute.after",
-                  { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
-                  output,
-                )
-                if (options.abortSignal?.aborted) {
-                  yield* input.processor.completeToolCall(options.toolCallId, output)
-                }
-                return output
-              }),
-            )
+            return run
+              .promise(
+                Effect.gen(function* () {
+                  const ctx = context(args, options)
+                  yield* plugin.trigger(
+                    "tool.execute.before",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
+                    { args },
+                  )
+                  // PreToolUse hook (Claude Code compatible)
+                  const preHook = yield* settingsHook.trigger(
+                    { event: "PreToolUse", toolName: item.id, toolInput: args },
+                    { sessionID: ctx.sessionID, transcriptPath: "" },
+                  )
+                  if (preHook.blocked) {
+                    return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
+                  }
+                  const result = yield* item.execute(args, ctx)
+                  // PostToolUse hook
+                  const postHook = yield* settingsHook.trigger(
+                    {
+                      event: "PostToolUse",
+                      toolName: item.id,
+                      toolInput: args,
+                      toolResponse: result.output,
+                    },
+                    { sessionID: ctx.sessionID, transcriptPath: "" },
+                  )
+                  const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
+                  // Inject TODO reminder into every tool result so the LLM stays on track
+                  if (input.agent.todo_reminder !== false) {
+                    const todos = yield* todo.get(input.session.id)
+                    const todoText = renderTodoReminder(todos)
+                    if (todoText) hookContexts.push(todoText)
+                  }
+                  const output = {
+                    ...result,
+                    output:
+                      hookContexts.length > 0
+                        ? result.output +
+                          hookContexts.map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`).join("")
+                        : result.output,
+                    attachments: result.attachments?.map((attachment) => ({
+                      ...attachment,
+                      id: PartID.ascending(),
+                      sessionID: ctx.sessionID,
+                      messageID: input.processor.message.id,
+                    })),
+                  }
+                  yield* plugin.trigger(
+                    "tool.execute.after",
+                    { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
+                    output,
+                  )
+                  if (options.abortSignal?.aborted) {
+                    yield* input.processor.completeToolCall(options.toolCallId, output)
+                  }
+                  return output
+                }),
+              )
+              .catch((e) => {
+                // Permission/Question rejections must propagate to trigger ctx.blocked in failToolCall
+                if (e instanceof Permission.RejectedError || e instanceof Question.RejectedError) throw e
+                return { title: "", metadata: {}, output: formatToolError(item.id, e) }
+              })
           },
         })
       }
