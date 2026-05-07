@@ -59,12 +59,18 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
       id: "github-proxy",
       async models(provider, ctx) {
         if (ctx.auth?.type !== "api") {
+          log.warn("models: auth type is not api, skipping proxy model fetch", {
+            authType: ctx.auth?.type ?? "none",
+          })
           return provider.models
         }
 
         const auth = ctx.auth as ApiAuthWithMeta
         const proxyUrl = auth.metadata?.proxyUrl
         if (!proxyUrl) {
+          log.warn("models: no proxyUrl in auth metadata, skipping proxy model fetch", {
+            metadataKeys: auth.metadata ? Object.keys(auth.metadata) : [],
+          })
           return provider.models
         }
 
@@ -80,7 +86,12 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
         )
           .then(overrideProviderID)
           .catch((error) => {
-            log.error("failed to fetch models from proxy", { error })
+            log.error("failed to fetch models from proxy, falling back to built-in list", {
+              error,
+              baseURL,
+              keyPrefix: auth.key ? auth.key.slice(0, 8) + "..." : "(empty)",
+              builtinModelCount: Object.keys(provider.models).length,
+            })
             return Object.fromEntries(
               Object.entries(provider.models).map(([id, model]) => [id, fix(model, baseURL)]),
             )
@@ -91,10 +102,20 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
       provider: "github-proxy",
       async loader(getAuth) {
         const info = await getAuth()
-        if (!info || info.type !== "api") return {}
+        if (!info || info.type !== "api") {
+          log.warn("auth loader: getAuth returned non-api auth, skipping proxy fetch override", {
+            authType: info?.type ?? "none",
+          })
+          return {}
+        }
 
         const proxyUrl = (info as ApiAuthWithMeta).metadata?.proxyUrl
-        if (!proxyUrl) return {}
+        if (!proxyUrl) {
+          log.warn("auth loader: no proxyUrl in auth metadata, skipping proxy fetch override", {
+            metadataKeys: (info as ApiAuthWithMeta).metadata ? Object.keys((info as ApiAuthWithMeta).metadata!) : [],
+          })
+          return {}
+        }
 
         return {
           apiKey: "",
@@ -111,55 +132,62 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
             if (!proxyUrl) return fetch(request, init)
 
             const url = request instanceof URL ? request.href : request.toString()
-            const { isVision, isAgent } = iife(() => {
+            const parsedBody = (() => {
               try {
-                const body = typeof init?.body === "string" ? JSON.parse(init.body) : init?.body
+                return typeof init?.body === "string" ? JSON.parse(init.body) : init?.body
+              } catch (e) {
+                log.warn("fetch: failed to parse request body", { url, error: String(e) })
+                return undefined
+              }
+            })()
+            const { isVision, isAgent } = iife(() => {
+              const body = parsedBody
+              if (!body) return { isVision: false, isAgent: false }
 
-                // Completions API
-                if (body?.messages && url.includes("completions")) {
-                  const last = body.messages[body.messages.length - 1]
-                  return {
-                    isVision: body.messages.some(
-                      (msg: any) =>
-                        Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image_url"),
-                    ),
-                    isAgent: last?.role !== "user" || imgMsg(last),
-                  }
+              // Completions API
+              if (body?.messages && url.includes("completions")) {
+                const last = body.messages[body.messages.length - 1]
+                return {
+                  isVision: body.messages.some(
+                    (msg: any) =>
+                      Array.isArray(msg.content) && msg.content.some((part: any) => part.type === "image_url"),
+                  ),
+                  isAgent: last?.role !== "user" || imgMsg(last),
                 }
+              }
 
-                // Responses API
-                if (body?.input) {
-                  const last = body.input[body.input.length - 1]
-                  return {
-                    isVision: body.input.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) && item.content.some((part: any) => part.type === "input_image"),
-                    ),
-                    isAgent: last?.role !== "user" || imgMsg(last),
-                  }
+              // Responses API
+              if (body?.input) {
+                const last = body.input[body.input.length - 1]
+                return {
+                  isVision: body.input.some(
+                    (item: any) =>
+                      Array.isArray(item?.content) && item.content.some((part: any) => part.type === "input_image"),
+                  ),
+                  isAgent: last?.role !== "user" || imgMsg(last),
                 }
+              }
 
-                // Messages API
-                if (body?.messages) {
-                  const last = body.messages[body.messages.length - 1]
-                  const hasNonToolCalls =
-                    Array.isArray(last?.content) && last.content.some((part: any) => part?.type !== "tool_result")
-                  return {
-                    isVision: body.messages.some(
-                      (item: any) =>
-                        Array.isArray(item?.content) &&
-                        item.content.some(
-                          (part: any) =>
-                            part?.type === "image" ||
-                            (part?.type === "tool_result" &&
-                              Array.isArray(part?.content) &&
-                              part.content.some((nested: any) => nested?.type === "image")),
-                        ),
-                    ),
-                    isAgent: !(last?.role === "user" && hasNonToolCalls) || imgMsg(last),
-                  }
+              // Messages API
+              if (body?.messages) {
+                const last = body.messages[body.messages.length - 1]
+                const hasNonToolCalls =
+                  Array.isArray(last?.content) && last.content.some((part: any) => part?.type !== "tool_result")
+                return {
+                  isVision: body.messages.some(
+                    (item: any) =>
+                      Array.isArray(item?.content) &&
+                      item.content.some(
+                        (part: any) =>
+                          part?.type === "image" ||
+                          (part?.type === "tool_result" &&
+                            Array.isArray(part?.content) &&
+                            part.content.some((nested: any) => nested?.type === "image")),
+                      ),
+                  ),
+                  isAgent: !(last?.role === "user" && hasNonToolCalls) || imgMsg(last),
                 }
-              } catch {}
+              }
               return { isVision: false, isAgent: false }
             })
 
@@ -177,6 +205,45 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
 
             delete headers["x-api-key"]
             delete headers["authorization"]
+
+            // DIAGNOSTIC: On error responses from the /v1/messages path, dump the
+            // request shape to diagnose the intermittent
+            // "This model does not support assistant message prefill" error.
+            // Only fires on non-2xx to avoid log spam on every request.
+            // See: github-proxy prefill investigation (2026-05-07).
+            if (url.includes("/v1/messages")) {
+              return fetch(request, { ...init, headers }).then((response) => {
+                if (response.ok) return response
+                const body = parsedBody
+                if (!body?.messages || !Array.isArray(body.messages)) return response
+                const roles = body.messages.map((m: any) => m?.role)
+                const last = body.messages[body.messages.length - 1]
+                const lastContentShape = (() => {
+                  if (typeof last?.content === "string") return { kind: "string", length: last.content.length }
+                  if (Array.isArray(last?.content)) {
+                    return {
+                      kind: "array",
+                      partTypes: last.content.map((p: any) => p?.type),
+                      partCount: last.content.length,
+                    }
+                  }
+                  return { kind: typeof last?.content }
+                })()
+                log.error("messages-api error response — request dump", {
+                  url,
+                  status: response.status,
+                  model: body?.model,
+                  messageCount: body.messages.length,
+                  roles,
+                  lastRole: last?.role,
+                  lastContentShape,
+                  hasToolChoice: body?.tool_choice !== undefined,
+                  toolChoice: body?.tool_choice,
+                  toolCount: Array.isArray(body?.tools) ? body.tools.length : 0,
+                })
+                return response
+              })
+            }
 
             return fetch(request, {
               ...init,
@@ -280,7 +347,14 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
           },
           throwOnError: true,
         })
-        .catch(() => undefined)
+        .catch((e) => {
+          log.warn("chat.headers: failed to fetch session message parts, x-initiator may be incorrect", {
+            sessionID: incoming.message.sessionID,
+            messageID: incoming.message.id,
+            error: String(e),
+          })
+          return undefined
+        })
 
       if (
         parts?.data.parts?.some(
@@ -305,7 +379,13 @@ export async function GithubProxyAuthPlugin(input: PluginInput): Promise<Hooks> 
           },
           throwOnError: true,
         })
-        .catch(() => undefined)
+        .catch((e) => {
+          log.warn("chat.headers: failed to fetch session info, parentID check skipped", {
+            sessionID: incoming.sessionID,
+            error: String(e),
+          })
+          return undefined
+        })
       if (!session || !session.data.parentID) return
       output.headers["x-initiator"] = "agent"
     },
