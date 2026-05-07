@@ -25,6 +25,7 @@ target
 .direnv/
 
 # Local dev files
+.gitnexus/
 opencode-dev
 UPCOMING_CHANGELOG.md
 logs/
