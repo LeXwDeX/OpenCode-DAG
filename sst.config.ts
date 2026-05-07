@@ -14,7 +14,6 @@ export default $config({
         random: "4.19.2",
         planetscale: "0.4.1",
         honeycomb: "0.49.0",
-        incident: "5.35.0",
       },
     }
   },
