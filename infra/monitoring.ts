@@ -169,3 +169,38 @@ new honeycomb.Trigger("IncreasedProviderHttpErrorsZen", {
     },
   ],
 })
+
+new honeycomb.Trigger("IncreasedFreeTierRequests", {
+  disabled: true,
+  name: "Increased Free Tier Requests",
+  description,
+  queryJson: honeycomb.getQuerySpecificationOutput({
+    calculations: [
+      {
+        op: "COUNT",
+        name: "REQUESTS",
+        filterCombination: "AND",
+        filters: [
+          { column: "event_type", op: "=", value: "completions" },
+          { column: "user_agent", op: "contains", value: "opencode" },
+          { column: "isFreeTier", op: "=", value: "true" },
+        ],
+      },
+    ],
+    timeRange: 14400,
+  }).json,
+  alertType: "on_change",
+  frequency: 3600,
+  thresholds: [{ op: ">=", value: 50, exceededLimit: 2 }],
+  baselineDetails: [{ type: "percentage", offsetMinutes: 1440 }],
+  recipients: [
+    {
+      id: webhookRecipient.id,
+      notificationDetails: [
+        {
+          variables: [{ name: "type", value: "custom" }],
+        },
+      ],
+    },
+  ],
+})
