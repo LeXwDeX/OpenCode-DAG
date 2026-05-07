@@ -171,7 +171,6 @@ new honeycomb.Trigger("IncreasedProviderHttpErrorsZen", {
 })
 
 new honeycomb.Trigger("IncreasedFreeTierRequests", {
-  disabled: true,
   name: "Increased Free Tier Requests",
   description,
   queryJson: honeycomb.getQuerySpecificationOutput({
@@ -185,7 +184,7 @@ new honeycomb.Trigger("IncreasedFreeTierRequests", {
   }).json,
   alertType: "on_change",
   frequency: 900,
-  thresholds: [{ op: ">=", value: 50, exceededLimit: 1 }],
+  thresholds: [{ op: ">=", value: 60, exceededLimit: 1 }],
   baselineDetails: [{ type: "percentage", offsetMinutes: 1440 }],
   recipients: [
     {
