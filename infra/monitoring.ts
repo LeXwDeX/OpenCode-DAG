@@ -175,22 +175,17 @@ new honeycomb.Trigger("IncreasedFreeTierRequests", {
   name: "Increased Free Tier Requests",
   description,
   queryJson: honeycomb.getQuerySpecificationOutput({
-    calculations: [
-      {
-        op: "COUNT",
-        filterCombination: "AND",
-        filters: [
-          { column: "event_type", op: "=", value: "completions" },
-          { column: "user_agent", op: "contains", value: "opencode" },
-          { column: "isFreeTier", op: "=", value: "true" },
-        ],
-      },
+    calculations: [{ op: "COUNT" }],
+    filters: [
+      { column: "event_type", op: "=", value: "completions" },
+      { column: "user_agent", op: "contains", value: "opencode" },
+      { column: "isFreeTier", op: "=", value: "true" },
     ],
-    timeRange: 14400,
+    timeRange: 3600,
   }).json,
   alertType: "on_change",
-  frequency: 3600,
-  thresholds: [{ op: ">=", value: 50, exceededLimit: 2 }],
+  frequency: 900,
+  thresholds: [{ op: ">=", value: 50, exceededLimit: 1 }],
   baselineDetails: [{ type: "percentage", offsetMinutes: 1440 }],
   recipients: [
     {
