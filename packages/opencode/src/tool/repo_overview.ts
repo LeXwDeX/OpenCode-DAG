@@ -17,7 +17,7 @@ export const Parameters = Schema.Struct({
   }),
   depth: Schema.optional(Schema.Number).annotate({
     description: "Maximum structure depth to include. Defaults to 3.",
-  })
+  }),
 })
 
 type Metadata = {
@@ -33,7 +33,17 @@ type Metadata = {
   truncated: boolean
 }
 
-const IGNORED_DIRS = new Set([".git", "node_modules", "__pycache__", ".venv", "dist", "build", ".next", "target", "vendor"])
+const IGNORED_DIRS = new Set([
+  ".git",
+  "node_modules",
+  "__pycache__",
+  ".venv",
+  "dist",
+  "build",
+  ".next",
+  "target",
+  "vendor",
+])
 const STRUCTURE_LIMIT = 200
 const DEPENDENCY_FILES = [
   "package.json",
@@ -73,7 +83,19 @@ function ecosystems(files: Set<string>) {
 }
 
 function commonEntrypoints(files: Set<string>) {
-  return ["index.ts", "index.tsx", "index.js", "index.mjs", "main.ts", "main.js", "src/index.ts", "src/index.tsx", "src/index.js", "src/main.ts", "src/main.js"].filter((file) => files.has(file))
+  return [
+    "index.ts",
+    "index.tsx",
+    "index.js",
+    "index.mjs",
+    "main.ts",
+    "main.js",
+    "src/index.ts",
+    "src/index.tsx",
+    "src/index.js",
+    "src/main.ts",
+    "src/main.js",
+  ].filter((file) => files.has(file))
 }
 
 export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFileSystem.Service | Git.Service>(
@@ -82,7 +104,9 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
     const fs = yield* AppFileSystem.Service
     const git = yield* Git.Service
 
-    const resolveTarget = Effect.fn("RepoOverviewTool.resolveTarget")(function* (params: Schema.Schema.Type<typeof Parameters>) {
+    const resolveTarget = Effect.fn("RepoOverviewTool.resolveTarget")(function* (
+      params: Schema.Schema.Type<typeof Parameters>,
+    ) {
       if (params.path) {
         const full = path.isAbsolute(params.path) ? params.path : path.resolve(Instance.directory, params.path)
         return { path: full, repository: params.repository }
@@ -104,7 +128,10 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
       let truncated = false
       const lines: string[] = []
 
-      const visit: (dir: string, level: number) => Effect.Effect<void> = Effect.fnUntraced(function* (dir: string, level: number) {
+      const visit: (dir: string, level: number) => Effect.Effect<void> = Effect.fnUntraced(function* (
+        dir: string,
+        level: number,
+      ) {
         if (level >= depth || lines.length >= STRUCTURE_LIMIT) {
           truncated = truncated || lines.length >= STRUCTURE_LIMIT
           return
@@ -150,7 +177,8 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           const target = yield* resolveTarget(params)
-          const depth = !params.depth || !Number.isInteger(params.depth) || params.depth < 1 || params.depth > 6 ? 3 : params.depth
+          const depth =
+            !params.depth || !Number.isInteger(params.depth) || params.depth < 1 || params.depth > 6 ? 3 : params.depth
 
           yield* assertExternalDirectoryEffect(ctx, target.path, { kind: "directory" })
           yield* ctx.ask({
@@ -166,7 +194,8 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
 
           const info = yield* fs.stat(target.path).pipe(Effect.catch(() => Effect.succeed(undefined)))
           if (!info) {
-            if (target.repository) throw new Error(`Repository is not cloned: ${target.repository}. Use repo_clone first.`)
+            if (target.repository)
+              throw new Error(`Repository is not cloned: ${target.repository}. Use repo_clone first.`)
             throw new Error(`Directory not found: ${target.path}`)
           }
           if (info.type !== "Directory") throw new Error(`Path is not a directory: ${target.path}`)
@@ -175,7 +204,9 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
           const topLevel = new Set(entries.map((entry) => entry.name))
           const dependencyFiles = DEPENDENCY_FILES.filter((file) => topLevel.has(file))
           const packageJson = topLevel.has("package.json")
-            ? (yield* fs.readJson(path.join(target.path, "package.json")).pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>
+            ? ((yield* fs
+                .readJson(path.join(target.path, "package.json"))
+                .pipe(Effect.orElseSucceed(() => ({})))) as Record<string, unknown>)
             : {}
 
           const entrypoints = [
@@ -187,16 +218,20 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
               ? Object.keys(packageJson.bin as Record<string, unknown>).map((name) => `bin: ${name}`)
               : []),
             ...(packageJson.exports && typeof packageJson.exports === "object" && !Array.isArray(packageJson.exports)
-              ? Object.keys(packageJson.exports as Record<string, unknown>).slice(0, 10).map((name) => `exports: ${name}`)
+              ? Object.keys(packageJson.exports as Record<string, unknown>)
+                  .slice(0, 10)
+                  .map((name) => `exports: ${name}`)
               : []),
           ]
 
-          const common = commonEntrypoints(new Set([
-            ...topLevel,
-            ...entries
-              .filter((entry) => entry.name === "src")
-              .flatMap(() => ["src/index.ts", "src/index.tsx", "src/index.js", "src/main.ts", "src/main.js"]),
-          ]))
+          const common = commonEntrypoints(
+            new Set([
+              ...topLevel,
+              ...entries
+                .filter((entry) => entry.name === "src")
+                .flatMap(() => ["src/index.ts", "src/index.tsx", "src/index.js", "src/main.ts", "src/main.js"]),
+            ]),
+          )
           const structureResult = yield* structure(target.path, depth)
           const branch = yield* git.branch(target.path)
           const head = yield* git.run(["rev-parse", "HEAD"], { cwd: target.path })
@@ -225,8 +260,12 @@ export const RepoOverviewTool = Tool.define<typeof Parameters, Metadata, AppFile
               ...(headText ? [`HEAD: ${headText}`] : []),
               ...(metadata.ecosystems.length ? [`Ecosystems: ${metadata.ecosystems.join(", ")}`] : []),
               ...(metadata.package_manager ? [`Package manager: ${metadata.package_manager}`] : []),
-              ...(metadata.dependency_files.length ? [`Dependency files: ${metadata.dependency_files.join(", ")}`] : []),
-              ...(metadata.entrypoints.length ? ["Likely entrypoints:", ...metadata.entrypoints.map((entry) => `- ${entry}`)] : []),
+              ...(metadata.dependency_files.length
+                ? [`Dependency files: ${metadata.dependency_files.join(", ")}`]
+                : []),
+              ...(metadata.entrypoints.length
+                ? ["Likely entrypoints:", ...metadata.entrypoints.map((entry) => `- ${entry}`)]
+                : []),
               "Top-level structure:",
               ...structureResult.lines,
               ...(structureResult.truncated ? ["(Structure truncated)"] : []),

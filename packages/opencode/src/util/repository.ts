@@ -14,7 +14,11 @@ export type Reference = {
 }
 
 function normalize(input: string) {
-  return input.trim().replace(/^git\+/, "").replace(/#.*$/, "").replace(/\/+$/, "")
+  return input
+    .trim()
+    .replace(/^git\+/, "")
+    .replace(/#.*$/, "")
+    .replace(/\/+$/, "")
 }
 
 function trimGitSuffix(input: string) {

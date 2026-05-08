@@ -908,9 +908,6 @@ export type ReferenceConfigEntry =
        * Git repository URL, host/path reference, or GitHub owner/repo shorthand
        */
       repository: string
-      /**
-       * Branch or ref Scout should clone and inspect
-       */
       branch?: string
     }
   | {
@@ -920,9 +917,6 @@ export type ReferenceConfigEntry =
       path: string
     }
 
-/**
- * Named git or local directory references that can be @ mentioned as Scout-backed subagents
- */
 export type ReferenceConfig = {
   [key: string]: ReferenceConfigEntry
 }
