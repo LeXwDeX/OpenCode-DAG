@@ -260,6 +260,14 @@ export const layer: Layer.Layer<
             if (ctx.assistantMessage.summary) {
               throw new Error(`Tool call not allowed while generating summary: ${value.toolName}`)
             }
+            // Diagnostic: track stream chunk ordering. Tool parts arriving before step-start
+            // produce DB rows ordered tool→step-start→text, which then break message-v2
+            // conversion (modelMsgs tail becomes assistant prefill).
+            slog.info("stream chunk: tool-input-start", {
+              toolName: value.toolName,
+              callId: value.id,
+              existingPartCount: MessageV2.parts(ctx.assistantMessage.id).length,
+            })
             const part = yield* session.updatePart({
               id: ctx.toolcalls[value.id]?.partID ?? PartID.ascending(),
               messageID: ctx.assistantMessage.id,
@@ -344,6 +352,9 @@ export const layer: Layer.Layer<
             throw value.error
 
           case "start-step":
+            slog.info("stream chunk: start-step", {
+              existingPartCount: MessageV2.parts(ctx.assistantMessage.id).length,
+            })
             if (!ctx.snapshot) ctx.snapshot = yield* snapshot.track()
             yield* session.updatePart({
               id: PartID.ascending(),
@@ -523,7 +534,12 @@ export const layer: Layer.Layer<
         // clear the message error so the loop can continue and the LLM sees the
         // tool error results instead of the session stopping entirely.
         if (abortedToolCallIDs.length > 0 && !aborted && ctx.assistantMessage.error) {
-          slog.info("clearing message error to let aborted tool results flow back to LLM")
+          slog.info("clearing message error to let aborted tool results flow back to LLM", {
+            abortedToolCallCount: abortedToolCallIDs.length,
+            abortedToolCallIDs,
+            originalFinish: ctx.assistantMessage.finish,
+            errorName: (ctx.assistantMessage.error as { name?: string } | undefined)?.name,
+          })
           ctx.assistantMessage.error = undefined
           ctx.assistantMessage.finish = "tool-calls"
           yield* session.updateMessage(ctx.assistantMessage)

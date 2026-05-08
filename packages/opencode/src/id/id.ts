@@ -55,7 +55,12 @@ function randomBase62(length: number): string {
 }
 
 export function create(prefix: string, direction: "descending" | "ascending", timestamp?: number): string {
-  const currentTimestamp = timestamp ?? Date.now()
+  // Guard against system clock going backwards (NTP sync, VM/WSL clock drift).
+  // Without this clamp, IDs minted just after a backward jump compare smaller than
+  // earlier IDs, which corrupts part ordering (e.g. tool parts appearing before
+  // their step-start) and breaks message-v2 → AI SDK conversion.
+  let currentTimestamp = timestamp ?? Date.now()
+  if (currentTimestamp < lastTimestamp) currentTimestamp = lastTimestamp
 
   if (currentTimestamp !== lastTimestamp) {
     lastTimestamp = currentTimestamp

@@ -1640,6 +1640,25 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
+
+            // Defensive guard: providers (e.g. GitHub Copilot Anthropic endpoint) reject requests
+            // whose final message is an assistant prefill. If the conversion produced trailing
+            // assistant messages, log the shape and break the loop instead of poisoning the stream.
+            const outgoing = [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])]
+            const tail = outgoing.at(-1)
+            if (tail && tail.role === "assistant") {
+              yield* slog.error("aborting: last outgoing message is not user", {
+                step,
+                modelMsgCount: modelMsgs.length,
+                isLastStep,
+                tailRole: tail.role,
+                tailRoles: outgoing.slice(-4).map((m) => m.role),
+                lastAssistantFinish: lastAssistant?.finish,
+                lastAssistantId: lastAssistant?.id,
+                lastUserId: lastUser?.id,
+              })
+              return "break" as const
+            }
             const result = yield* handle.process({
               user: lastUser,
               agent,
@@ -1647,7 +1666,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               sessionID,
               parentSessionID: session.parentID,
               system,
-              messages: [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])],
+              messages: outgoing,
               tools,
               model,
               toolChoice: format.type === "json_schema" ? "required" : undefined,
