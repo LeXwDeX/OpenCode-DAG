@@ -112,6 +112,13 @@ jobs:
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           echo "tag=v$VER" >> "$GITHUB_OUTPUT"
 
+      - name: Generate SHA256SUMS
+        working-directory: release-assets
+        run: |
+          shasum -a 256 * > SHA256SUMS || sha256sum * > SHA256SUMS
+          echo "--- SHA256SUMS ---"
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
