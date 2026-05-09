@@ -130,7 +130,11 @@ export function DialogSessionList() {
 
   const options = createMemo(() => {
     const today = new Date().toDateString()
-    const sessionMap = new Map(sessions().filter((x) => x.parentID === undefined).map((x) => [x.id, x]))
+    const sessionMap = new Map(
+      sessions()
+        .filter((x) => x.parentID === undefined)
+        .map((x) => [x.id, x]),
+    )
 
     const searchResult = searchResults()
     const displayOrder = searchResult ? orderByRecency(searchResult) : browseOrder()
