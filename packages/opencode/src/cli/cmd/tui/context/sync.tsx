@@ -526,7 +526,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               if (match.found) draft.session[match.index] = session.data!
               if (!match.found) draft.session.splice(match.index, 0, session.data!)
               draft.todo[sessionID] = todo.data ?? []
-              const infos: typeof draft.message[string] = []
+              const infos: (typeof draft.message)[string] = []
               for (const message of messages.data ?? []) {
                 infos.push(message.info)
                 draft.part[message.info.id] = message.parts
