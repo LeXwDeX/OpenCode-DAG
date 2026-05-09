@@ -23,9 +23,9 @@
 
 ## Tier A — 核心稳定性 BUG（高价值）
 - [x] A1 重试 server_is_overloaded（`25ecf0af6`）
-- [ ] A2 compaction 摘要顺序（`811954880`）— 延后（26 行 + tests）
-- [ ] A3 取消子任务 child sessions（`75d141b57`）— 延后（~500 行）
-- [ ] A4 vcs 批量 patch 边界（`6a5e32942`）— 延后（涉及 ui）
+- [x] A2 compaction 摘要顺序（`811954880`）— 26 行 + 4 处测试断言更新
+- [~] A3 取消子任务 child sessions（`75d141b57`）— 延后；prompt.ts/task.ts 改造会破坏 bash 取消截断时序，与上游 task.test.ts 大改（-225+474）耦合，需独立深入排查
+- [~] A4 vcs 批量 patch 边界（`6a5e32942`）— N/A，fork vcs.ts 用 `structuredPatch` 逐文件计算，从不解析 git 批量输出，bug 不存在
 - [ ] A5 vcs diff 内存控制（`d1f597b5b`）— 延后（~332 行）
 - [x] A6 sanitize surrogates（`6409aceb1`）
 - [x] A7 tool 返回 image+空 text 错误（`563177c6a`）
