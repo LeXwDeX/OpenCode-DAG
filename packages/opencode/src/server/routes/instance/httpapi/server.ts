@@ -162,9 +162,9 @@ const instanceRoutes = Layer.mergeAll(rawInstanceRoutes, instanceApiRoutes).pipe
 // the same Uint8Array instead of re-stringifying the spec.
 const docResponse = lazy(() => HttpServerResponse.jsonUnsafe(OpenApi.fromApi(PublicApi)))
 
-const docRoute = HttpRouter.use((router) =>
-  router.add("GET", "/doc", () => Effect.succeed(docResponse())),
-).pipe(Layer.provide(authOnlyRouterLayer))
+const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effect.succeed(docResponse()))).pipe(
+  Layer.provide(authOnlyRouterLayer),
+)
 
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
