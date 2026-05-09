@@ -19,7 +19,7 @@ import { ReadTool } from "../../tool/read"
 import { WebFetchTool } from "../../tool/webfetch"
 import { EditTool } from "../../tool/edit"
 import { WriteTool } from "../../tool/write"
-import { WebSearchTool } from "../../tool/websearch"
+import { WebSearchTool, webSearchProviderLabel } from "../../tool/websearch"
 import { TaskTool } from "../../tool/task"
 import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
@@ -147,7 +147,7 @@ function edit(info: ToolProps<typeof EditTool>) {
 function websearch(info: ToolProps<typeof WebSearchTool>) {
   inline({
     icon: "◈",
-    title: `Exa Web Search "${info.input.query}"`,
+    title: `${webSearchProviderLabel(info.metadata.provider)} "${info.input.query}"`,
   })
 }
 
@@ -456,7 +456,10 @@ export const RunCommand = cmd({
               }
               inline({
                 icon: "✗",
-                title: `${part.tool} failed`,
+                title:
+                  part.tool === "websearch"
+                    ? `${webSearchProviderLabel(props<typeof WebSearchTool>(part).metadata.provider)} failed`
+                    : `${part.tool} failed`,
               })
               UI.error(part.state.error)
             }
