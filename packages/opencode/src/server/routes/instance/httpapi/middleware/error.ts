@@ -36,9 +36,7 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
     }),
     Effect.map(normalizeEmptyBadRequest),
     Effect.catchCause((cause) => {
-      const schemaError = cause.reasons
-        .filter(Cause.isDieReason)
-        .find((reason) => HttpApiSchemaError.is(reason.defect))
+      const schemaError = cause.reasons.filter(Cause.isDieReason).find((reason) => HttpApiSchemaError.is(reason.defect))
       if (schemaError) return Effect.succeed(badRequestResponse())
 
       const defect = cause.reasons.filter(Cause.isDieReason).find((reason) => {
@@ -63,7 +61,7 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
               return 500
             }),
           }),
-)
+        )
       }
       if (error instanceof Session.BusyError) {
         return Effect.succeed(

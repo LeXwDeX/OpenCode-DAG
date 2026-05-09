@@ -137,8 +137,14 @@ describe("instance HttpApi", () => {
         )
       const [permission, questionReply, questionReject] = yield* Effect.all(
         [
-          request("/permission/invalid-permission-id/reply", { method: "POST", body: JSON.stringify({ reply: "once" }) }),
-          request("/question/invalid-question-id/reply", { method: "POST", body: JSON.stringify({ answers: [["Yes"]] }) }),
+          request("/permission/invalid-permission-id/reply", {
+            method: "POST",
+            body: JSON.stringify({ reply: "once" }),
+          }),
+          request("/question/invalid-question-id/reply", {
+            method: "POST",
+            body: JSON.stringify({ answers: [["Yes"]] }),
+          }),
           request("/question/invalid-question-id/reject", { method: "POST" }),
         ],
         { concurrency: "unbounded" },
