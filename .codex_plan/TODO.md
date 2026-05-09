@@ -68,3 +68,9 @@
 3. 评估：直接适用 / 需调整 / 不适用
 4. 实施修改 + `bun typecheck`
 5. 更新本 TODO
+
+## REVIEW Minor 修复（2026-05-09）
+- [x] A6 `transform.ts` 文本过滤改回 `text !== ""`（与 upstream 4e14f7951 对齐，移除 trim）
+- [x] A8 补 `test/tool/read.test.ts` unsupported mime 回退用例（bmp/tiff/avif）
+- [x] A12 `skill/index.ts` `externalDirs` 提到 if 块外（与 upstream ffe0314c4 结构对齐）
+- 验证：bun typecheck 干净；`bun test test/provider/transform.test.ts test/tool/read.test.ts test/skill/` 194 pass / 0 fail / 388 expect

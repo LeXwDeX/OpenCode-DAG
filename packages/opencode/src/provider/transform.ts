@@ -137,7 +137,7 @@ function normalizeMessages(
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
           if (part.type === "text") {
-            return part.text.trim() !== ""
+            return part.text !== ""
           }
           if (part.type === "reasoning") {
             return (
@@ -165,7 +165,7 @@ function normalizeMessages(
         if (!Array.isArray(msg.content)) return msg
         const filtered = msg.content.filter((part) => {
           if (part.type === "text") {
-            return part.text.trim() !== ""
+            return part.text !== ""
           }
           if (part.type === "reasoning") {
             return (
