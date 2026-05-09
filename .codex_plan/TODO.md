@@ -44,9 +44,10 @@
 - [~] B5 archived timestamp schema 用 finite（`16ddf5f55`）— N/A，fork 用 NonNegativeInt 已更严
 
 ## Tier C — 新功能（需先评估架构兼容）
-- [ ] C1 shell-aware bash tool（bash/pwsh/cmd 上下文，`3f459819b`）— 评估：是否与本 fork bash tool 冲突
-- [ ] C2 config 支持 well-known remote_config（`d9c18381a`）— 评估
-- [ ] C3 websearch 并行 provider rollout（`a43d3e0e1`）— 评估
+- [ ] C1 shell-aware bash tool（bash/pwsh/cmd 上下文，`3f459819b`）— 延后（506+/177-，含 tui 大改）
+- [x] C2 config 支持 well-known remote_config（`d9c18381a`）
+- [x] C3 websearch 并行 provider rollout（`a43d3e0e1`）— 后端已应用，tui/ui 部分按 fork 规则跳过
+- ✅ 验证：`bun test test/tool/websearch.test.ts test/config/config.test.ts` → 91 pass / 0 fail
 
 ---
 
