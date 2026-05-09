@@ -25,8 +25,8 @@
 - [x] A1 重试 server_is_overloaded（`25ecf0af6`）
 - [x] A2 compaction 摘要顺序（`811954880`）— 26 行 + 4 处测试断言更新
 - [~] A3 取消子任务 child sessions（`75d141b57`）— 延后；prompt.ts/task.ts 改造会破坏 bash 取消截断时序，与上游 task.test.ts 大改（-225+474）耦合，需独立深入排查
-- [~] A4 vcs 批量 patch 边界（`6a5e32942`）— N/A，fork vcs.ts 用 `structuredPatch` 逐文件计算，从不解析 git 批量输出，bug 不存在
-- [ ] A5 vcs diff 内存控制（`d1f597b5b`）— 延后（~332 行）
+- [x] A4 vcs 批量 patch 边界（`6a5e32942`）— 后端 splitGitPatch 正则修正；packages/ui 按 fork 规则跳过
+- [x] A5 vcs diff 内存控制（`d1f597b5b`）— git 原生 diff + maxOutputBytes 限流，移除 AppFileSystem 依赖
 - [x] A6 sanitize surrogates（`6409aceb1`）
 - [x] A7 tool 返回 image+空 text 错误（`563177c6a`）
 - [x] A8 read 阻止不支持图片格式（`51e310c9c`）
@@ -39,7 +39,7 @@
 ## Tier B — 服务/Auth/Format 修复（合理价值）
 - [x] B1 formatter stdout/stderr ignore 恢复（`293bb422f`）
 - [x] B2 auth login stderr 继承（`8e016b470`）
-- [ ] B3 保留 auth token credentials（`ca6150d6f`）— packages/app（前端，延后）
+- [~] B3 保留 auth token credentials（`ca6150d6f`）— 延后；fork 的 packages/app 缺 `terminal-websocket-url.ts` 模块（逻辑内联在 terminal.tsx），上游 8 文件 176 行重构需按 fork 架构重写
 - [x] B4 task 子 session 保留 external_dir/deny 父权限（`d7701dbfb`）
 - [~] B5 archived timestamp schema 用 finite（`16ddf5f55`）— N/A，fork 用 NonNegativeInt 已更严
 
