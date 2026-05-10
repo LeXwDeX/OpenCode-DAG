@@ -54,6 +54,12 @@ export interface Interface {
   readonly add: (sessionID: SessionID, entry: SessionHookEntryInput) => Effect.Effect<string>
   readonly remove: (sessionID: SessionID, id: string) => Effect.Effect<void>
   readonly list: (sessionID: SessionID, event: HookEvent) => Effect.Effect<readonly SessionHookEntry[]>
+  /**
+   * O(1) existence probe — answers "does this session have any hook for this event?"
+   * Used by WP-6A short-circuit in SettingsHook.trigger to skip the matcher pipeline
+   * when no session-scoped hook (and no on-disk hook) targets the current event.
+   */
+  readonly hasForEvent: (sessionID: SessionID, event: HookEvent) => Effect.Effect<boolean>
   readonly clear: (sessionID: SessionID) => Effect.Effect<void>
 }
 
@@ -90,12 +96,19 @@ export const layer = Layer.effect(
       return arr.filter((e) => e.event === event) as readonly SessionHookEntry[]
     })
 
+    const hasForEvent = Effect.fn("SessionHooks.hasForEvent")(function* (sessionID: SessionID, event: HookEvent) {
+      const data = yield* InstanceState.get(state)
+      const arr = data.get(sessionID)
+      if (!arr || arr.length === 0) return false
+      return arr.some((e) => e.event === event)
+    })
+
     const clear = Effect.fn("SessionHooks.clear")(function* (sessionID: SessionID) {
       const data = yield* InstanceState.get(state)
       data.delete(sessionID)
     })
 
-    return Service.of({ add, remove, list, clear })
+    return Service.of({ add, remove, list, hasForEvent, clear })
   }),
 )
 

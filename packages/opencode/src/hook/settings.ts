@@ -129,6 +129,14 @@ interface HookMatcher {
 
 interface Settings {
   hooks?: Partial<Record<HookEvent, HookMatcher[]>>
+  /**
+   * WP-6B placeholder. CC / VS Code-style "workspace trust" flow does not yet
+   * exist in this fork. When a trust system lands (`Project.isTrusted()` or
+   * similar), the trigger entry should short-circuit (silent skip — log.warn +
+   * empty result, NEVER throw / deny) for untrusted workspaces unless this flag
+   * is true. Schema-only for now; see TODO(WP-6B) below in the trigger reducer.
+   */
+  allowUntrusted?: boolean
 }
 
 export interface HookJSONOutput {
@@ -488,6 +496,23 @@ function execShell(
     const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
     const shell = process.platform === "win32" ? true : "/bin/sh"
     const expandedCommand = expandCommand(entry)
+
+    // WP-6C: plugin-directory liveness pre-check.
+    // When __sourceDir is stamped but the directory has since been GC'd
+    // (plugin uninstalled, repo cleaned, etc.) the expanded command would
+    // either fail at exec time with exit-127 or — worse — silently run a
+    // partial template. Treat the missing dir as "plugin no longer available"
+    // and silent-allow rather than letting the shell turn it into a misleading
+    // exit-2 deny. spawnError stays undefined so the trigger reducer keeps
+    // the same allow path it already uses for spawnError-set entries.
+    if (entry.__sourceDir && !existsSync(entry.__sourceDir)) {
+      log.warn("hook plugin sourceDir missing — silent allow", {
+        command: entry.command,
+        sourceDir: entry.__sourceDir,
+      })
+      resolve({ exitCode: 0, stdout: "", stderr: "" })
+      return
+    }
 
     const extraEnv: Record<string, string> = { CLAUDE_PROJECT_DIR: cwd }
     if (entry.__sourceDir) {
@@ -1005,13 +1030,41 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
 
+      // ── WP-6A: O(1) short-circuit ─────────────────────────────
+      // Skip the entire matcher pipeline (envelope build, target derivation,
+      // session merge allocation, matcher regex) when neither the on-disk
+      // settings chain nor the session store has any entry for this event.
+      // s.settings is already cached on the InstanceState, so the file-side
+      // probe is a property access. The session probe is O(1) (Map.get +
+      // .some over the session's own array, typically empty).
+      const sessionEvent: HookEvent =
+        ctx.isSubAgent && payload.event === "Stop" ? "SubagentStop" : payload.event
+      const hasFile = (s.settings.hooks?.[payload.event]?.length ?? 0) > 0
+      const hasSession = ctx.sessionID
+        ? yield* sessionHooks.hasForEvent(SessionID.make(ctx.sessionID), sessionEvent)
+        : false
+      if (!hasFile && !hasSession) return result
+
+      // TODO(WP-6B): once a workspace-trust system exists in this fork, gate
+      // execution here with something like:
+      //
+      //   const trusted = yield* Project.isTrusted(s.cwd)
+      //   if (!trusted && !s.settings.allowUntrusted) {
+      //     log.warn("hooks skipped: workspace not trusted", { cwd: s.cwd })
+      //     return result            // silent allow — never deny / throw
+      //   }
+      //
+      // Hooks reach into the user's shell, network, and LLM accounts; running
+      // them inside an untrusted workspace is the same threat model VS Code
+      // gates with workspace-trust. Until then this is a no-op so behavior is
+      // unchanged. The `allowUntrusted` schema field is already accepted on
+      // Settings so user configs written today won't fail-parse later.
+
       // ── Session-scoped hook resolution (WP-5D) ────────────────
       // Sub-agent stop semantics: if the caller marks this trigger as
       // running inside a sub-agent and fires `Stop`, look up SubagentStop
       // session hooks. Settings-file lookup still uses payload.event verbatim
       // (the on-disk chain is already correctly addressed by callers).
-      const sessionEvent: HookEvent =
-        ctx.isSubAgent && payload.event === "Stop" ? "SubagentStop" : payload.event
       const sessionEntries = ctx.sessionID
         ? yield* sessionHooks.list(SessionID.make(ctx.sessionID), sessionEvent)
         : ([] as readonly SessionHookEntry[])

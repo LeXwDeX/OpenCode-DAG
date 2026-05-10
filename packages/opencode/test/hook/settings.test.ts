@@ -1407,3 +1407,108 @@ describe("SettingsHook.trigger / WP-4F handler × event matrix", () => {
   )
 })
 
+// ──────────────────────────────────────────────────────────────────
+// WP-6A: hasHookForEvent short-circuit
+// WP-6C: plugin sourceDir liveness pre-check
+// ──────────────────────────────────────────────────────────────────
+
+describe("SettingsHook.trigger / WP-6A short-circuit", () => {
+  it.live("no hooks configured → returns empty result without touching matchers", () =>
+    provideTmpdirInstance(() =>
+      Effect.gen(function* () {
+        // Deliberately do NOT write any settings file. trigger should hit the
+        // WP-6A short-circuit (hasFile=false, hasSession=false) and bail with
+        // an empty TriggerResult — never building an envelope, never running
+        // matcher regex, never dispatching to handlers.
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: { command: "ls" } },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+        expect(result.additionalContexts).toEqual([])
+        expect(result.systemMessages).toEqual([])
+        expect(result.permissionDecision).toBeUndefined()
+        expect(result.preventContinuation).toBeUndefined()
+      }),
+    ),
+  )
+
+  it.live("hook configured for a different event → still short-circuits this event", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        // Configure a Stop hook only — a PreToolUse trigger should not fire it
+        // and should take the short-circuit path (hasFile probes payload.event,
+        // not the union of all events).
+        yield* Effect.promise(() => writeHookSettings(dir, "Stop", { matcher: "*" }))
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+        // Sidecar must not have been written — proves no command executed.
+        const exists = yield* Effect.promise(() =>
+          fs
+            .access(path.join(dir, "captured.json"))
+            .then(() => true)
+            .catch(() => false),
+        )
+        expect(exists).toBe(false)
+      }),
+    ),
+  )
+})
+
+describe("SettingsHook.trigger / WP-6C plugin sourceDir missing", () => {
+  it.live("missing __sourceDir → silent allow (not deny / blocked)", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        // Write a hook config under .claude/settings.json so loadChain stamps
+        // __sourceDir = <dir>/.claude on the entry. Hook is `exit 2` — under
+        // normal conditions that produces blocked={reason:"Hook blocked..."}.
+        // After we delete .claude, the cached entry still has the old
+        // __sourceDir; WP-6C's existsSync check inside execShell must convert
+        // the stale entry into a silent allow (exitCode 0, blocked undefined).
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(dir, ".claude"), { recursive: true })
+          await fs.writeFile(
+            path.join(dir, ".claude", "settings.json"),
+            JSON.stringify({
+              hooks: {
+                PreToolUse: [
+                  { matcher: "*", hooks: [{ type: "command", command: "exit 2" }] },
+                ],
+              },
+            }),
+          )
+        })
+
+        const svc = yield* SettingsHook.Service
+        // Priming call: .claude exists, hook fires `exit 2` → blocked.
+        // This populates InstanceState.cache with the loaded settings (incl.
+        // __sourceDir stamping). Behavior here isn't under test.
+        const primed = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(primed.blocked).toBeDefined()
+
+        // Now delete the plugin source dir behind the cache's back.
+        yield* Effect.promise(() =>
+          fs.rm(path.join(dir, ".claude"), { recursive: true, force: true }),
+        )
+
+        // Cache still holds entry with __sourceDir = <dir>/.claude. WP-6C
+        // pre-check should fire and short-circuit execShell to silent allow.
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+        expect(result.permissionDecision).toBeUndefined()
+      }),
+    ),
+  )
+})
+
