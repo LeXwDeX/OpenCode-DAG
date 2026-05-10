@@ -1189,8 +1189,16 @@ export const defaultLayer = layer.pipe(
 // ── type:"mcp" hook execution ───────────────────────────────────
 
 /**
- * Resolve and invoke an MCP tool registered as a hook. Format:
+ * Resolve and invoke an MCP tool registered as a hook. Format follows the
+ * Claude Code protocol:
  *   "mcp__<server>__<tool>"
+ *
+ * The fork's MCP service stores tools under `sanitize(server)_sanitize(tool)`
+ * (see src/mcp/index.ts). We strip the leading `mcp__`, split on `__` for the
+ * server/tool boundary, sanitize each side and rejoin with a single
+ * underscore to look up the tool. This keeps the on-disk hook config in lock
+ * step with Claude Code while staying compatible with the fork's internal
+ * tool registry naming.
  *
  * Calls MCP.Service.tools() to get the tool registry and invokes the matching
  * tool with the hook envelope as `arguments`. Parses the first text content
@@ -1208,9 +1216,22 @@ function invokeMcpHook(
     }
 
     const tools = yield* mcpSvc.tools()
-    const tool = tools[command]
+    // Convert CC-format "mcp__server__tool" to internal key "server_tool"
+    // (sanitized, single underscore separator).
+    const sanitizeIdent = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+    const stripped = command.slice("mcp__".length)
+    const sepIdx = stripped.indexOf("__")
+    const internalKey =
+      sepIdx === -1
+        ? sanitizeIdent(stripped)
+        : sanitizeIdent(stripped.slice(0, sepIdx)) + "_" + sanitizeIdent(stripped.slice(sepIdx + 2))
+    const tool = tools[internalKey] ?? tools[command]
     if (!tool) {
-      log.warn("mcp hook tool not found", { command, available: Object.keys(tools).length })
+      log.warn("mcp hook tool not found", {
+        command,
+        internalKey,
+        available: Object.keys(tools).length,
+      })
       return undefined
     }
 
