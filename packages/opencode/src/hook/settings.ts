@@ -11,13 +11,17 @@
  *   5. <project>/.claude/settings.local.json         (CC project local)
  *   6. <project>/.opencode/settings.local.json       (OpenCode project local)
  *
- * Supports the full 9-event Claude Code hook surface:
+ * Supports the 8-event Claude Code hook surface (fork drops Notification —
+ * permission UI uses the internal bus instead):
  *   PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop,
- *   Notification, PreCompact, SessionStart, SessionEnd
+ *   PreCompact, SessionStart, SessionEnd
  *
  * Hook entry types:
  *   - { type: "command", command: "<shell>", timeout?: <seconds> }
  *   - { type: "mcp",     command: "mcp__<server>__<tool>", timeout?: <seconds> }
+ *   - { type: "http",    command: "<url>", timeout?: <seconds> }
+ *   - { type: "prompt",  command: "<llm-system-prompt>", timeout?: <seconds> }
+ *   - { type: "agent",   command: "<llm-task-prompt>", timeout?: <seconds> }
  *
  * stdin JSON envelope per Claude Code spec:
  *   { hook_event_name, session_id, transcript_path, cwd, ...event-specific }
@@ -38,11 +42,22 @@ import path from "path"
 import os from "os"
 import { existsSync, readFileSync } from "fs"
 import { spawn } from "child_process"
+import { createHash } from "crypto"
 import { Effect, Layer, Context } from "effect"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import z from "zod"
+import { generateObject, generateText, type ModelMessage } from "ai"
+import { AppFileSystem } from "@opencode-ai/core/filesystem"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import * as Log from "@opencode-ai/core/util/log"
 import { Global } from "@opencode-ai/core/global"
 import { InstanceState } from "@/effect/instance-state"
 import { MCP } from "@/mcp"
+import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
+import { withTransientReadRetry } from "@/util/effect-http-client"
+import { buildAgentTools } from "./agent-tools"
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -54,15 +69,54 @@ export type HookEvent =
   | "UserPromptSubmit"
   | "Stop"
   | "SubagentStop"
-  | "Notification"
   | "PreCompact"
   | "SessionStart"
   | "SessionEnd"
 
 interface HookCommand {
-  type: "command" | "mcp"
+  /**
+   * Hook execution kind. All 5 types fully implemented:
+   * - `command`: shell command via stdin/stdout JSON envelope
+   * - `mcp`: invoke MCP tool via `mcp__<server>__<tool>` prefix
+   * - `http`: POST envelope to URL, parse JSON body
+   * - `prompt`: LLM call with structured output (HookJSONOutput schema)
+   * - `agent`: autonomous agent loop with bash/read_file/list_dir/grep tools
+   */
+  type: "command" | "mcp" | "http" | "prompt" | "agent"
   command: string
   timeout?: number
+  /**
+   * Shell selector for `type:"command"`. CC honors `bash` (default on POSIX) and `powershell`
+   * (default on Windows). Currently a schema placeholder — execShell still picks based on platform.
+   */
+  shell?: "bash" | "powershell"
+  /**
+   * Conditional gate. CC evaluates this as a boolean expression in the matcher's runtime
+   * context; fork treats it as a placeholder for now (always considered truthy when present).
+   * Reserved for阶段 6 short-circuit logic.
+   */
+  if?: string
+  /**
+   * Async execution flag. CC's AsyncHookRegistry routes async hooks via attachments / task-notification.
+   * Fork currently runs everything sync; this is a P2 schema placeholder.
+   */
+  async?: boolean
+  /**
+   * Companion to `async`: when an async hook exits with code 2, CC re-wakes the agent via
+   * `wrapInSystemReminder` + `task-notification`. Schema placeholder for the same P2 work.
+   */
+  asyncRewake?: boolean
+  /**
+   * Fork superset (CC has no equivalent). When present, each entry is exported into the hook
+   * subprocess env as `CLAUDE_PLUGIN_OPTION_<KEY>=JSON.stringify(value)`.
+   */
+  options?: Record<string, unknown>
+  /**
+   * Runtime metadata injected by `loadChain` — absolute directory of the settings file that
+   * declared this hook. Drives `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA`. The `__` prefix
+   * keeps it out of any future schema-validation pass.
+   */
+  __sourceDir?: string
 }
 
 interface HookMatcher {
@@ -74,21 +128,78 @@ interface Settings {
   hooks?: Partial<Record<HookEvent, HookMatcher[]>>
 }
 
-interface HookJSONOutput {
+export interface HookJSONOutput {
   continue?: boolean
   stopReason?: string
   suppressOutput?: boolean
   systemMessage?: string
   decision?: "approve" | "block"
   reason?: string
-  hookSpecificOutput?: {
-    hookEventName?: string
-    permissionDecision?: "allow" | "deny" | "ask"
-    permissionDecisionReason?: string
-    additionalContext?: string
-    updatedInput?: Record<string, unknown>
-  }
+  hookSpecificOutput?: HookSpecificOutput
 }
+
+// Loose flat zod schema mirroring HookJSONOutput — used by the prompt handler to
+// constrain LLM structured output. Intentionally NOT `.strict()`: lets the model
+// emit unknown fields without failing parse. Single source of truth lives next
+// to the HookJSONOutput interface; not exported (settings.ts internal only).
+const HookSpecificOutputZodSchema = z.object({
+  hookEventName: z.string().optional(),
+  permissionDecision: z.enum(["allow", "deny", "ask"]).optional(),
+  permissionDecisionReason: z.string().optional(),
+  updatedInput: z.record(z.string(), z.unknown()).optional(),
+  additionalContext: z.string().optional(),
+  initialUserMessage: z.string().optional(),
+  updatedMCPToolOutput: z.unknown().optional(),
+})
+
+const HookJSONOutputZodSchema = z.object({
+  continue: z.boolean().optional(),
+  stopReason: z.string().optional(),
+  suppressOutput: z.boolean().optional(),
+  systemMessage: z.string().optional(),
+  decision: z.enum(["approve", "block"]).optional(),
+  reason: z.string().optional(),
+  hookSpecificOutput: HookSpecificOutputZodSchema.optional(),
+})
+
+/**
+ * hookSpecificOutput discriminated union — Claude Code 1:1.
+ * 仅 5 个事件有 union 分支；Stop / SubagentStop / PreCompact / SessionEnd
+ * 在 CC types/hooks.ts:50-166 中无对应 case，仅消费顶层字段（continue/decision/reason 等）。
+ *
+ * 所有字段保持 optional 以便解析端宽松降级。`hookEventName` 用作 discriminator。
+ * 最后一个 fallback 分支让消费端 cast 时不会因为 hookEventName 未列出（或拼错）而报错。
+ */
+export type HookSpecificOutput =
+  | {
+      hookEventName: "PreToolUse"
+      permissionDecision?: "allow" | "deny" | "ask"
+      permissionDecisionReason?: string
+      updatedInput?: Record<string, unknown>
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "UserPromptSubmit"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "SessionStart"
+      additionalContext?: string
+      initialUserMessage?: string
+    }
+  | {
+      hookEventName: "PostToolUse"
+      additionalContext?: string
+      updatedMCPToolOutput?: unknown
+    }
+  | {
+      /**
+       * Fallback — accept future / unknown event names without crashing the parser.
+       * NO index signature here: an `[key: string]: unknown` would poison every other
+       * branch's narrowed property types into `unknown`.
+       */
+      hookEventName?: string
+    }
 
 /** Per-event payload — discriminated union, TS narrows automatically. */
 export type HookPayload =
@@ -102,7 +213,6 @@ export type HookPayload =
   | { event: "UserPromptSubmit"; prompt: string }
   | { event: "Stop"; stopHookActive: boolean }
   | { event: "SubagentStop"; stopHookActive: boolean }
-  | { event: "Notification"; message: string }
   | {
       event: "PreCompact"
       trigger: "manual" | "auto"
@@ -121,6 +231,12 @@ export interface TriggerContext {
   sessionID: string
   /** Absolute path to a transcript file (may not yet exist). Empty string if N/A. */
   transcriptPath: string
+  /** CC envelope: "plan" | "default"（fork 通过 agentToPermissionMode 映射 agent name 得出）。其他模式（acceptEdits/bypassPermissions）fork 暂不支持。 */
+  permissionMode?: string
+  /** CC envelope: subagent ID（仅 SubagentStop / 子 agent 上下文有值）*/
+  agentID?: string
+  /** CC envelope: subagent type 名称 */
+  agentType?: string
 }
 
 export interface TriggerResult {
@@ -141,13 +257,62 @@ export interface TriggerResult {
   updatedInput?: Record<string, unknown>
 }
 
+/**
+ * Map fork agent.name to CC `permission_mode` envelope value.
+ *
+ * fork 没有 CC 那种 permission_mode 全局枚举（default / acceptEdits / bypassPermissions / plan）。
+ * 用 agent name 替代：plan agent 等价于 plan mode，其余 primary agent 等价于 default mode。
+ * acceptEdits / bypassPermissions 在 fork 中无对应概念 — 不输出，避免给用户 hook 脚本造假信号。
+ */
+export function agentToPermissionMode(agentName: string | undefined): "plan" | "default" {
+  return agentName === "plan" ? "plan" : "default"
+}
+
+/**
+ * Per-plugin data directory layout (CC plugin contract):
+ *   <Global.Path.data>/hooks/<parentBasename>-<basename>-<sha256(sourceDir).slice(0,6)>
+ *
+ * Hash suffix disambiguates two plugins whose paths happen to share the same
+ * `<parent>/<basename>` tail (e.g. installed under different roots).
+ */
+function computeDataDir(sourceDir: string): string {
+  const hash = createHash("sha256").update(sourceDir).digest("hex").slice(0, 6)
+  const parent = path.basename(path.dirname(sourceDir))
+  const base = path.basename(sourceDir)
+  return path.join(Global.Path.data, "hooks", `${parent}-${base}-${hash}`)
+}
+
+/**
+ * Expand CC-compatible template variables in `entry.command`.
+ *
+ *   ${CLAUDE_PLUGIN_ROOT}  → entry.__sourceDir
+ *   ${CLAUDE_PLUGIN_DATA}  → computeDataDir(entry.__sourceDir)
+ *   ${user_config.<key>}   → entry.options?.[key] (string passthrough; non-string → JSON.stringify)
+ *
+ * Unknown / unresolvable templates are left verbatim so the shell's own env
+ * expansion (or the user's escape strategy) still has a chance to handle them.
+ * Read-only: never mutates `entry`.
+ */
+function expandCommand(entry: HookCommand): string {
+  return entry.command.replace(/\$\{([^}]+)\}/g, (full, key) => {
+    if (key === "CLAUDE_PLUGIN_ROOT" && entry.__sourceDir) return entry.__sourceDir
+    if (key === "CLAUDE_PLUGIN_DATA" && entry.__sourceDir) return computeDataDir(entry.__sourceDir)
+    if (key.startsWith("user_config.")) {
+      const optKey = key.slice("user_config.".length)
+      const v = entry.options?.[optKey]
+      if (v !== undefined) return typeof v === "string" ? v : JSON.stringify(v)
+    }
+    return full
+  })
+}
+
 // ── Matcher ─────────────────────────────────────────────────────
 
 /**
  * Match a string (typically tool name) against a CC matcher pattern.
  * Supports: exact, pipe list, regex, wildcard "*"/empty.
  *
- * For non-tool events (Stop, Notification, etc.) callers pass empty target;
+ * For non-tool events (Stop, PreCompact, etc.) callers pass empty target;
  * matcher should usually be undefined/"*" in those configs.
  */
 function matches(matcher: string | undefined, target: string): boolean {
@@ -178,6 +343,17 @@ function readJSON(filepath: string): Settings | null {
   if (!existsSync(filepath)) return null
   try {
     const data = JSON.parse(readFileSync(filepath, "utf8")) as Settings
+    // Stamp every HookCommand with the directory of the settings file that declared it.
+    // execShell uses this to populate CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA.
+    if (data.hooks) {
+      const sourceDir = path.dirname(filepath)
+      for (const matchers of Object.values(data.hooks)) {
+        if (!matchers) continue
+        for (const m of matchers) {
+          for (const h of m.hooks ?? []) h.__sourceDir = sourceDir
+        }
+      }
+    }
     log.info("loaded hook settings", {
       path: filepath,
       events: Object.keys(data.hooks ?? {}),
@@ -236,8 +412,47 @@ function loadChain(directory: string, worktree: string): Settings {
     )
   }
 
-  const layers = candidates.map(readJSON).filter((s): s is Settings => s !== null)
+  const layers = candidates
+    .map((fp) => {
+      const data = readJSON(fp)
+      if (data) warnUnsupportedFields(data.hooks, path.dirname(fp))
+      return data
+    })
+    .filter((s): s is Settings => s !== null)
   return mergeSettings(layers)
+}
+
+/**
+ * Internal: scan loaded settings for HookCommand fields the fork has not yet implemented
+ * (`async`, `asyncRewake`, `if`, `shell`) and emit a single `log.warn` per settings file.
+ * Runtime still proceeds — these fields are silently ignored. Exported for unit testing
+ * only; not part of the public surface.
+ */
+export function warnUnsupportedFields(
+  hooks: Settings["hooks"],
+  sourceDir: string,
+): void {
+  if (!hooks) return
+  const unsupported: Array<{ field: string; value: unknown; eventName: string }> = []
+  for (const [eventName, matchers] of Object.entries(hooks)) {
+    if (!matchers) continue
+    for (const m of matchers) {
+      for (const h of m.hooks ?? []) {
+        if (h.async !== undefined) unsupported.push({ field: "async", value: h.async, eventName })
+        if (h.asyncRewake !== undefined)
+          unsupported.push({ field: "asyncRewake", value: h.asyncRewake, eventName })
+        if (h.if !== undefined) unsupported.push({ field: "if", value: h.if, eventName })
+        if (h.shell !== undefined) unsupported.push({ field: "shell", value: h.shell, eventName })
+        // All 5 known types now have handlers; type-level unsupported set is empty by design.
+      }
+    }
+  }
+  if (unsupported.length > 0) {
+    log.warn("hook settings contains unsupported fields (will be ignored or fail at runtime)", {
+      sourceDir,
+      unsupported,
+    })
+  }
 }
 
 // ── Shell command runner ────────────────────────────────────────
@@ -245,19 +460,31 @@ function loadChain(directory: string, worktree: string): Settings {
 const DEFAULT_TIMEOUT_MS = 60_000 // CC default
 
 function execShell(
-  command: string,
+  entry: HookCommand,
   stdinJSON: string,
   cwd: string,
-  timeoutSec?: number,
 ): Promise<{ exitCode: number | null; stdout: string; stderr: string; spawnError?: string }> {
   return new Promise((resolve) => {
-    const timeoutMs = timeoutSec ? timeoutSec * 1000 : DEFAULT_TIMEOUT_MS
+    const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
     const shell = process.platform === "win32" ? true : "/bin/sh"
+    const expandedCommand = expandCommand(entry)
 
-    const child = spawn(command, [], {
+    const extraEnv: Record<string, string> = { CLAUDE_PROJECT_DIR: cwd }
+    if (entry.__sourceDir) {
+      extraEnv.CLAUDE_PLUGIN_ROOT = entry.__sourceDir
+      extraEnv.CLAUDE_PLUGIN_DATA = computeDataDir(entry.__sourceDir)
+    }
+    if (entry.options) {
+      for (const [k, v] of Object.entries(entry.options)) {
+        const key = "CLAUDE_PLUGIN_OPTION_" + k.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()
+        extraEnv[key] = JSON.stringify(v)
+      }
+    }
+
+    const child = spawn(expandedCommand, [], {
       cwd,
       shell,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: cwd },
+      env: { ...process.env, ...extraEnv },
       stdio: ["pipe", "pipe", "pipe"],
       timeout: timeoutMs,
     })
@@ -271,18 +498,18 @@ function execShell(
 
     // EPIPE on stdin must not crash the host process (fork commit 0f3017f33a)
     child.stdin.on("error", (err) => {
-      log.warn("hook stdin error", { command, error: err.message })
+      log.warn("hook stdin error", { command: entry.command, error: err.message })
     })
 
     try {
       child.stdin.write(stdinJSON + "\n", "utf8")
       child.stdin.end()
     } catch (err) {
-      log.warn("hook stdin write failed", { command, error: String(err) })
+      log.warn("hook stdin write failed", { command: entry.command, error: String(err) })
     }
 
     child.on("error", (err) => {
-      log.error("hook command failed to spawn", { command, error: err.message })
+      log.error("hook command failed to spawn", { command: entry.command, error: err.message })
       resolve({ exitCode: null, stdout, stderr, spawnError: err.message })
     })
 
@@ -307,12 +534,17 @@ function parseStdout(stdout: string, command: string): HookJSONOutput | undefine
 // ── Payload → stdin envelope ────────────────────────────────────
 
 function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: string): Record<string, unknown> {
-  const base = {
+  const base: Record<string, unknown> = {
     hook_event_name: payload.event,
     session_id: ctx.sessionID,
     transcript_path: ctx.transcriptPath,
     cwd,
   }
+  // Explicit ctx.permissionMode wins; otherwise derive from agentType so callers only pass agent.
+  const permissionMode = ctx.permissionMode ?? (ctx.agentType ? agentToPermissionMode(ctx.agentType) : undefined)
+  if (permissionMode) base.permission_mode = permissionMode
+  if (ctx.agentID !== undefined) base.agent_id = ctx.agentID
+  if (ctx.agentType !== undefined) base.agent_type = ctx.agentType
   switch (payload.event) {
     case "PreToolUse":
       return { ...base, tool_name: payload.toolName, tool_input: payload.toolInput }
@@ -328,8 +560,6 @@ function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: stri
     case "Stop":
     case "SubagentStop":
       return { ...base, stop_hook_active: payload.stopHookActive }
-    case "Notification":
-      return { ...base, message: payload.message }
     case "PreCompact":
       return {
         ...base,
@@ -373,10 +603,338 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SettingsHook") {}
 
+// ── HookHandler abstraction (WP-4A) ─────────────────────────────
+//
+// Each handler owns one HookCommand.type. They return the same
+// { json, exitBlock } envelope the trigger aggregator already consumes
+// (no semantic shift vs. the prior inlined branches in runEntry).
+//
+// Handlers do NOT carry CC-protocol aggregation state (dedup, permissionDecision,
+// systemMessages) — that stays in trigger's reducer block. inHook is propagated
+// to every handler so future agent/http handlers can implement re-entry guards.
+//
+// mcpSvc dependency: the registry is built inside the layer's Effect.gen
+// closure (not at module top-level, not per-trigger). This keeps mcpSvc as
+// a captured closure variable instead of a per-call deps parameter — handlers
+// stay pure functions of (entry, envelope, cwd, inHook). The table is a
+// const inside the layer scope, so future http/prompt/agent handlers can
+// register here once they exist.
+interface HookHandler<E extends HookCommand = HookCommand> {
+  readonly type: E["type"]
+  readonly run: (
+    entry: E,
+    envelope: Record<string, unknown>,
+    cwd: string,
+    inHook: boolean,
+  ) => Effect.Effect<{ json?: HookJSONOutput; exitBlock?: string }>
+}
+
+const commandHandler: HookHandler = {
+  type: "command",
+  run: Effect.fn("SettingsHook.handler.command")(function* (entry, envelope, cwd, _inHook) {
+    const stdinJSON = JSON.stringify(envelope)
+    const { exitCode, stdout, stderr, spawnError } = yield* Effect.promise(() =>
+      execShell(entry, stdinJSON, cwd),
+    )
+
+    if (spawnError) {
+      return { json: undefined, exitBlock: undefined }
+    }
+
+    // Exit-code 2: block + stderr-as-reason (CC contract)
+    if (exitCode === 2) {
+      const reason = stderr.trim() || "Hook blocked execution"
+      return { json: parseStdout(stdout, entry.command), exitBlock: reason }
+    }
+
+    // Other non-zero exits: log and continue (do not abort main flow)
+    if (exitCode !== 0 && exitCode !== null) {
+      log.warn("hook command exited non-zero (non-blocking)", {
+        command: entry.command,
+        exitCode,
+        stderr: stderr.trim().slice(0, 200),
+      })
+    }
+
+    return { json: parseStdout(stdout, entry.command), exitBlock: undefined }
+  }),
+}
+
+function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
+  return {
+    type: "mcp",
+    run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
+      if (inHook) {
+        log.warn("nested mcp hook skipped (re-entry guard)", { command: entry.command })
+        return { json: undefined, exitBlock: undefined }
+      }
+      const json = yield* invokeMcpHook(mcpSvc, entry.command, envelope)
+      return { json, exitBlock: undefined }
+    }),
+  }
+}
+
+/**
+ * `type: "http"` handler. Per CC protocol, `entry.command` is the endpoint URL;
+ * the envelope is POSTed as JSON. 2xx → body parsed via the same parseStdout path
+ * as command stdout. Non-2xx → synthetic `exitBlock` so the trigger aggregator
+ * surfaces it as a block. Network errors / timeouts → log.warn + silent allow,
+ * mirroring commandHandler's spawnError behavior (hooks must never crash the host).
+ *
+ * Factory takes the resolved HttpClient so the HookHandler.run signature stays
+ * `R = never` (the WP-4A interface contract). Captures `http` in closure scope —
+ * registered once per layer construction inside the layer's Effect.gen block.
+ */
+function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
+  const httpRead = withTransientReadRetry(http)
+  return {
+    type: "http",
+    run: Effect.fn("SettingsHook.handler.http")(function* (entry, envelope, _cwd, _inHook) {
+      // entry.timeout is seconds (matches commandHandler convention); fallback to CC default.
+      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+
+      const exit = yield* HttpClientRequest.post(entry.command).pipe(
+        HttpClientRequest.bodyJson(envelope),
+        Effect.flatMap((req) => httpRead.execute(req)),
+        Effect.flatMap((res) =>
+          Effect.gen(function* () {
+            const text = yield* res.text
+            return { status: res.status, text }
+          }),
+        ),
+        Effect.timeout(timeoutMs),
+        Effect.exit,
+      )
+
+      if (exit._tag === "Failure") {
+        log.warn("http hook request failed (non-blocking)", {
+          command: entry.command,
+          error: String(exit.cause),
+        })
+        return { json: undefined, exitBlock: undefined }
+      }
+
+      const { status, text } = exit.value
+      if (status < 200 || status >= 300) {
+        return { json: undefined, exitBlock: `http hook returned status ${status}` }
+      }
+
+      return { json: parseStdout(text, entry.command), exitBlock: undefined }
+    }),
+  }
+}
+
+/**
+ * `type: "prompt"` handler — single-turn LLM call (CC v1 protocol).
+ *
+ * `entry.command` is interpreted as the system prompt template; the stdin envelope
+ * (already shaped by buildStdinEnvelope) is JSON-stringified into the user message.
+ * The model returns structured output matching HookJSONOutputZodSchema (loose flat
+ * shape; see definition near HookJSONOutput).
+ *
+ * Failure policy is **silent allow** — mirrors httpHandler's network-error path:
+ *   - OpenAI OAuth provider: not supported in v1 (no API key for generateObject).
+ *     log.warn + return undefined json. v2 may switch to small-fast model w/ OAuth path.
+ *   - generateObject reject (auth missing, rate-limit, schema mismatch, …): log.warn +
+ *     return undefined json. Hooks must never crash or block the host on infra errors.
+ *
+ * MUST use `Effect.tryPromise + Effect.exit` (not `Effect.promise`): the latter
+ * turns a reject into a defect, which would propagate as a die and violate the
+ * non-blocking hook contract. The agent.ts:397 pattern is intentionally NOT copied
+ * here for that exact reason.
+ */
+function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): HookHandler {
+  return {
+    type: "prompt",
+    run: Effect.fn("SettingsHook.handler.prompt")(function* (entry, envelope, _cwd, _inHook) {
+      // Outer Effect.exit mirrors httpHandler:697-707 — bottom-line guarantee that
+      // any pre-LLM defect (provider.defaultModel/getModel/getLanguage die,
+      // auth.get die via orDie) cannot escape the handler. Hooks must never crash
+      // the host on infra errors. The inner gen body is the original logic verbatim.
+      const exit = yield* Effect.gen(function* () {
+        const m = yield* provider.defaultModel()
+        const resolved = yield* provider.getModel(m.providerID, m.modelID)
+        const language = yield* provider.getLanguage(resolved)
+
+        // OpenAI OAuth: generateObject doesn't have a working code path under OAuth
+        // creds in v1 (would need streamObject + providerOptions hack like agent.ts).
+        // Skip silently rather than half-implement.
+        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+        if (m.providerID === "openai" && authInfo?.type === "oauth") {
+          log.warn("prompt hook: OpenAI OAuth provider not supported in v1", {
+            command: entry.command.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        const params = {
+          temperature: 0.3,
+          model: language,
+          messages: [
+            { role: "system", content: entry.command } as ModelMessage,
+            { role: "user", content: JSON.stringify(envelope) } as ModelMessage,
+          ],
+          schema: HookJSONOutputZodSchema,
+        } satisfies Parameters<typeof generateObject>[0]
+
+        const llmExit = yield* Effect.tryPromise({
+          try: () => generateObject(params).then((r) => r.object),
+          catch: (e) => e,
+        }).pipe(Effect.exit)
+
+        if (llmExit._tag === "Failure") {
+          log.warn("prompt hook failed (non-blocking)", { error: String(llmExit.cause) })
+          return { json: undefined, exitBlock: undefined }
+        }
+        return { json: llmExit.value as HookJSONOutput, exitBlock: undefined }
+      }).pipe(Effect.exit)
+
+      if (exit._tag === "Failure") {
+        log.warn("prompt hook setup failed (non-blocking)", { error: String(exit.cause) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return exit.value
+    }),
+  }
+}
+
+/**
+ * `type: "agent"` handler — multi-turn LLM with a tool palette (CC v1 protocol).
+ *
+ * `entry.command` is the system prompt; the stdin envelope is JSON-stringified
+ * into the user message. The model is given 5 read-only tools from `agent-tools.ts`
+ * (read_file / list_dir / grep / bash / synthetic_output) and runs up to
+ * MAX_AGENT_TURNS turns. The hook decision is emitted by calling synthetic_output;
+ * the loop polls the captured slot after each turn.
+ *
+ * Failure policy is **silent allow** — same contract as makePromptHandler. Three
+ * distinct failure log strings differentiate setup defects (provider/auth/getLanguage),
+ * timeout/abort, and generateText reject so operators can grep them apart.
+ *
+ * Structure mirrors WP-4C-fix's prompt handler (outer Effect.exit on the setup
+ * gen) plus an inner tryPromise+exit on the loop Promise so AbortError and
+ * generateText rejects don't escape as defects.
+ */
+function makeAgentHandler(
+  provider: Provider.Interface,
+  auth: Auth.Interface,
+  spawner: ChildProcessSpawner["Service"],
+  fs: AppFileSystem.Interface,
+): HookHandler {
+  return {
+    type: "agent",
+    run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
+      const exit = yield* Effect.gen(function* () {
+        const m = yield* provider.defaultModel()
+        const resolved = yield* provider.getModel(m.providerID, m.modelID)
+        const language = yield* provider.getLanguage(resolved)
+        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+
+        if (m.providerID === "openai" && authInfo?.type === "oauth") {
+          log.warn("agent hook: OpenAI OAuth provider not supported in v1", {
+            command: entry.command.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        // Loop runs in an async Promise so the ai SDK's AbortError / network rejects
+        // can be caught with a single tryPromise. AbortController doubles as the
+        // timeout source (entry.timeout in ms; CC's `timeout` field for command/http
+        // is seconds, but agent's spec — m0021 — keeps ms semantics for parity with
+        // the loop-internal setTimeout). Inner finally clears the timer regardless
+        // of how the loop exited so the normal-completion path doesn't leak it.
+        const captured: { value: HookJSONOutput | null } = { value: null }
+        const ac = new AbortController()
+        const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
+        const timer = setTimeout(() => ac.abort(), timeoutMs)
+
+        const loopExit = yield* Effect.tryPromise({
+          try: async () => {
+            try {
+              const tools = buildAgentTools({ spawner, fs, signal: ac.signal, cwd, captured })
+              const messages: ModelMessage[] = [
+                { role: "system", content: entry.command },
+                { role: "user", content: JSON.stringify(envelope) },
+              ]
+              for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
+                const result = await generateText({
+                  model: language,
+                  messages,
+                  tools,
+                  toolChoice: "auto",
+                  abortSignal: ac.signal,
+                  maxOutputTokens: 4096,
+                })
+                if (captured.value) return captured.value
+                messages.push(...result.response.messages)
+                if (
+                  result.finishReason === "stop" ||
+                  result.finishReason === "length" ||
+                  result.finishReason === "content-filter"
+                )
+                  break
+                // Pure text turn with no tool calls — the model is no longer making
+                // progress toward synthetic_output. Bail rather than spin to MAX_TURNS.
+                if (result.toolCalls.length === 0) break
+              }
+              return null
+            } finally {
+              clearTimeout(timer)
+            }
+          },
+          catch: (e) => e,
+        }).pipe(Effect.exit)
+
+        if (loopExit._tag === "Failure") {
+          const cause = String(loopExit.cause)
+          const isAbort = cause.includes("AbortError") || cause.includes("aborted")
+          if (isAbort) {
+            log.warn("agent hook timeout / aborted (non-blocking)", {
+              error: cause,
+              command: entry.command.slice(0, 80),
+            })
+          } else {
+            log.warn("agent hook generateText failed (non-blocking)", {
+              error: cause,
+              command: entry.command.slice(0, 80),
+            })
+          }
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        if (!loopExit.value) {
+          log.warn("agent hook reached max turns or no synthetic_output (non-blocking)", {
+            command: entry.command.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+        return { json: loopExit.value, exitBlock: undefined }
+      }).pipe(Effect.exit)
+
+      if (exit._tag === "Failure") {
+        log.warn("agent hook setup failed (non-blocking)", { error: String(exit.cause) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return exit.value
+    }),
+  }
+}
+
+// WP-4D-2 constants. MAX_AGENT_TURNS pinned at 200 by user m0021 — gives the LLM
+// enough headroom for deep-investigation hooks before the loop bails. Default
+// timeout matches DEFAULT_TIMEOUT_MS (60s) used by command/http handlers.
+const MAX_AGENT_TURNS = 200
+const DEFAULT_AGENT_TIMEOUT_MS = 60_000
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const mcpSvc = yield* MCP.Service
+    const http = yield* HttpClient.HttpClient
+    const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
+    const spawner = yield* ChildProcessSpawner
+    const fs = yield* AppFileSystem.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
@@ -384,6 +942,16 @@ export const layer = Layer.effect(
         return { settings, cwd: instCtx.directory, seen: new Set<string>() } satisfies State
       }),
     )
+
+    // Registry built once per layer construction. WP-4D-2 wires `agent`; the full
+    // 5-type set (command/mcp/http/prompt/agent) is now implemented end-to-end.
+    const handlers: Record<string, HookHandler> = {
+      command: commandHandler,
+      mcp: makeMcpHandler(mcpSvc),
+      http: makeHttpHandler(http),
+      prompt: makePromptHandler(provider, auth),
+      agent: makeAgentHandler(provider, auth, spawner, fs),
+    }
 
     /**
      * Execute a single hook entry. Never throws. Returns the parsed JSON
@@ -395,41 +963,18 @@ export const layer = Layer.effect(
       cwd: string,
       inHook: boolean,
     ) {
-      const stdinJSON = JSON.stringify(envelope)
-
-      if (entry.type === "mcp") {
-        if (inHook) {
-          log.warn("nested mcp hook skipped (re-entry guard)", { command: entry.command })
-          return { json: undefined as HookJSONOutput | undefined, exitBlock: undefined as string | undefined }
+      const handler = handlers[entry.type]
+      if (!handler) {
+        // Defensive fallback: handlers table is exhaustive over the schema's 5 types
+        // (command/mcp/http/prompt/agent). This guards against future schema additions
+        // that miss handler registration. Currently dead-code by construction.
+        log.warn("hook type not registered (defensive fallback)", { type: entry.type, command: entry.command })
+        return {
+          json: undefined as HookJSONOutput | undefined,
+          exitBlock: `hook type "${entry.type}" not yet implemented` as string | undefined,
         }
-        const json = yield* invokeMcpHook(mcpSvc, entry.command, envelope)
-        return { json, exitBlock: undefined as string | undefined }
       }
-
-      const { exitCode, stdout, stderr, spawnError } = yield* Effect.promise(() =>
-        execShell(entry.command, stdinJSON, cwd, entry.timeout),
-      )
-
-      if (spawnError) {
-        return { json: undefined, exitBlock: undefined }
-      }
-
-      // Exit-code 2: block + stderr-as-reason (CC contract)
-      if (exitCode === 2) {
-        const reason = stderr.trim() || "Hook blocked execution"
-        return { json: parseStdout(stdout, entry.command), exitBlock: reason }
-      }
-
-      // Other non-zero exits: log and continue (do not abort main flow)
-      if (exitCode !== 0 && exitCode !== null) {
-        log.warn("hook command exited non-zero (non-blocking)", {
-          command: entry.command,
-          exitCode,
-          stderr: stderr.trim().slice(0, 200),
-        })
-      }
-
-      return { json: parseStdout(stdout, entry.command), exitBlock: undefined }
+      return yield* handler.run(entry as never, envelope, cwd, inHook)
     })
 
     const trigger = Effect.fn("SettingsHook.trigger")(function* (
@@ -449,7 +994,16 @@ export const layer = Layer.effect(
         if (!matches(group.matcher, target)) continue
 
         for (const entry of group.hooks) {
-          if (entry.type !== "command" && entry.type !== "mcp") continue
+          // Forward-compat: skip truly unknown types so future schema additions don't crash
+          // older handlers. Known types (command/mcp/http/prompt/agent) all flow into runEntry.
+          if (
+            entry.type !== "command" &&
+            entry.type !== "mcp" &&
+            entry.type !== "http" &&
+            entry.type !== "prompt" &&
+            entry.type !== "agent"
+          )
+            continue
 
           const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false)
 
@@ -472,15 +1026,21 @@ export const layer = Layer.effect(
           if (json.systemMessage) result.systemMessages.push(json.systemMessage)
 
           const hso = json.hookSpecificOutput
-          if (hso?.additionalContext && !s.seen.has(hso.additionalContext)) {
-            s.seen.add(hso.additionalContext)
-            result.additionalContexts.push(hso.additionalContext)
+          // Property-based narrowing — works across union variants without depending on
+          // hookEventName tag (which the fallback variant may also accept).
+          if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
+            const ctx = hso.additionalContext
+            if (!s.seen.has(ctx)) {
+              s.seen.add(ctx)
+              result.additionalContexts.push(ctx)
+            }
           }
-          if (hso?.permissionDecision) {
+          if (hso && "permissionDecision" in hso && hso.permissionDecision) {
             result.permissionDecision = hso.permissionDecision
-            result.permissionDecisionReason = hso.permissionDecisionReason
+            result.permissionDecisionReason =
+              "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
           }
-          if (hso?.updatedInput) {
+          if (hso && "updatedInput" in hso && hso.updatedInput) {
             result.updatedInput = hso.updatedInput
           }
         }
@@ -493,9 +1053,20 @@ export const layer = Layer.effect(
   }),
 )
 
-// defaultLayer provides MCP via MCP.defaultLayer; the shared memoMap in
-// makeRuntime deduplicates instances across services that all depend on MCP.
-export const defaultLayer = layer.pipe(Layer.provide(MCP.defaultLayer))
+// defaultLayer provides MCP, HttpClient, Provider, Auth, AppFileSystem, and
+// ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
+// its bash / read_file / list_dir / grep tools. Every module that consumes
+// these spawn/fs services closes them in its own defaultLayer (see
+// git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
+// in makeRuntime deduplicates the underlying instances across services.
+export const defaultLayer = layer.pipe(
+  Layer.provide(MCP.defaultLayer),
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(Provider.defaultLayer),
+  Layer.provide(Auth.defaultLayer),
+  Layer.provide(AppFileSystem.defaultLayer),
+  Layer.provide(CrossSpawnSpawner.defaultLayer),
+)
 
 // ── type:"mcp" hook execution ───────────────────────────────────
 

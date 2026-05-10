@@ -520,16 +520,26 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     { event: "PreToolUse", toolName: item.id, toolInput: args },
                     { sessionID: ctx.sessionID, transcriptPath: "" },
                   )
+                  // CC contract: permissionDecision="deny" is an explicit hook
+                  // verdict and short-circuits BEFORE the legacy `blocked` check.
+                  // allow/ask are decorative here — fork's Permission subsystem
+                  // lives inside individual tools and is not replaced at this layer.
+                  if (preHook.permissionDecision === "deny") {
+                    const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+                    return { title: "", metadata: {}, output: `Hook denied: ${reason}` }
+                  }
                   if (preHook.blocked) {
                     return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
                   }
-                  const result = yield* item.execute(args, ctx)
+                  // CC contract: hookSpecificOutput.updatedInput rewrites tool args
+                  const effectiveArgs = preHook.updatedInput ?? args
+                  const result = yield* item.execute(effectiveArgs, ctx)
                   // PostToolUse hook
                   const postHook = yield* settingsHook.trigger(
                     {
                       event: "PostToolUse",
                       toolName: item.id,
-                      toolInput: args,
+                      toolInput: effectiveArgs,
                       toolResponse: result.output,
                     },
                     { sessionID: ctx.sessionID, transcriptPath: "" },
@@ -597,6 +607,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 { event: "PreToolUse", toolName: key, toolInput: args },
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
+              // CC contract: deny is an explicit verdict — short-circuit before
+              // the legacy `blocked` check. allow/ask are decorative at this layer.
+              if (preHook.permissionDecision === "deny") {
+                const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+                return {
+                  title: "",
+                  metadata: {} as Record<string, unknown>,
+                  output: `Hook denied: ${reason}`,
+                  content: [{ type: "text" as const, text: `Hook denied: ${reason}` }],
+                }
+              }
               if (preHook.blocked) {
                 return {
                   title: "",
@@ -607,8 +628,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   ],
                 }
               }
+              // CC contract: hookSpecificOutput.updatedInput rewrites tool args
+              const effectiveArgs = preHook.updatedInput ?? args
               const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.tryPromise({
-                try: () => execute(args, opts),
+                try: () => execute(effectiveArgs, opts),
                 catch: (e) => new Error(`MCP tool "${key}" failed: ${e instanceof Error ? e.message : String(e)}`),
               })
               // PostToolUse hook
@@ -616,7 +639,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 {
                   event: "PostToolUse",
                   toolName: key,
-                  toolInput: args,
+                  toolInput: effectiveArgs,
                   toolResponse: result,
                 },
                 { sessionID: ctx.sessionID, transcriptPath: "" },
@@ -1431,6 +1454,30 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         if (submitHook.blocked) {
           log.warn("UserPromptSubmit blocked by hook", { reason: submitHook.blocked.reason })
           return message
+        }
+
+        // CC compatible: hookSpecificOutput.additionalContext from UserPromptSubmit hooks
+        // is wrapped and appended to the user message text (mirrors PreToolUse pattern at L557).
+        if (submitHook.additionalContexts.length > 0) {
+          const block = submitHook.additionalContexts
+            .map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`)
+            .join("")
+          const lastText = [...message.parts].reverse().find((p): p is MessageV2.TextPart => p.type === "text")
+          if (lastText) {
+            lastText.text += block
+            yield* sessions.updatePart(lastText)
+          } else {
+            const newPart: MessageV2.TextPart = {
+              id: PartID.ascending(),
+              messageID: message.info.id,
+              sessionID: input.sessionID,
+              type: "text",
+              text: block.replace(/^\n/, ""),
+              synthetic: true,
+            }
+            message.parts.push(newPart)
+            yield* sessions.updatePart(newPart)
+          }
         }
 
         const permissions: Permission.Ruleset = []
