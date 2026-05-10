@@ -106,3 +106,23 @@ P1 鲁棒性收口，针对热路径性能、未来 trust 系统接入、plugin 
 - **性能**：`trigger` 入口新增 O(1) 短路 — 当 settings 链与 SessionHooks 都没有当前事件的条目时，跳过 envelope 构建 / matcher 拼接 / regex 匹配热路径，直接返回空 `TriggerResult`。`SessionHooks` 同步新增 `hasForEvent(sessionID, event)` 探测 API。
 - **trust**：`Settings` schema 新增 `allowUntrusted?: boolean` 字段以兼容未来配置；运行时**暂未接入** — fork 当前无 workspace-trust 基础设施（不存在 `Project.isTrusted` 等），trigger 短路之后留 TODO 注释块锁定接入点 + 契约（trust gate 失败必须 silent allow，禁止 throw/deny）。
 - **plugin GC 竞态**：command handler 的 `execShell` 在 `child_process.spawn` 之前对 `entry.__sourceDir` 做 `existsSync` 预检；目录已被 GC（plugin 卸载、repo 清理等）时返回 `exitCode: 0` + 空 stdout 走 silent allow，而非让 shell 把 `python3 <missing>.py` 转成 exit 2 误判为 block。仅 command 类型受影响（agent/mcp/http/prompt 不依赖 plugin 物理目录）。
+
+## CC 兼容性总结（阶段 7 e2e 验证）
+
+通过 CC 官方文档 verbatim 示例 e2e 跑通（8/8 PASS），fork = CC hook 协议**严格超集 + 2 项行为差异**：
+
+**6 项严格超集**（CC 配置在 fork 全部通用）：
+1. case-insensitive matcher（fork 加 `i` flag，CC 精确串配置仍命中）
+2. 6 层 settings（CC 三层完整保留 + `.opencode/` 平行层追加）
+3. `hasHookForEvent` O(1) 短路（外部不可观察的纯优化）
+4. SessionHooks 动态注入（与 file 链平等 concat，CC 仅 file 链）
+5. `__sourceDir` GC 竞态保护（CC 配置无此字段，路径走不到）
+6. `continue=false` 双层 break（fork 此前失效，现补齐 CC spec）
+
+**1 项 schema-only**：`allowUntrusted` 接受不会 fail-parse，运行时占位（WP-6B TODO）。
+
+**2 项行为差异**（迁移必看）：
+- **`suppressOutput` 默认翻转**：CC=`false`（渲染 stdout 到 UI），fork=`true`（不渲染）。SessionStart/UserPromptSubmit 通过 stdout 直接注入文本在 fork 不会自动渲染，应改用 `hookSpecificOutput.additionalContext`（阶段 5 真注入）。
+- **`Notification` 显式不支持**：CC 通过 hook 推送权限/空闲通知，fork 走 `Permission.Service` + 内部 bus；配置 `Notification` hook 在 fork 不生效。
+
+权威说明详见 `RELEASE_NOTES.md` ⟶「Hook 协议 CC 兼容性总结（阶段 7 验证）」段。

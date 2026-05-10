@@ -190,3 +190,11 @@ hook 进程可向 stdout 写一行 JSON：
 | WP-6C | command handler `execShell` 在 `child_process.spawn` 之前对 `entry.__sourceDir` 做 `existsSync` 预检；缺失时 silent allow（`exitCode: 0` + 空 stdout）而非 deny — 选 silent allow 是因 fork hook 协议铁律「故障不阻塞主流程」与 GC 竞态属于运行时偶发故障类一致；只挂 command handler（agent/mcp/http/prompt 不依赖 plugin 物理目录） | `settings.ts:508-515` |
 
 测试基线：阶段 6 净增 +3 测试，hook 60→63 PASS / 全量 2361→2365 PASS / 0 回归。
+
+## 13. 阶段 7 最终验收（已交付）
+
+收口三件事：
+
+1. **全量回归**：`bun test test/` = **2365 PASS / 20 skip / 2 todo / 1 fail / 190 files**；唯一 fail 是 `test/tool/truncation.test.ts > cleanup > 7 days`（PRE-EXISTING 时间敏感测试，与 hook 0 关联）。`bun turbo typecheck` = 13 包全绿。
+2. **CC 示例 e2e 兼容**：以 CC 官方文档 verbatim 配置（PreToolUse+Bash matcher / PostToolUse+Edit|Write pipe-list / SessionStart additionalContext）做 8 用例 e2e 跑通，**8/8 PASS**；验证脚手架（`test/hook/cc-compat.test.ts`）确认契约后已删除，hook 套件回到 63 PASS 基线。
+3. **兼容性矩阵文档化**：6 项严格超集 + 1 项 schema-only + 2 项行为差异（`suppressOutput` 默认翻转 / `Notification` 显式不支持）已在 `RELEASE_NOTES.md` ⟶「Hook 协议 CC 兼容性总结（阶段 7 验证）」段定稿，作为 fork 与 CC 差异的权威说明。

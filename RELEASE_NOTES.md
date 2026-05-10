@@ -95,3 +95,24 @@ git pull origin main
 - **plugin `__sourceDir` 缺失自动 silent allow**：command handler 在 `spawn` 前对 `entry.__sourceDir` 做 `existsSync` 预检；插件目录已被 GC（卸载 / repo 清理）时返回 `exitCode: 0` + 空 stdout，而非让 shell 把缺失脚本转成 exit 2 误判为 block。
 
 阶段 6 全量回归：**2365 PASS / 0 回归**，净增 3 测试。
+
+## Hook 协议 CC 兼容性总结（阶段 7 验证）
+
+通过 CC 官方文档 verbatim 示例 e2e 验证（8/8 PASS），fork 是 CC hook 协议的**严格超集 + 2 项行为差异**：
+
+**6 项严格超集**（CC 配置在 fork 全部通用，反向不一定）：
+1. case-insensitive matcher：fork 用 `i` flag，CC 配置精确匹配仍命中
+2. 6 层 settings：CC 三层（user / project / local）完全保留 + fork 追加 `.opencode/` 平行层，覆盖顺序不冲突
+3. hasHookForEvent O(1) 短路：纯优化，外部不可观察
+4. SessionHooks 动态注入：与 file 链平等 concat 不互斥，CC 仅有 file 链 fork 多了 session 链
+5. `__sourceDir` GC 竞态保护：CC 无此字段所以路径走不到；fork command hook 的 plugin 目录被 GC 时 silent allow
+6. continue=false 双层 break：fork 此前失效，现补齐 CC spec 协议
+
+**1 项 schema-only**（向前兼容）：
+- `allowUntrusted` 字段接受不会 fail-parse；运行时占位待 fork trust 系统接入（WP-6B TODO）
+
+**2 项明确行为差异**（迁移注意）：
+- **`suppressOutput` 默认翻转**：CC 默认 `false`（渲染 hook stdout 到 UI），fork 默认 `true`（不渲染）。SessionStart/UserPromptSubmit 直接通过 stdout 注入文本在 fork 不会自动渲染，应改用 `hookSpecificOutput.additionalContext`（fork 阶段 5 已实现真注入）
+- **`Notification` event 显式不支持**：CC 通过 hook 推送 permission/idle 通知，fork 走 `Permission.Service` + 内部 bus，配置 `Notification` hook 在 fork 不生效
+
+**e2e 验证基线**：hook 63 PASS / 全量 2365 PASS / typecheck PASS（仅 1 PRE-EXISTING truncation fail 与 hook 无关）

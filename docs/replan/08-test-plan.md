@@ -171,3 +171,12 @@ bun run dev
 | WP-6C plugin `__sourceDir` 缺失 silent allow | `test/hook/settings.test.ts`：先正常 trigger 验链路通（hook exit 2 → blocked）→ rm `.claude` → 第二次 trigger 期望 `result.blocked === undefined` | 1 |
 
 阶段 6 净增 **3 测试**，hook test 60 → **63 PASS**，全量 `bun test test/` = **2361 → 2365 PASS / 20 skip / 2 todo**（pre-existing fail 与本阶段 0 关联）。
+
+## 12. Phase 7 — 最终验收（已交付）
+
+| 验收项 | 实测 |
+|---|---|
+| 全量回归 | `bun test test/` = **2365 PASS / 20 skip / 2 todo / 1 fail**（唯一 fail 是 `test/tool/truncation.test.ts > cleanup > 7 days`，PRE-EXISTING 时间敏感，与 hook 0 关联）|
+| typecheck | `bun turbo typecheck` 13 包全绿 |
+| CC e2e 兼容 | CC 官方文档 verbatim 配置 8 用例 e2e（PreToolUse+Bash / PostToolUse+Edit\|Write / SessionStart additionalContext）→ **8/8 PASS**；临时验证脚手架 `test/hook/cc-compat.test.ts` 确认契约后已删除，hook 套件回到 63 PASS 基线 |
+| 兼容性矩阵文档化 | **6 项严格超集 + 1 项 schema-only + 2 项行为差异**（`suppressOutput` 默认翻转 / `Notification` 显式不支持）已在 `RELEASE_NOTES.md` ⟶「Hook 协议 CC 兼容性总结（阶段 7 验证）」段定稿 |
