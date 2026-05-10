@@ -146,3 +146,18 @@ bun run dev
 3. 端到端冒烟脚本：~~可考虑用 `webapp-testing` skill / Playwright 包装 §6~~ — 修正：TUI 是终端应用而非 web，Playwright 不适用；可用 `node-pty` + expect-style 断言包装 §6，但工程量较大，目前继续手动
 4. **OPENTUI 升级（决策：保守保持 0.1.105）**：上游已发 `@opentui/{core,solid}@0.2.1`（跨 minor，预期 breaking）。当前 fork 在 0.1.105 上验证稳定，升级收益不明确、风险高。后续若要升 0.2.x，须新开探路分支跑全套手动 TUI 冒烟（§6）+ 自动化测试，并按 breaking change 清单逐项迁移。
 5. ~~**其他依赖升级**：上游 v1.14.30 基线本身已携带较新依赖快照；除非出现安全 CVE 或具体功能需要，本 fork 不主动追依赖升级，避免引入与稳定性补丁无关的风险面。~~ — ✅ 已完成 patch 级批量升级（commit 见下）：47 项 patch（`@ai-sdk/*` 全家、`@parcel/watcher*` 9 个平台 binary、`@octokit/*`、`@solid-primitives/*`、`@types/*`、`turndown`、`glob` 等）；明确排除 3 项：`@pierre/diffs`（beta→stable 跨度）、`solid-js`（被 patches/solid-js@1.9.10.patch 锁定）、`@typescript/native-preview`（半年跨度 dev nightly）。所有 minor/major 升级保持原决策——保守不动
+
+## 10. Phase 5 — Hook 协议补强验收（已交付）
+
+| WP | 测试文件 | 用例数 |
+|---|---|---|
+| WP-5A SessionStart additionalContexts | `test/hook/start-context.test.ts`（单元）+ `test/session/prompt.test.ts`（集成 +2） | 2 + 2 |
+| WP-5B continue=false 短路 | `test/session/prompt.test.ts`（集成 +2） | 2 |
+| WP-5C suppressOutput | schema-only no-op，0 用例 | 0 |
+| WP-5D SessionHooks 动态注入 | `test/hook/session-hooks.test.ts`（add/remove/list/clear/once + Stop→SubagentStop 翻译） | 5 |
+
+阶段 5 净增 **9 测试**（spec 门禁 ≥8），全量 `bun test test/` = **2361 PASS / 20 skip / 2 todo / 2 fail（pre-existing 时序非关联）/ 10917 expects / 190 files / 190.96s**。
+
+回归触发器补充：
+- 改 `src/hook/settings.ts`、`src/hook/start-context.ts`、`src/hook/session-hooks.ts` → 必跑 `test/hook/` 全部 + `test/session/prompt.test.ts`
+- 改 SessionStart drain 注入点（prompt.ts:~1481）→ 必跑 `test/session/prompt.test.ts` + `test/hook/start-context.test.ts`

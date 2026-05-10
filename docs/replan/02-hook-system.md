@@ -165,3 +165,18 @@ hook 进程可向 stdout 写一行 JSON：
 
 - `--hook-debug` flag：打印每次 hook 调用的 stdin/stdout/exit code；
 - `opencode hook list/test` 子命令：诊断当前 hook 配置加载情况。
+
+## 11. 阶段 5 已实施（hook 协议补强 P0/P1）
+
+| WP | 内容 | 落点 |
+|---|---|---|
+| WP-5A | `SessionStart` 返回的 `additionalContexts` 真注入到首轮 user message（之前 silent drop） | 新建 `src/hook/start-context.ts`（InstanceState 暂存）+ `share/session.ts` 改 `Effect.exit` append + `prompt.ts` 首轮 drain |
+| WP-5B | stdout 控制 JSON `{continue: false}` 真短路：trigger 双层 break + 4 调用点（PreToolUse/PostToolUse/UserPromptSubmit/PreCompact）消费 `preventContinuation` early return | `settings.ts` trigger 主循环；`prompt.ts` / `compaction.ts` 调用点 |
+| WP-5C | `suppressOutput` schema 兼容（接受字段，运行时 no-op，因 fork 默认不渲染 hook stdout） | `settings.ts` 6 行 docstring |
+| WP-5D | Session-scoped hook 动态注入：`SessionHooks` Service（add/remove/list/clear）+ `once:true` 自动清理 + `ctx.isSubAgent` 时 `Stop→SubagentStop` 翻译 | 新建 `src/hook/session-hooks.ts`；`settings.ts` trigger 内合并 + Layer.provide |
+
+剩余工作（独立 WP，未阻塞 fork.1）：
+- frontmatter parser 对接（agent prompt 内联 hook 配置）
+- `SessionHooks.clear` 在 `SessionEnd` / `Session.delete` 时调用以避免长会话泄漏
+
+测试基线：阶段 5 净增 +9 测试（≥8 spec 门禁），全量 2361 PASS / 0 回归。

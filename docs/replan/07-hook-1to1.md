@@ -87,3 +87,14 @@
 - **Step 2b**：更新 `prompt.ts` 改用新 trigger API + wire UserPromptSubmit/Stop
 - **Step 2c**：wire 剩余 5 个事件到对应文件
 - **Step 2d**：实现 `type: "mcp"` hook 解析与执行
+
+## 阶段 5 协议补强（已实施）
+
+针对 stdin/stdout 协议的 4 项 P0/P1 兑现：
+
+- **stdin SessionStart `additional_context`**：fork 之前 silent drop；阶段 5 起经 `HookStartContext` 暂存，首轮 user message 注入 `<hook_additional_context>...</hook_additional_context>` 块（与 UserPromptSubmit 同款封装）。
+- **stdout `{continue: false}`**：阶段 5 起在 `trigger` 主循环双层 break；4 个调用点（PreToolUse/PostToolUse/UserPromptSubmit/PreCompact）消费 `result.preventContinuation` early return。
+- **stdout `suppressOutput`**：fork 默认不渲染 hook stdout 到 UI，schema 接受字段以保兼容，运行时 no-op（已在 `settings.ts` 注释固化）。
+- **Session-scoped hooks（fork 扩展，非 CC 协议）**：新增 `SessionHooks` Service 支持运行时 `add/remove/list/clear`；`once:true` 自动清理；`ctx.isSubAgent === true` 时 `Stop` 事件查找翻译为 `SubagentStop`，保持上层 dispatcher 语义不变。
+
+未实装：frontmatter parser（agent prompt 内联 hook 配置），独立 WP。

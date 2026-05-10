@@ -162,3 +162,20 @@ in mock `HttpClient` / `Provider` / `Auth` / `MCP` layers via
 `Layer.fresh(SettingsHook.layer)`. The fail-safe contract — handler errors
 must converge on `result.blocked === undefined` — is the single non-negotiable
 invariant every new test must assert.
+
+## Session-scoped hooks (fork extension)
+
+`src/hook/session-hooks.ts` exposes `SessionHooks` — a Service with
+`add / remove / list / clear` for registering hooks at runtime, scoped to a
+single session. Entries with `once: true` are auto-removed after firing.
+`SessionHooks` is provided as an internal dependency of `SettingsHook.layer`
+(`Layer.provide(SessionHooks.defaultLayer)`), so call sites of `trigger`
+require zero changes — session entries are merged transparently inside the
+trigger reducer. When `ctx.isSubAgent === true`, `Stop` event lookup is
+translated to `SubagentStop` for session-hook matching only; upstream
+dispatchers in `prompt.ts` (main session) and `task.ts` (sub-agent) continue
+to emit their original event names.
+
+`SessionHooks.clear` is intentionally not yet wired — call it from a
+`SessionEnd` / `Session.delete` hook in a future WP to avoid long-session
+leaks.

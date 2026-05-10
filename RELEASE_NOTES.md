@@ -78,3 +78,12 @@ git checkout replan/v1.14.30-fork.1
 ```bash
 git pull origin main
 ```
+
+## Hook 协议补强（阶段 5）
+
+- **SessionStart additionalContexts 真兑现**：hook 在 SessionStart 返回的 `additionalContext` 现在真正注入到首轮 user message（之前 silent drop），封装为 `<hook_additional_context>...</hook_additional_context>`。
+- **continue=false 真短路**：hook 返回 `{continue: false}` 现在真正中断后续 hooks 链 + 4 个调用点消费（PreToolUse / PostToolUse / UserPromptSubmit / PreCompact）。
+- **suppressOutput**：fork 默认不渲染 hook stdout 到 UI，schema 接受字段但运行时 no-op（兼容 CC 协议）。
+- **Session-scoped hook 动态注入（fork 扩展）**：新 `SessionHooks` API 支持运行时添加 session-scoped hooks（`once:true` 自动清理）；`Stop` 事件在 sub-agent 上下文自动翻译为 `SubagentStop`（仅影响 session-hook 查找，上层 dispatcher 语义不变）。
+
+阶段 5 全量回归：**2361 PASS / 0 回归**，净增 9 测试。
