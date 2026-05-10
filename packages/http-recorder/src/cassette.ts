@@ -6,10 +6,9 @@ import { decodeCassette, encodeCassette, type Cassette, type CassetteMetadata, t
 
 const DEFAULT_RECORDINGS_DIR = path.resolve(process.cwd(), "test", "fixtures", "recordings")
 
-export class CassetteNotFoundError extends Schema.TaggedErrorClass<CassetteNotFoundError>()(
-  "CassetteNotFoundError",
-  { cassetteName: Schema.String },
-) {
+export class CassetteNotFoundError extends Schema.TaggedErrorClass<CassetteNotFoundError>()("CassetteNotFoundError", {
+  cassetteName: Schema.String,
+}) {
   override get message() {
     return `Cassette "${this.cassetteName}" not found`
   }
