@@ -41,6 +41,7 @@ import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { Question } from "@/question"
 import { SettingsHook } from "@/hook/settings"
+import { HookStartContext } from "@/hook/start-context"
 import { SessionStatus } from "./status"
 import { LLM } from "./llm"
 import { Shell } from "@/shell/shell"
@@ -165,6 +166,7 @@ export const layer = Layer.effect(
     const sys = yield* SystemPrompt.Service
     const llm = yield* LLM.Service
     const settingsHook = yield* SettingsHook.Service
+    const startContext = yield* HookStartContext.Service
     const todo = yield* Todo.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
@@ -531,6 +533,12 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   if (preHook.blocked) {
                     return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
                   }
+                  // CC contract: continue=false short-circuits tool execution
+                  // (treated as deny-equivalent; stopReason becomes the user-visible reason).
+                  if (preHook.preventContinuation) {
+                    const reason = preHook.stopReason ?? "Hook requested stop"
+                    return { title: "", metadata: {}, output: `Hook stopped: ${reason}` }
+                  }
                   // CC contract: hookSpecificOutput.updatedInput rewrites tool args
                   const effectiveArgs = preHook.updatedInput ?? args
                   const result = yield* item.execute(effectiveArgs, ctx)
@@ -544,7 +552,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     },
                     { sessionID: ctx.sessionID, transcriptPath: "" },
                   )
-                  const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
+                  // CC contract: continue=false on PostToolUse skips post-aggregation
+                  // (additionalContext / systemMessage injection). Tool result still returns.
+                  const postContexts = postHook.preventContinuation ? [] : postHook.additionalContexts
+                  const hookContexts = [...preHook.additionalContexts, ...postContexts]
                   // Inject TODO reminder into every tool result so the LLM stays on track
                   if (input.agent.todo_reminder !== false) {
                     const todos = yield* todo.get(input.session.id)
@@ -628,6 +639,17 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   ],
                 }
               }
+              // CC contract: continue=false short-circuits tool execution
+              // (treated as deny-equivalent; stopReason becomes the user-visible reason).
+              if (preHook.preventContinuation) {
+                const reason = preHook.stopReason ?? "Hook requested stop"
+                return {
+                  title: "",
+                  metadata: {} as Record<string, unknown>,
+                  output: `Hook stopped: ${reason}`,
+                  content: [{ type: "text" as const, text: `Hook stopped: ${reason}` }],
+                }
+              }
               // CC contract: hookSpecificOutput.updatedInput rewrites tool args
               const effectiveArgs = preHook.updatedInput ?? args
               const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.tryPromise({
@@ -644,7 +666,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 },
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
-              const hookContexts = [...preHook.additionalContexts, ...postHook.additionalContexts]
+              // CC contract: continue=false on PostToolUse skips post-aggregation
+              // (additionalContext / systemMessage injection). Tool result still returns.
+              const postContexts = postHook.preventContinuation ? [] : postHook.additionalContexts
+              const hookContexts = [...preHook.additionalContexts, ...postContexts]
               yield* plugin.trigger(
                 "tool.execute.after",
                 { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId, args },
@@ -1455,11 +1480,43 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           log.warn("UserPromptSubmit blocked by hook", { reason: submitHook.blocked.reason })
           return message
         }
+        // CC contract: continue=false on UserPromptSubmit aborts the LLM call
+        // (same short-circuit as blocked; user message is already persisted).
+        if (submitHook.preventContinuation) {
+          log.warn("UserPromptSubmit stopped by hook", { reason: submitHook.stopReason ?? "continue=false" })
+          return message
+        }
 
         // CC compatible: hookSpecificOutput.additionalContext from UserPromptSubmit hooks
         // is wrapped and appended to the user message text (mirrors PreToolUse pattern at L557).
         if (submitHook.additionalContexts.length > 0) {
           const block = submitHook.additionalContexts
+            .map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`)
+            .join("")
+          const lastText = [...message.parts].reverse().find((p): p is MessageV2.TextPart => p.type === "text")
+          if (lastText) {
+            lastText.text += block
+            yield* sessions.updatePart(lastText)
+          } else {
+            const newPart: MessageV2.TextPart = {
+              id: PartID.ascending(),
+              messageID: message.info.id,
+              sessionID: input.sessionID,
+              type: "text",
+              text: block.replace(/^\n/, ""),
+              synthetic: true,
+            }
+            message.parts.push(newPart)
+            yield* sessions.updatePart(newPart)
+          }
+        }
+
+        // SessionStart additionalContexts — drained on first user turn only.
+        // The consume() call is idempotent: subsequent prompts return []
+        // because share/session.ts only writes once per session creation.
+        const startCtx = yield* startContext.consume(input.sessionID)
+        if (startCtx.length > 0) {
+          const block = startCtx
             .map((c) => `\n<hook_additional_context>${c}</hook_additional_context>`)
             .join("")
           const lastText = [...message.parts].reverse().find((p): p is MessageV2.TextPart => p.type === "text")
@@ -1929,6 +1986,7 @@ export const defaultLayer = Layer.suspend(() =>
         Bus.layer,
         CrossSpawnSpawner.defaultLayer,
         Todo.defaultLayer,
+        HookStartContext.defaultLayer,
       ),
     ),
   ),

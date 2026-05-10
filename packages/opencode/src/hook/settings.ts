@@ -58,6 +58,9 @@ import { Provider } from "@/provider/provider"
 import { Auth } from "@/auth"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { buildAgentTools } from "./agent-tools"
+import { SessionHooks } from "./session-hooks"
+import type { SessionHookEntry } from "./session-hooks"
+import { SessionID } from "@/session/schema"
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -131,6 +134,13 @@ interface Settings {
 export interface HookJSONOutput {
   continue?: boolean
   stopReason?: string
+  /**
+   * Schema-accepted no-op (WP-5C). Fork does not render hook stdout to UI by
+   * default — `suppressOutput=true` is fork's default behavior, and
+   * `suppressOutput=false` would require new fork capability ("show hook
+   * stdout in UI") whose value is reverse to its cost. Field reserved for CC
+   * schema compatibility only; no runtime processing.
+   */
   suppressOutput?: boolean
   systemMessage?: string
   decision?: "approve" | "block"
@@ -237,6 +247,16 @@ export interface TriggerContext {
   agentID?: string
   /** CC envelope: subagent type 名称 */
   agentType?: string
+  /**
+   * Mark this trigger as running in a sub-agent context (parentID set on the
+   * underlying session). When true, an incoming `event: "Stop"` payload is
+   * routed to **SubagentStop**-registered session hooks instead of Stop ones,
+   * matching CC's lifecycle semantics. Only affects the SessionHookStore lookup;
+   * the on-disk settings chain is still indexed by `payload.event` verbatim
+   * (callers like task.ts already explicitly fire SubagentStop, so settings-side
+   * routing was already correct before WP-5D).
+   */
+  isSubAgent?: boolean
 }
 
 export interface TriggerResult {
@@ -935,6 +955,7 @@ export const layer = Layer.effect(
     const auth = yield* Auth.Service
     const spawner = yield* ChildProcessSpawner
     const fs = yield* AppFileSystem.Service
+    const sessionHooks = yield* SessionHooks.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
@@ -984,8 +1005,33 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
 
-      const matchers = s.settings.hooks?.[payload.event]
-      if (!matchers?.length) return result
+      // ── Session-scoped hook resolution (WP-5D) ────────────────
+      // Sub-agent stop semantics: if the caller marks this trigger as
+      // running inside a sub-agent and fires `Stop`, look up SubagentStop
+      // session hooks. Settings-file lookup still uses payload.event verbatim
+      // (the on-disk chain is already correctly addressed by callers).
+      const sessionEvent: HookEvent =
+        ctx.isSubAgent && payload.event === "Stop" ? "SubagentStop" : payload.event
+      const sessionEntries = ctx.sessionID
+        ? yield* sessionHooks.list(SessionID.make(ctx.sessionID), sessionEvent)
+        : ([] as readonly SessionHookEntry[])
+
+      const fileMatchers = s.settings.hooks?.[payload.event] ?? []
+      // Tag matchers with their origin so once-cleanup can remove session ones
+      // after execution. The settings chain matchers carry no _sessionEntry.
+      type RunMatcher = HookMatcher & { _sessionEntry?: SessionHookEntry }
+      const matchers: RunMatcher[] = [
+        ...fileMatchers.map((m) => m as RunMatcher),
+        ...sessionEntries.map(
+          (e) =>
+            ({
+              matcher: e.matcher,
+              hooks: e.hooks as HookCommand[],
+              _sessionEntry: e,
+            }) satisfies RunMatcher,
+        ),
+      ]
+      if (!matchers.length) return result
 
       const target = matcherTarget(payload)
       const envelope = buildStdinEnvelope(payload, ctx, s.cwd)
@@ -1012,7 +1058,13 @@ export const layer = Layer.effect(
             result.blocked = { reason: exitBlock, command: entry.command }
           }
 
-          if (!json) continue
+          if (!json) {
+            // once: true entries are cleared after running, regardless of result.
+            if (group._sessionEntry?.once && ctx.sessionID) {
+              yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+            }
+            continue
+          }
 
           if (json.decision === "block" && !result.blocked) {
             result.blocked = { reason: json.reason ?? "Blocked by hook", command: entry.command }
@@ -1043,7 +1095,19 @@ export const layer = Layer.effect(
           if (hso && "updatedInput" in hso && hso.updatedInput) {
             result.updatedInput = hso.updatedInput
           }
+
+          // once: true cleanup — runs after aggregating this entry's json so
+          // additionalContext etc. still surface on the first (and only) firing.
+          if (group._sessionEntry?.once && ctx.sessionID) {
+            yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+          }
+
+          // CC contract: continue=false short-circuits remaining hooks in this
+          // matcher (and below, in subsequent matchers). Aggregation for the
+          // current entry's json has already happened above — break only after.
+          if (result.preventContinuation) break
         }
+        if (result.preventContinuation) break
       }
 
       return result
@@ -1066,6 +1130,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(AppFileSystem.defaultLayer),
   Layer.provide(CrossSpawnSpawner.defaultLayer),
+  Layer.provide(SessionHooks.defaultLayer),
 )
 
 // ── type:"mcp" hook execution ───────────────────────────────────

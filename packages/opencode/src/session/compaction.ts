@@ -408,6 +408,11 @@ export const layer: Layer.Layer<
         log.warn("PreCompact blocked by hook", { reason: preCompact.blocked.reason })
         return "stop" as const
       }
+      // CC contract: continue=false aborts compaction (same short-circuit as blocked).
+      if (preCompact.preventContinuation) {
+        log.warn("PreCompact stopped by hook", { reason: preCompact.stopReason ?? "continue=false" })
+        return "stop" as const
+      }
 
       // Allow plugins to inject context or replace compaction prompt.
       const compacting = yield* plugin.trigger(

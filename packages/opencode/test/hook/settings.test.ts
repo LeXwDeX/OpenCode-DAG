@@ -28,6 +28,7 @@ import { provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { SettingsHook } from "../../src/hook/settings"
 import type { HookEvent, HookPayload, TriggerContext } from "../../src/hook/settings"
+import { SessionHooks } from "../../src/hook/session-hooks"
 import { MCP } from "../../src/mcp"
 import { Provider } from "../../src/provider/provider"
 import { Auth } from "../../src/auth"
@@ -297,6 +298,78 @@ describe("SettingsHook.trigger / Stop", () => {
   )
 })
 
+describe("SettingsHook.trigger / WP-5B continue=false short-circuit", () => {
+  // Strategy: each hook command writes a marker file. After trigger we list
+  // the directory and assert which markers exist — the second hook (post
+  // continue=false) must be absent.
+  async function writeShortCircuitSettings(dir: string, mode: "inner" | "outer") {
+    const mk = (name: string, json?: string) => {
+      const marker = path.join(dir, name).replace(/'/g, "'\\''")
+      const stdout = (json ?? "").replace(/'/g, "'\\''")
+      return `touch '${marker}'; printf '%s' '${stdout}'`
+    }
+    const stop1 = JSON.stringify({ continue: false, stopReason: "halt" })
+    const hook1 = { type: "command", command: mk("hit-1", stop1) }
+    const hook2 = { type: "command", command: mk("hit-2") }
+    const settings =
+      mode === "inner"
+        ? {
+            hooks: {
+              Stop: [{ matcher: "*", hooks: [hook1, hook2] }],
+            },
+          }
+        : {
+            hooks: {
+              Stop: [
+                { matcher: "*", hooks: [hook1] },
+                { matcher: "*", hooks: [hook2] },
+              ],
+            },
+          }
+    await fs.mkdir(path.join(dir, ".opencode"), { recursive: true })
+    await fs.writeFile(path.join(dir, ".opencode", "settings.json"), JSON.stringify(settings))
+  }
+
+  it.live("inner-loop break: subsequent hooks in same matcher are skipped", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => writeShortCircuitSettings(dir, "inner"))
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger({ event: "Stop", stopHookActive: false }, ctx)
+        expect(result.preventContinuation).toBe(true)
+        expect(result.stopReason).toBe("halt")
+        const ran1 = yield* Effect.promise(() =>
+          fs.access(path.join(dir, "hit-1")).then(() => true).catch(() => false),
+        )
+        const ran2 = yield* Effect.promise(() =>
+          fs.access(path.join(dir, "hit-2")).then(() => true).catch(() => false),
+        )
+        expect(ran1).toBe(true)
+        expect(ran2).toBe(false)
+      }),
+    ),
+  )
+
+  it.live("outer-loop break: subsequent matchers are skipped", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => writeShortCircuitSettings(dir, "outer"))
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger({ event: "Stop", stopHookActive: false }, ctx)
+        expect(result.preventContinuation).toBe(true)
+        const ran1 = yield* Effect.promise(() =>
+          fs.access(path.join(dir, "hit-1")).then(() => true).catch(() => false),
+        )
+        const ran2 = yield* Effect.promise(() =>
+          fs.access(path.join(dir, "hit-2")).then(() => true).catch(() => false),
+        )
+        expect(ran1).toBe(true)
+        expect(ran2).toBe(false)
+      }),
+    ),
+  )
+})
+
 describe("SettingsHook.trigger / SubagentStop", () => {
   it.live("envelope carries stop_hook_active for subagent variant", () =>
     provideTmpdirInstance((dir) =>
@@ -556,6 +629,7 @@ function settingsHookWithHttp(httpLayer: Layer.Layer<HttpClient.HttpClient, any>
     Layer.provide(Auth.defaultLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
+    Layer.provide(SessionHooks.defaultLayer),
     Layer.provideMerge(infra),
   )
 }
@@ -693,6 +767,7 @@ function settingsHookWithProviderAuth(
     Layer.provide(authLayer),
     Layer.provide(AppFileSystem.defaultLayer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
+    Layer.provide(SessionHooks.defaultLayer),
     Layer.provideMerge(infra),
   )
 }

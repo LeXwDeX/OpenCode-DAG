@@ -56,6 +56,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "../../src/file/ripgrep"
 import { Format } from "../../src/format"
 import { SettingsHook } from "../../src/hook/settings"
+import { HookStartContext } from "../../src/hook/start-context"
 
 void Log.init({ print: false })
 
@@ -116,6 +117,7 @@ function makeHttp() {
     Command.defaultLayer,
     Permission.defaultLayer,
     SettingsHook.defaultLayer,
+    HookStartContext.defaultLayer,
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,
