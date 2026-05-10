@@ -8,7 +8,7 @@
 - 配置位置：`~/.claude/settings.json`、`<project>/.claude/settings.json`、`<project>/.claude/settings.local.json`
 - 配置 schema：`hooks: { <EventName>: [{ matcher?: string, hooks: [{ type: "command", command: string, timeout?: number }] }] }`
 - 调用约定：spawn 子进程，stdin 收 JSON，stdout 可选 JSON 控制，exit code 决定阻断/放行；
-- 事件名：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、`SubagentStop`、`Notification`、`PreCompact`、`SessionStart`、`SessionEnd`。
+- 事件名（fork 实现 8 个，去掉 CC 的 `Notification` —— 权限提示走内部 bus）：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、`SubagentStop`、`PreCompact`、`SessionStart`、`SessionEnd`。
 
 ## 2. 与现有 OpenCode plugin hook 的关系
 
@@ -91,7 +91,7 @@ packages/opencode/src/hook/
 | `UserPromptSubmit` | `prompt` | 可阻断；可通过 stdout JSON `{decision: "block", reason}` 阻止提交 |
 | `Stop` | `stop_hook_active` | session 即将停止 |
 | `SubagentStop` | `stop_hook_active` | 子 agent 完成 |
-| `Notification` | `message` | OpenCode 主动通知（idle、permission 待批） |
+| `Notification` | `message` | _未实现 (removed in fork)_ — 权限提示通过内部 bus 暴露 |
 | `PreCompact` | `trigger`, `custom_instructions?` | 上下文压缩前 |
 | `SessionStart` | `source` | `startup` / `resume` / `clear` |
 | `SessionEnd` | `reason` | `clear` / `logout` / `exit` |
@@ -134,7 +134,7 @@ hook 进程可向 stdout 写一行 JSON：
 | `UserPromptSubmit` | `session/prompt.ts` 进 runLoop 之前 |
 | `PreToolUse` | `session/prompt.ts` 调用 tool 之前（permission 检查同位） |
 | `PostToolUse` | `session/prompt.ts` 收到 tool result 之后 |
-| `Notification` | 现有 `notification` 通道接入 |
+| `Notification` | _removed in fork_ — 不接入，由内部 permission bus 兜底 |
 | `Stop` | runLoop 终止 |
 | `SubagentStop` | task / scout agent 结束 |
 | `PreCompact` | session compaction 前 |

@@ -10,7 +10,7 @@
 本 fork 在官方 opencode v1.14.30 基线上重建关键能力，遵循 `docs/replan/` 三阶段规划：
 
 - **Phase 1（bugfix-merge）**：从历史 fork 移植已验证的稳定性补丁；
-- **Phase 2-3（hook 系统重建）**：1:1 兼容 Claude Code 的 9 类 hook 事件；
+- **Phase 2-3（hook 系统重建）**：1:1 兼容 Claude Code 的 8 类 hook 事件（fork 不实现 CC 的 `Notification`，权限提示走内部 bus）；
 - **Phase 4（github-proxy + TUI quota）**：内网 Copilot 代理 provider + 配额状态栏。
 
 ## 关键变更（按提交时序）
@@ -24,7 +24,7 @@
 ### Hook 系统（Phase 2-3）
 
 - `30a5f7dbc` **功能** Phase 3-Step1：落地 Claude Code 兼容 hook 骨架（事件分发器、`SettingsHook.Service`、配置 schema）。
-- `85609c5b9` **功能** Phase 3-Step2：完成 9 类事件 1:1 兼容 — `PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Notification` / `Stop` / `SubagentStop` / `PreCompact` / `SessionStart` / `SessionEnd`。
+- `85609c5b9` **功能** Phase 3-Step2：完成 8 类事件 1:1 兼容 — `PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop` / `SubagentStop` / `PreCompact` / `SessionStart` / `SessionEnd`（fork 删除 CC 的 `Notification`，由 `Permission.Service` + 内部 bus 兜底）。
 - `5bdf76454` **修复** `SettingsHook.Service` 在 `ToolRegistry` 与测试 `defaultLayer` 中的 Layer 注入缺口（避免 `R = SettingsHook.Service` 残留在公共 API 上）。
 - `d3b2e1868` **测试** `prompt.test.ts` 接入 `SettingsHook.defaultLayer` 并完成 bug 收敛盘点。
 - `b007682f0` **维护** 归档 hook 重建期间的架构决策与典型错误到 `.memory/`。

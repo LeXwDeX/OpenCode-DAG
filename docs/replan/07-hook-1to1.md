@@ -6,7 +6,7 @@
 
 | 维度 | Step 1（已完成） | Step 2（本轮） |
 |---|---|---|
-| 事件 | PreToolUse / PostToolUse | + UserPromptSubmit / Stop / SubagentStop / Notification / PreCompact / SessionStart / SessionEnd |
+| 事件 | PreToolUse / PostToolUse | + UserPromptSubmit / Stop / SubagentStop / PreCompact / SessionStart / SessionEnd（fork 不实现 CC 的 `Notification`，权限提示走内部 bus）|
 | 类型 | `type: "command"` | + `type: "mcp"` |
 | 加载链 | 单层 `<dir>/.opencode/settings.json` | 6 候选合并：`~/.claude/settings.json` → OpenCode global → `<proj>/.claude/settings.json` → `<proj>/.opencode/settings.json` → `<proj>/.claude/settings.local.json` → `<proj>/.opencode/settings.local.json` |
 | stdin 信封 | `hook_event_name`/`tool_name`/`tool_input`/`cwd` | + `session_id` / `transcript_path` / 各事件特定字段全集 |
@@ -24,7 +24,7 @@
 | `UserPromptSubmit` | `prompt` |
 | `Stop` | `stop_hook_active` |
 | `SubagentStop` | `stop_hook_active` |
-| `Notification` | `message` |
+| `Notification` | `message` _(removed in fork)_ |
 | `PreCompact` | `trigger: "manual" \| "auto"`, `custom_instructions?` |
 | `SessionStart` | `source: "startup" \| "resume" \| "clear" \| "compact"` |
 | `SessionEnd` | `reason: "clear" \| "logout" \| "prompt_input_exit" \| "other"` |
@@ -76,7 +76,7 @@
 | `UserPromptSubmit` | `session/prompt.ts` | chat 入口 |
 | `Stop` | `session/prompt.ts` | runLoop 终止位置 |
 | `SubagentStop` | `tool/task.ts` | task 子任务结束 |
-| `Notification` | `permission` 或 `question` 通道 | 等待用户输入时 |
+| `Notification` | _removed in fork_ | 权限提示由 `Permission.Service` 通过内部 bus 上报，不外发为 hook 事件 |
 | `PreCompact` | `session/compaction.ts` | compact() 入口 |
 | `SessionStart` | `session/session.ts` | create / createNext / resume 路径 |
 | `SessionEnd` | `session/session.ts` | finalizer / dispose |

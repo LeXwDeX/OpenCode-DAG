@@ -135,3 +135,30 @@ const cb = Instance.bind((err, evts) => {
 })
 nativeAddon.subscribe(dir, cb)
 ```
+
+# Hook System
+
+The hook surface (`src/hook/settings.ts`) implements the Claude Code protocol
+across 8 lifecycle events. `Notification` from the upstream CC spec is
+deliberately **not** supported in this fork — permission prompts surface
+through the internal event bus instead.
+
+## Handler abstraction
+
+Each `HookCommand.type` (`command` / `mcp` / `http` / `prompt` / `agent`) maps
+to one `HookHandler` declared inside `layer`'s `Effect.gen` block. Handlers
+are pure `(entry, envelope, cwd, inHook) => Effect<{ json?, exitBlock? }>` —
+all aggregation (`additionalContexts`, `permissionDecision`, `blocked`) lives
+in the `trigger` reducer, never inside a handler.
+
+When adding a new handler, register it in the `handlers` record and extend the
+allow-list in the `trigger` loop's whitelist (`entry.type !== "command" && …`).
+
+## Test pattern
+
+`test/hook/settings.test.ts` uses one describe per event for envelope shape +
+matcher coverage, plus per-handler describes (WP-4A/4B/4C/4D-2/4F) that swap
+in mock `HttpClient` / `Provider` / `Auth` / `MCP` layers via
+`Layer.fresh(SettingsHook.layer)`. The fail-safe contract — handler errors
+must converge on `result.blocked === undefined` — is the single non-negotiable
+invariant every new test must assert.

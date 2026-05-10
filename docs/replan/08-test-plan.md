@@ -40,20 +40,20 @@
 
 ## 4. Phase 2-3 — Hook 系统验收矩阵
 
-> 1:1 兼容 Claude Code 的 9 类事件：`PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Notification` / `Stop` / `SubagentStop` / `PreCompact` / `SessionStart` / `SessionEnd`。
+> 1:1 兼容 Claude Code 的 8 类事件（fork 不实现 CC 的 `Notification`）：`PreToolUse` / `PostToolUse` / `UserPromptSubmit` / `Stop` / `SubagentStop` / `PreCompact` / `SessionStart` / `SessionEnd`。
 
 | Commit | 模块 | 验证命令 | 验收标准 |
 |---|---|---|---|
 | `30a5f7dbc` | hook 骨架 + `SettingsHook.Service` | `bun test test/session/prompt.test.ts` | 现有 prompt.test.ts 全绿；`yield* SettingsHook.Service` 不出现在公共 API 的 R 通道 |
-| `85609c5b9` | 9 事件 1:1 落地 | `bun test test/session/ test/permission/` | 全绿；docs/replan/07-hook-1to1.md 中"事件触发点"表格的源码行号能被 `rg` 命中 |
+| `85609c5b9` | 8 事件 1:1 落地（去 Notification）| `bun test test/session/ test/permission/` | 全绿；docs/replan/07-hook-1to1.md 中"事件触发点"表格的源码行号能被 `rg` 命中 |
 | `5bdf76454` | Layer 注入修补 | `bun test test/tool/ test/permission/ test/session/` | 不出现 `Service not found: SettingsHook` 错误；ToolRegistry 默认 layer 自包含 |
 | `d3b2e1868` | prompt.test.ts 接入 | `bun test test/session/prompt.test.ts -t "hook"` | 现有覆盖路径不回退 |
 
 **已知覆盖缺口**（已补齐，commit `27510b442`）：
-- ~~9 事件中目前仅 `UserPromptSubmit` 有完整集成测试（prompt.test.ts）~~
+- ~~8 事件中目前仅 `UserPromptSubmit` 有完整集成测试（prompt.test.ts）~~
 - ~~其他 8 事件缺独立单元测试，依赖上层会话集成路径间接验证~~
-- ✅ `test/hook/settings.test.ts`：单文件 + 8 describe 块覆盖 PreToolUse / PostToolUse / Notification / Stop / SubagentStop / PreCompact / SessionStart / SessionEnd 共 18 个 case；通过临时 `settings.json` 注入 shell hook，`cat > captured.json` 抓取 envelope，stdout JSON 注入控制 `TriggerResult` 字段
-- 设计偏离：原计划列 8 文件 per-event；实际改为单文件多 describe，因 9 事件共享同一 `trigger` 管道（仅 envelope/matcher/result 字段分支不同），分文件会大量重复 fixture
+- ✅ `test/hook/settings.test.ts`：单文件覆盖 PreToolUse / PostToolUse / Stop / SubagentStop / PreCompact / SessionStart / SessionEnd 7 个事件 describe（UserPromptSubmit 由 `test/session/prompt.test.ts` 集成覆盖；fork 删除 Notification）+ WP-4A/4B/4C/4D-2/4F handler 矩阵 describe；通过临时 `settings.json` 注入 shell hook，`cat > captured.json` 抓取 envelope，stdout JSON 注入控制 `TriggerResult` 字段。截至 WP-4F/3 共 51 PASS（事件覆盖 + 5 handler 矩阵）
+- 设计偏离：原计划列 8 文件 per-event；实际改为单文件多 describe，因 8 事件共享同一 `trigger` 管道（仅 envelope/matcher/result 字段分支不同），分文件会大量重复 fixture
 
 **手动验证**：
 - 在 `~/.opencode/settings.json` 配置一个 `PreToolUse` hook 拦截 `bash` → 执行任意 bash 工具被拒
@@ -141,7 +141,7 @@ bun run dev
 
 ## 9. 已知缺口（不阻塞 fork.1 release，列入 backlog）
 
-1. ~~`test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Notification/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd）~~ — ✅ 已完成（commit `27510b442`，单文件 8 describe 形式覆盖 18 个 case）
+1. ~~`test/hook/<event>.test.ts` 8 文件：每事件单独 fixture（PreToolUse/PostToolUse/Stop/SubagentStop/PreCompact/SessionStart/SessionEnd 共 7 个 — fork 不实现 Notification）~~ — ✅ 已完成（commit `27510b442` 起步，WP-4F/3 收尾，单文件多 describe 形式覆盖 51 PASS）
 2. ~~TUI Quota 自动化：当前完全靠手测；可行路径是把 `quota.tsx` 中纯函数（`readQuotaAuth` / `parseCopilotQuota` / `parseProxyQuota` / `fetchQuota`）提取并 export，再单测 fetch mock + JSON 解析。组件渲染（Solid + opentui Slot）不在自动化范围~~ — ✅ 已完成（commit `c9edab9fa`）：纯函数抽离至 `quota-fetch.ts`，`test/cli/cmd/tui/feature-plugins/session/quota-fetch.test.ts` 17 case 覆盖；Solid 渲染仍走 §5.2 手测
 3. 端到端冒烟脚本：~~可考虑用 `webapp-testing` skill / Playwright 包装 §6~~ — 修正：TUI 是终端应用而非 web，Playwright 不适用；可用 `node-pty` + expect-style 断言包装 §6，但工程量较大，目前继续手动
 4. **OPENTUI 升级（决策：保守保持 0.1.105）**：上游已发 `@opentui/{core,solid}@0.2.1`（跨 minor，预期 breaking）。当前 fork 在 0.1.105 上验证稳定，升级收益不明确、风险高。后续若要升 0.2.x，须新开探路分支跑全套手动 TUI 冒烟（§6）+ 自动化测试，并按 breaking change 清单逐项迁移。
