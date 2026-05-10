@@ -179,3 +179,23 @@ to emit their original event names.
 `SessionHooks.clear` is intentionally not yet wired — call it from a
 `SessionEnd` / `Session.delete` hook in a future WP to avoid long-session
 leaks.
+
+## Performance
+
+`trigger` short-circuits at the entry when neither the on-disk settings chain
+nor the session store has any entry for the current event — skipping envelope
+build, matcher concatenation, and regex matching. The session probe goes
+through `SessionHooks.hasForEvent(sessionID, event)` (O(1) `Map.get` + a small
+`.some` over the per-session array). The `Stop`→`SubagentStop` translation
+runs **before** the session probe so sub-agent contexts hit the right key.
+The file-side check uses the original `payload.event` to address the settings
+chain literally, so wildcard matchers are never falsely skipped.
+
+## Robustness
+
+`execShell` performs an `existsSync(entry.__sourceDir)` pre-check before
+spawning. If the plugin directory has been GC'd (plugin uninstalled, repo
+cleaned, etc.) the handler resolves with `exitCode: 0` + empty stdout — a
+silent allow — instead of letting the shell turn the missing script into a
+misleading exit 2 deny. Only the `command` handler is affected; `agent` /
+`mcp` / `http` / `prompt` do not depend on the plugin's physical directory.

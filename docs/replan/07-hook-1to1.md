@@ -98,3 +98,11 @@
 - **Session-scoped hooks（fork 扩展，非 CC 协议）**：新增 `SessionHooks` Service 支持运行时 `add/remove/list/clear`；`once:true` 自动清理；`ctx.isSubAgent === true` 时 `Stop` 事件查找翻译为 `SubagentStop`，保持上层 dispatcher 语义不变。
 
 未实装：frontmatter parser（agent prompt 内联 hook 配置），独立 WP。
+
+## 阶段 6 鲁棒性补强（已实施）
+
+P1 鲁棒性收口，针对热路径性能、未来 trust 系统接入、plugin 目录 GC 竞态三项：
+
+- **性能**：`trigger` 入口新增 O(1) 短路 — 当 settings 链与 SessionHooks 都没有当前事件的条目时，跳过 envelope 构建 / matcher 拼接 / regex 匹配热路径，直接返回空 `TriggerResult`。`SessionHooks` 同步新增 `hasForEvent(sessionID, event)` 探测 API。
+- **trust**：`Settings` schema 新增 `allowUntrusted?: boolean` 字段以兼容未来配置；运行时**暂未接入** — fork 当前无 workspace-trust 基础设施（不存在 `Project.isTrusted` 等），trigger 短路之后留 TODO 注释块锁定接入点 + 契约（trust gate 失败必须 silent allow，禁止 throw/deny）。
+- **plugin GC 竞态**：command handler 的 `execShell` 在 `child_process.spawn` 之前对 `entry.__sourceDir` 做 `existsSync` 预检；目录已被 GC（plugin 卸载、repo 清理等）时返回 `exitCode: 0` + 空 stdout 走 silent allow，而非让 shell 把 `python3 <missing>.py` 转成 exit 2 误判为 block。仅 command 类型受影响（agent/mcp/http/prompt 不依赖 plugin 物理目录）。

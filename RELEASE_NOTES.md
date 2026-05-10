@@ -87,3 +87,11 @@ git pull origin main
 - **Session-scoped hook 动态注入（fork 扩展）**：新 `SessionHooks` API 支持运行时添加 session-scoped hooks（`once:true` 自动清理）；`Stop` 事件在 sub-agent 上下文自动翻译为 `SubagentStop`（仅影响 session-hook 查找，上层 dispatcher 语义不变）。
 
 阶段 5 全量回归：**2361 PASS / 0 回归**，净增 9 测试。
+
+## Hook 协议鲁棒性（阶段 6）
+
+- **`hasHookForEvent` O(1) 短路**：`trigger` 入口在 settings 链与 SessionHooks 都没有当前事件条目时跳过 envelope 构建 / matcher 拼接 / regex 匹配热路径，直接返回空 result。无 hook 配置时几乎零开销。
+- **`allowUntrusted` schema 字段（接入点预留）**：Settings 接受 `allowUntrusted?: boolean`，trigger 内留 TODO 注释块锁定未来 workspace-trust 系统接入点（fork 当前无 trust 基础设施，仅 schema 兼容；trust gate 失败必须 silent allow，永不 throw/deny）。
+- **plugin `__sourceDir` 缺失自动 silent allow**：command handler 在 `spawn` 前对 `entry.__sourceDir` 做 `existsSync` 预检；插件目录已被 GC（卸载 / repo 清理）时返回 `exitCode: 0` + 空 stdout，而非让 shell 把缺失脚本转成 exit 2 误判为 block。
+
+阶段 6 全量回归：**2365 PASS / 0 回归**，净增 3 测试。

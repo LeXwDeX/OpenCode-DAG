@@ -180,3 +180,13 @@ hook 进程可向 stdout 写一行 JSON：
 - `SessionHooks.clear` 在 `SessionEnd` / `Session.delete` 时调用以避免长会话泄漏
 
 测试基线：阶段 5 净增 +9 测试（≥8 spec 门禁），全量 2361 PASS / 0 回归。
+
+## 12. 阶段 6 已实施（hook P1 鲁棒性）
+
+| WP | 内容 | 落点 |
+|---|---|---|
+| WP-6A | `trigger` 入口 O(1) 短路：无 hook 配置时绕过 envelope 构建 + matcher 拼接 + regex 匹配热路径。`sessionEvent` 翻译（`Stop`→`SubagentStop` in sub-agent ctx）放在短路探测之前以保持 `hasSession` 查询 key 正确；`hasFile` 仍用原始 `payload.event` 字面寻址 settings 链，不会误杀通配 matcher | `settings.ts:1040-1046` + `session-hooks.ts` 新增 `hasForEvent` |
+| WP-6B | Settings 接受 `allowUntrusted?: boolean` schema 字段 + trigger 短路后 TODO 注释块锁定未来 trust 系统接入点 — fork **当前无 workspace-trust 基础设施**（取证：`rg trust\|Trusted` 在 `src/` 下唯一命中是 `tool/task.txt` 散文），仅留接入点不写假实现；接入契约：未来 trust gate 失败必须 silent allow（log.warn + 空 result，禁止 throw/deny） | `settings.ts` Settings interface + trigger reducer 注释 |
+| WP-6C | command handler `execShell` 在 `child_process.spawn` 之前对 `entry.__sourceDir` 做 `existsSync` 预检；缺失时 silent allow（`exitCode: 0` + 空 stdout）而非 deny — 选 silent allow 是因 fork hook 协议铁律「故障不阻塞主流程」与 GC 竞态属于运行时偶发故障类一致；只挂 command handler（agent/mcp/http/prompt 不依赖 plugin 物理目录） | `settings.ts:508-515` |
+
+测试基线：阶段 6 净增 +3 测试，hook 60→63 PASS / 全量 2361→2365 PASS / 0 回归。

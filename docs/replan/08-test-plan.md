@@ -161,3 +161,13 @@ bun run dev
 回归触发器补充：
 - 改 `src/hook/settings.ts`、`src/hook/start-context.ts`、`src/hook/session-hooks.ts` → 必跑 `test/hook/` 全部 + `test/session/prompt.test.ts`
 - 改 SessionStart drain 注入点（prompt.ts:~1481）→ 必跑 `test/session/prompt.test.ts` + `test/hook/start-context.test.ts`
+
+## 11. Phase 6 — Hook 鲁棒性补强验收（已交付）
+
+| WP | 测试文件 | 用例数 |
+|---|---|---|
+| WP-6A 入口 O(1) 短路 | `test/hook/settings.test.ts`：(a) 无 hook 配置 → 空 result 不触碰 matcher；(b) 配了不同 event 的 hook → 当前 event 仍短路 | 2 |
+| WP-6B `allowUntrusted` schema 字段 + TODO 注释 | schema-only + 注释，无运行时行为变化，0 用例 | 0 |
+| WP-6C plugin `__sourceDir` 缺失 silent allow | `test/hook/settings.test.ts`：先正常 trigger 验链路通（hook exit 2 → blocked）→ rm `.claude` → 第二次 trigger 期望 `result.blocked === undefined` | 1 |
+
+阶段 6 净增 **3 测试**，hook test 60 → **63 PASS**，全量 `bun test test/` = **2361 → 2365 PASS / 20 skip / 2 todo**（pre-existing fail 与本阶段 0 关联）。
