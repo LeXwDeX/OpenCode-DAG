@@ -73,7 +73,6 @@ L'elenco attuale dei modelli include:
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 L'elenco dei modelli potrebbe cambiare man mano che ne testiamo e aggiungiamo di nuovi.
 
@@ -105,7 +104,6 @@ La tabella seguente fornisce una stima del conteggio delle richieste in base a p
 | Qwen3.5 Plus       | 10,200               | 25,200                | 50,500            |
 | DeepSeek V4 Pro    | 3,450                | 8,550                 | 17,150            |
 | DeepSeek V4 Flash  | 31,650               | 79,050                | 158,150           |
-| Hy3 preview        | 1,875                | 4,690                 | 9,375             |
 
 Le stime si basano sui pattern medi di richieste osservati:
 
@@ -118,7 +116,6 @@ Le stime si basano sui pattern medi di richieste osservati:
 - Qwen3.6 Plus — 500 di input, 57.000 in cache, 190 token di output per richiesta
 - MiMo-V2.5 — 1000 di input, 60.000 in cache, 140 token di output per richiesta
 - MiMo-V2.5-Pro — 350 di input, 41.000 in cache, 250 token di output per richiesta
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 Puoi monitorare il tuo utilizzo attuale nella **<a href={console}>console</a>**.
 
@@ -156,7 +153,6 @@ Puoi anche accedere ai modelli Go tramite i seguenti endpoint API.
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 Il [model id](/docs/config/#models) nella tua OpenCode config
 utilizza il formato `opencode-go/<model-id>`. Ad esempio, per Kimi K2.6, useresti

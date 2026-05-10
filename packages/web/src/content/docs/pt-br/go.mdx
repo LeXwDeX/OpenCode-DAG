@@ -75,7 +75,6 @@ A lista atual de modelos inclui:
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 A lista de modelos pode mudar conforme testamos e adicionamos novos.
 
@@ -107,7 +106,6 @@ A tabela abaixo fornece uma contagem estimada de requisições com base nos padr
 | Qwen3.5 Plus       | 10,200                  | 25,200                 | 50,500              |
 | DeepSeek V4 Pro    | 3,450                   | 8,550                  | 17,150              |
 | DeepSeek V4 Flash  | 31,650                  | 79,050                 | 158,150             |
-| Hy3 preview        | 1,875                   | 4,690                  | 9,375               |
 
 As estimativas baseiam-se nos padrões médios de requisições observados:
 
@@ -120,7 +118,6 @@ As estimativas baseiam-se nos padrões médios de requisições observados:
 - Qwen3.6 Plus — 500 tokens de entrada, 57.000 em cache, 190 tokens de saída por requisição
 - MiMo-V2.5 — 1000 tokens de entrada, 60.000 em cache, 140 tokens de saída por requisição
 - MiMo-V2.5-Pro — 350 tokens de entrada, 41.000 em cache, 250 tokens de saída por requisição
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 Você pode acompanhar o seu uso atual no **<a href={console}>console</a>**.
 
@@ -158,7 +155,6 @@ Você também pode acessar os modelos do Go através dos seguintes endpoints de 
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 O [ID do modelo](/docs/config/#models) na sua configuração do OpenCode
 usa o formato `opencode-go/<model-id>`. Por exemplo, para o Kimi K2.6, você usaria

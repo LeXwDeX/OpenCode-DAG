@@ -67,7 +67,6 @@ Die aktuelle Liste der Modelle umfasst:
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 Die Liste der Modelle kann sich ändern, während wir neue testen und hinzufügen.
 
@@ -99,7 +98,6 @@ Die folgende Tabelle zeigt eine geschätzte Anzahl von Anfragen basierend auf ty
 | Qwen3.5 Plus       | 10,200                 | 25,200             | 50,500             |
 | DeepSeek V4 Pro    | 3,450                  | 8,550              | 17,150             |
 | DeepSeek V4 Flash  | 31,650                 | 79,050             | 158,150            |
-| Hy3 preview        | 1,875                  | 4,690              | 9,375              |
 
 Die Schätzungen basieren auf beobachteten durchschnittlichen Anfragemustern:
 
@@ -112,7 +110,6 @@ Die Schätzungen basieren auf beobachteten durchschnittlichen Anfragemustern:
 - Qwen3.6 Plus — 500 Input-, 57.000 Cached-, 190 Output-Tokens pro Anfrage
 - MiMo-V2.5 — 1.000 Input-, 60.000 Cached-, 140 Output-Tokens pro Anfrage
 - MiMo-V2.5-Pro — 350 Input-, 41.000 Cached-, 250 Output-Tokens pro Anfrage
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 Du kannst deine aktuelle Nutzung in der **<a href={console}>Console</a>** verfolgen.
 
@@ -148,7 +145,6 @@ Du kannst auf die Go-Modelle auch über die folgenden API-Endpunkte zugreifen.
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 Die [Modell-ID](/docs/config/#models) in deiner OpenCode Config verwendet das Format `opencode-go/<model-id>`. Für Kimi K2.6 würdest du beispielsweise `opencode-go/kimi-k2.6` in deiner Config verwenden.
 

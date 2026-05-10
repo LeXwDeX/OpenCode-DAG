@@ -65,7 +65,6 @@ OpenCode Go 的運作方式與 OpenCode 中的任何其他供應商相同。
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 隨著我們測試並加入新模型，模型清單可能會有所變動。
 
@@ -97,7 +96,6 @@ OpenCode Go 包含以下限制：
 | Qwen3.5 Plus       | 10,200          | 25,200     | 50,500     |
 | DeepSeek V4 Pro    | 3,450           | 8,550      | 17,150     |
 | DeepSeek V4 Flash  | 31,650          | 79,050     | 158,150    |
-| Hy3 preview        | 1,875           | 4,690      | 9,375      |
 
 預估值是基於觀察到的平均請求模式：
 
@@ -110,7 +108,6 @@ OpenCode Go 包含以下限制：
 - Qwen3.6 Plus — 每次請求 500 個輸入 token、57,000 個快取 token、190 個輸出 token
 - MiMo-V2.5 — 每次請求 1000 個輸入 token、60,000 個快取 token、140 個輸出 token
 - MiMo-V2.5-Pro — 每次請求 350 個輸入 token、41,000 個快取 token、250 個輸出 token
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 您可以在 **<a href={console}>console</a>** 中追蹤您目前的使用量。
 
@@ -146,7 +143,6 @@ OpenCode Go 包含以下限制：
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 您的 OpenCode 設定中的 [model id](/docs/config/#models) 使用 `opencode-go/<model-id>` 格式。例如，Kimi K2.6 在設定中應使用 `opencode-go/kimi-k2.6`。
 

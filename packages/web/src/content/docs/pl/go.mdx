@@ -69,7 +69,6 @@ Obecna lista modeli obejmuje:
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 Lista modeli może ulec zmianie w miarę testowania i dodawania nowych.
 
@@ -101,7 +100,6 @@ Poniższa tabela przedstawia szacunkową liczbę żądań na podstawie typowych 
 | Qwen3.5 Plus       | 10,200              | 25,200             | 50,500             |
 | DeepSeek V4 Pro    | 3,450               | 8,550              | 17,150             |
 | DeepSeek V4 Flash  | 31,650              | 79,050             | 158,150            |
-| Hy3 preview        | 1,875               | 4,690              | 9,375              |
 
 Szacunki opierają się na zaobserwowanych średnich wzorcach żądań:
 
@@ -114,7 +112,6 @@ Szacunki opierają się na zaobserwowanych średnich wzorcach żądań:
 - Qwen3.6 Plus — 500 tokenów wejściowych, 57 000 w pamięci podręcznej, 190 tokenów wyjściowych na żądanie
 - MiMo-V2.5 — 1000 tokenów wejściowych, 60 000 w pamięci podręcznej, 140 tokenów wyjściowych na żądanie
 - MiMo-V2.5-Pro — 350 tokenów wejściowych, 41 000 w pamięci podręcznej, 250 tokenów wyjściowych na żądanie
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 Możesz śledzić swoje bieżące zużycie w **<a href={console}>konsoli</a>**.
 
@@ -150,7 +147,6 @@ Możesz również uzyskać dostęp do modeli Go za pośrednictwem następującyc
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 [ID modelu](/docs/config/#models) w Twojej konfiguracji OpenCode
 używa formatu `opencode-go/<model-id>`. Na przykład dla Kimi K2.6 należy użyć

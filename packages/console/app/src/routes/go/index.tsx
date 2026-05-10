@@ -12,7 +12,7 @@ import { Footer } from "~/component/footer"
 import { Header } from "~/component/header"
 import { config } from "~/config"
 import { getLastSeenWorkspaceID } from "../workspace/common"
-import { IconMiniMax, IconMiMo, IconZai, IconAlibaba, IconDeepSeek, IconHunyuan } from "~/component/icon"
+import { IconMiniMax, IconMiMo, IconZai, IconAlibaba, IconDeepSeek } from "~/component/icon"
 import { useI18n } from "~/context/i18n"
 import { useLanguage } from "~/context/language"
 import { LocaleLinks } from "~/component/locale-links"
@@ -35,7 +35,6 @@ const models = [
   { name: "MiniMax M2.5", provider: "MiniMax" },
   { name: "DeepSeek V4 Pro", provider: "DeepSeek" },
   { name: "DeepSeek V4 Flash", provider: "DeepSeek" },
-  { name: "Hy3 preview", provider: "Tencent" },
 ]
 
 function LimitsGraph(props: { href: string }) {
@@ -326,9 +325,6 @@ export default function Home() {
                 </div>
                 <div>
                   <IconMiMo width="24" height="24" />
-                </div>
-                <div>
-                  <IconHunyuan width="24" height="24" />
                 </div>
                 {/*
                 <div>

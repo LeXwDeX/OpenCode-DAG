@@ -75,7 +75,6 @@ Trenutna lista modela uključuje:
 - **MiniMax M2.7**
 - **DeepSeek V4 Pro**
 - **DeepSeek V4 Flash**
-- **Hy3 preview**
 
 Lista modela se može mijenjati dok testiramo i dodajemo nove.
 
@@ -107,7 +106,6 @@ Tabela ispod pruža procijenjeni broj zahtjeva na osnovu tipičnih obrazaca kori
 | Qwen3.5 Plus       | 10,200             | 25,200            | 50,500            |
 | DeepSeek V4 Pro    | 3,450              | 8,550             | 17,150            |
 | DeepSeek V4 Flash  | 31,650             | 79,050            | 158,150           |
-| Hy3 preview        | 1,875              | 4,690             | 9,375             |
 
 Procjene se zasnivaju na zapaženim prosječnim obrascima zahtjeva:
 
@@ -120,7 +118,6 @@ Procjene se zasnivaju na zapaženim prosječnim obrascima zahtjeva:
 - Qwen3.6 Plus — 500 ulaznih, 57,000 keširanih, 190 izlaznih tokena po zahtjevu
 - MiMo-V2.5 — 1000 ulaznih, 60,000 keširanih, 140 izlaznih tokena po zahtjevu
 - MiMo-V2.5-Pro — 350 ulaznih, 41,000 keširanih, 250 izlaznih tokena po zahtjevu
-- Hy3 preview — 800 input, 50,000 cached, 400 output tokens per request
 
 Svoju trenutnu potrošnju možete pratiti u **<a href={console}>konzoli</a>**.
 
@@ -158,7 +155,6 @@ Također možete pristupiti Go modelima putem sljedećih API endpointa.
 | MiniMax M2.5      | minimax-m2.5      | `https://opencode.ai/zen/go/v1/messages`         | `@ai-sdk/anthropic`         |
 | Qwen3.6 Plus      | qwen3.6-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
 | Qwen3.5 Plus      | qwen3.5-plus      | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/alibaba`           |
-| Hy3 preview       | hy3-preview       | `https://opencode.ai/zen/go/v1/chat/completions` | `@ai-sdk/openai-compatible` |
 
 [Model id](/docs/config/#models) u vašoj OpenCode konfiguraciji
 koristi format `opencode-go/<model-id>`. Na primjer, za Kimi K2.6, koristili biste
