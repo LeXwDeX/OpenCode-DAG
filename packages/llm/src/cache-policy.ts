@@ -44,10 +44,7 @@ const RESPECTS_INLINE_HINTS = new Set(["anthropic-messages", "bedrock-converse"]
 const makeHint = (ttlSeconds: number | undefined): CacheHint =>
   ttlSeconds !== undefined ? new CacheHint({ type: "ephemeral", ttlSeconds }) : new CacheHint({ type: "ephemeral" })
 
-const markLastTool = (
-  tools: ReadonlyArray<ToolDefinition>,
-  hint: CacheHint,
-): ReadonlyArray<ToolDefinition> => {
+const markLastTool = (tools: ReadonlyArray<ToolDefinition>, hint: CacheHint): ReadonlyArray<ToolDefinition> => {
   if (tools.length === 0) return tools
   const last = tools.length - 1
   if (tools[last]!.cache) return tools
@@ -67,11 +64,7 @@ const lastIndexOfRole = (messages: ReadonlyArray<Message>, role: Message["role"]
 // Mark the last text part of `messages[index]`. If no text part exists, mark
 // the last content part regardless of type — that's the breakpoint position
 // in tool-result-only messages too.
-const markMessageAt = (
-  messages: ReadonlyArray<Message>,
-  index: number,
-  hint: CacheHint,
-): ReadonlyArray<Message> => {
+const markMessageAt = (messages: ReadonlyArray<Message>, index: number, hint: CacheHint): ReadonlyArray<Message> => {
   if (index < 0 || index >= messages.length) return messages
   const target = messages[index]!
   if (target.content.length === 0) return messages
@@ -79,9 +72,7 @@ const markMessageAt = (
   const markAt = lastTextIndex >= 0 ? lastTextIndex : target.content.length - 1
   const existing = target.content[markAt]!
   if ("cache" in existing && existing.cache) return messages
-  const nextContent = target.content.map((part, i) =>
-    i === markAt ? ({ ...part, cache: hint } as ContentPart) : part,
-  )
+  const nextContent = target.content.map((part, i) => (i === markAt ? ({ ...part, cache: hint } as ContentPart) : part))
   const next = new Message({ ...target, content: nextContent })
   // Single pass over `messages`, substituting the one updated entry. Long
   // conversations call this on every request, so avoid `.map()` here — its

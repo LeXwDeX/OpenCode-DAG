@@ -3,12 +3,7 @@
   "metadata": {
     "name": "anthropic-messages-cache/writes-then-reads-cache-control-on-identical-second-call",
     "recordedAt": "2026-05-11T01:52:54.319Z",
-    "tags": [
-      "prefix:anthropic-messages-cache",
-      "provider:anthropic",
-      "protocol:anthropic-messages",
-      "cache"
-    ]
+    "tags": ["prefix:anthropic-messages-cache", "provider:anthropic", "protocol:anthropic-messages", "cache"]
   },
   "interactions": [
     {

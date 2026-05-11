@@ -3,12 +3,7 @@
   "metadata": {
     "name": "gemini-cache/reports-cachedcontenttokencount-on-identical-second-call",
     "recordedAt": "2026-05-11T01:55:40.600Z",
-    "tags": [
-      "prefix:gemini-cache",
-      "provider:google",
-      "protocol:gemini",
-      "cache"
-    ]
+    "tags": ["prefix:gemini-cache", "provider:google", "protocol:gemini", "cache"]
   },
   "interactions": [
     {

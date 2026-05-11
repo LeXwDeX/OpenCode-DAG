@@ -3,12 +3,7 @@
   "metadata": {
     "name": "openai-responses-cache/reports-cached-tokens-on-identical-second-call",
     "recordedAt": "2026-05-11T01:41:58.951Z",
-    "tags": [
-      "prefix:openai-responses-cache",
-      "provider:openai",
-      "protocol:openai-responses",
-      "cache"
-    ]
+    "tags": ["prefix:openai-responses-cache", "provider:openai", "protocol:openai-responses", "cache"]
   },
   "interactions": [
     {

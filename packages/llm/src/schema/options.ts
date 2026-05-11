@@ -226,9 +226,5 @@ export const CachePolicyObject = Schema.Struct({
 })
 export type CachePolicyObject = Schema.Schema.Type<typeof CachePolicyObject>
 
-export const CachePolicy = Schema.Union([
-  Schema.Literal("auto"),
-  Schema.Literal("none"),
-  CachePolicyObject,
-])
+export const CachePolicy = Schema.Union([Schema.Literal("auto"), Schema.Literal("none"), CachePolicyObject])
 export type CachePolicy = Schema.Schema.Type<typeof CachePolicy>

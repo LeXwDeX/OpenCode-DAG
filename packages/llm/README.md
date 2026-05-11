@@ -82,12 +82,12 @@ LLM.request({
 
 ### Provider behavior table
 
-| Protocol | `cache: "auto"` |
-|---|---|
-| Anthropic Messages | emits up to 3 `cache_control` markers (4-breakpoint cap enforced) |
-| Bedrock Converse | emits up to 3 `cachePoint` blocks (4-breakpoint cap enforced) |
-| OpenAI Chat / Responses | no-op (implicit caching above 1024 tokens) |
-| Gemini | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band) |
+| Protocol                | `cache: "auto"`                                                           |
+| ----------------------- | ------------------------------------------------------------------------- |
+| Anthropic Messages      | emits up to 3 `cache_control` markers (4-breakpoint cap enforced)         |
+| Bedrock Converse        | emits up to 3 `cachePoint` blocks (4-breakpoint cap enforced)             |
+| OpenAI Chat / Responses | no-op (implicit caching above 1024 tokens)                                |
+| Gemini                  | no-op (implicit caching on 2.5+; explicit `CachedContent` is out-of-band) |
 
 Normalized cache usage is read back into `response.usage.cacheReadInputTokens` and `cacheWriteInputTokens` across every provider.
 
