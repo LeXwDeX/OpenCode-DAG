@@ -56,7 +56,9 @@ function isZodType(value: unknown): value is z.ZodTypeAny {
  * `session/prompt.ts` has always passed to `ai`'s `jsonSchema()` helper.
  */
 export function toJsonSchema<S extends Schema.Top>(schema: S) {
-  return z.toJSONSchema(zod(schema), { io: "input" })
+  const result = z.toJSONSchema(zod(schema), { io: "input" })
+  Reflect.deleteProperty(result as object, "~standard")
+  return result
 }
 
 function walk(ast: SchemaAST.AST): z.ZodTypeAny {
