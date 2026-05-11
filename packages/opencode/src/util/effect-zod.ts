@@ -56,9 +56,13 @@ function isZodType(value: unknown): value is z.ZodTypeAny {
  * `session/prompt.ts` has always passed to `ai`'s `jsonSchema()` helper.
  */
 export function toJsonSchema<S extends Schema.Top>(schema: S) {
-  const result = z.toJSONSchema(zod(schema), { io: "input" })
-  Reflect.deleteProperty(result as object, "~standard")
-  return result
+  // `z.toJSONSchema()` returns an object whose `~standard` property lives on
+  // the prototype (non-enumerable). `Reflect.deleteProperty` cannot remove a
+  // prototype-chain property, and serializers diverge: Bun's local snapshot
+  // serializer skips it while CI's `for...in` walker emits it — causing
+  // platform-dependent snapshot drift. Spread copies own-enumerable keys
+  // only, breaking the prototype link so `"~standard" in result === false`.
+  return { ...z.toJSONSchema(zod(schema), { io: "input" }) }
 }
 
 function walk(ast: SchemaAST.AST): z.ZodTypeAny {
