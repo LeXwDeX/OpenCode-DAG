@@ -497,6 +497,8 @@ function execShell(
     const shell = process.platform === "win32" ? true : "/bin/sh"
     const expandedCommand = expandCommand(entry)
 
+    log.debug("hook spawn", { command: entry.command.slice(0, 200), cwd, timeoutMs })
+
     // WP-6C: plugin-directory liveness pre-check.
     // When __sourceDir is stamped but the directory has since been GC'd
     // (plugin uninstalled, repo cleaned, etc.) the expanded command would
@@ -558,7 +560,15 @@ function execShell(
       resolve({ exitCode: null, stdout, stderr, spawnError: err.message })
     })
 
-    child.on("close", (code) => resolve({ exitCode: code, stdout, stderr }))
+    child.on("close", (code) => {
+      log.debug("hook close", {
+        command: entry.command.slice(0, 80),
+        exitCode: code,
+        stdoutLen: stdout.length,
+        stderrLen: stderr.length,
+      })
+      resolve({ exitCode: code, stdout, stderr })
+    })
   })
 }
 
@@ -693,6 +703,12 @@ const commandHandler: HookHandler = {
     }
 
     // Other non-zero exits: log and continue (do not abort main flow)
+    if (exitCode === null) {
+      log.warn("hook command timed out / killed (non-blocking)", {
+        command: entry.command,
+        timeoutMs: entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS,
+      })
+    }
     if (exitCode !== 0 && exitCode !== null) {
       log.warn("hook command exited non-zero (non-blocking)", {
         command: entry.command,
@@ -1009,6 +1025,7 @@ export const layer = Layer.effect(
       cwd: string,
       inHook: boolean,
     ) {
+      using _ = log.time("runEntry", { type: entry.type, command: entry.command.slice(0, 80) })
       const handler = handlers[entry.type]
       if (!handler) {
         // Defensive fallback: handlers table is exhaustive over the schema's 5 types
@@ -1027,6 +1044,7 @@ export const layer = Layer.effect(
       payload: HookPayload,
       ctx: TriggerContext,
     ) {
+      using _ = log.time("trigger", { event: payload.event, sessionID: ctx.sessionID })
       const s = yield* InstanceState.get(state)
       const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
 
@@ -1043,7 +1061,10 @@ export const layer = Layer.effect(
       const hasSession = ctx.sessionID
         ? yield* sessionHooks.hasForEvent(SessionID.make(ctx.sessionID), sessionEvent)
         : false
-      if (!hasFile && !hasSession) return result
+      if (!hasFile && !hasSession) {
+        log.info("trigger short-circuit", { event: payload.event, reason: "no_matchers", hasFile, hasSession })
+        return result
+      }
 
       // TODO(WP-6B): once a workspace-trust system exists in this fork, gate
       // execution here with something like:
@@ -1084,7 +1105,10 @@ export const layer = Layer.effect(
             }) satisfies RunMatcher,
         ),
       ]
-      if (!matchers.length) return result
+      if (!matchers.length) {
+        log.info("trigger short-circuit", { event: payload.event, reason: "empty_matchers" })
+        return result
+      }
 
       const target = matcherTarget(payload)
       const envelope = buildStdinEnvelope(payload, ctx, s.cwd)
