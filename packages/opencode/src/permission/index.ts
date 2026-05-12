@@ -155,7 +155,6 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const bus = yield* Bus.Service
-    const settingsHook = yield* SettingsHook.Service
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         const row = Database.use((db) =>
@@ -207,18 +206,6 @@ export const layer = Layer.effect(
 
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
       pending.set(id, { info, deferred })
-      // Notification hook (Claude Code compatible) — fires when the agent
-      // pauses for user input on a permission prompt. CC's `message` is a
-      // freeform string surfaced to notification handlers.
-      yield* settingsHook
-        .trigger(
-          {
-            event: "Notification",
-            message: `Permission required: ${info.permission}${info.patterns.length ? ` (${info.patterns.join(", ")})` : ""}`,
-          },
-          { sessionID: info.sessionID, transcriptPath: "" },
-        )
-        .pipe(Effect.ignore)
       yield* bus.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Deferred.await(deferred),

@@ -1,24 +1,55 @@
-// quota.tsx — 在 session prompt 右侧显示 Copilot premium request 配额。
+// view.tsx — 在 session prompt 右侧显示 Copilot premium request 配额。
 //
 // Provider 选择策略：
 //   从当前 session 最后一条 AssistantMessage 取 providerID（响应式）；
 //   无消息时降级到 config.model 解析的 providerID；
-//   按 providerID 精确读取对应 auth，不再依次尝试所有来源。
+//   启用判定：isCopilotMode(providerID)。
+//
+// 端点选择：
+//   优先读 api.state.config.provider["github-copilot"]，由 resolveEndpoint
+//   决定走代理（provider.api 存在）还是原厂 api.github.com。
 //
 // 颜色规则（按已用量绝对值）：
 //   used ≤ 100 → success（绿）；≤ 200 → warning（黄）；> 200 → error（红）
 //
 // 重要：opentui Slot 在初始渲染时若返回空内容，会永久跳过本插件。
 // 因此组件在数据就绪前显示 "⊘ …" 占位。
+import path from "node:path"
+import { readFile } from "node:fs/promises"
 import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
 import { Global } from "@opencode-ai/core/global"
-import { fetchQuota, readQuotaAuthForProvider, type QuotaInfo } from "./quota-fetch"
+import { isCopilotMode } from "./enabled"
+import { resolveEndpoint, type AuthEntrySlice, type ProviderConfigSlice } from "./endpoint"
+import { fetchQuota, type QuotaInfo } from "./fetch"
 
 const id = "internal:session-quota"
 
-function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
+async function readCopilotAuthEntry(stateDir: string): Promise<AuthEntrySlice | undefined> {
+  try {
+    const text = await readFile(path.join(stateDir, "auth.json"), "utf-8")
+    const data = JSON.parse(text) as Record<string, unknown>
+    const raw = data["github-copilot"] as Record<string, unknown> | undefined
+    if (!raw || typeof raw.type !== "string") return undefined
+    const refresh = typeof raw.refresh === "string" ? raw.refresh : undefined
+    const enterpriseUrl = typeof raw.enterpriseUrl === "string" ? raw.enterpriseUrl : undefined
+    return { type: raw.type, refresh, enterpriseUrl }
+  } catch {
+    return undefined
+  }
+}
+
+function readCopilotProviderConfig(api: TuiPluginApi): ProviderConfigSlice | undefined {
+  const raw = api.state.config.provider?.["github-copilot"]
+  if (!raw) return undefined
+  const apiUrl = typeof raw.api === "string" ? raw.api : undefined
+  const rawApiKey = raw.options?.apiKey
+  const apiKey = typeof rawApiKey === "string" ? rawApiKey : undefined
+  return { api: apiUrl, options: { apiKey } }
+}
+
+export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const [label, setLabel] = createSignal("⊘ …")
   const [tone, setTone] = createSignal<"muted" | "success" | "warning" | "error">("muted")
@@ -58,15 +89,21 @@ function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
 
   async function refresh() {
     const pid = providerID()
-    if (!pid) return
-    // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
-    // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
-    const auth = await readQuotaAuthForProvider(Global.Path.data, pid)
-    if (!auth) {
+    if (!pid || !isCopilotMode(pid)) {
       setLabel("")
       return
     }
-    const q = await fetchQuota(auth)
+    const providerConfig = readCopilotProviderConfig(props.api)
+    // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
+    // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
+    const authEntry = await readCopilotAuthEntry(Global.Path.data)
+    const endpoint = resolveEndpoint({ providerConfig, authEntry })
+    if (!endpoint) {
+      console.debug(`[quota] resolveEndpoint null providerID=${pid}`)
+      setLabel("")
+      return
+    }
+    const q = await fetchQuota(endpoint)
     if (q) applyQuota(q)
     else setLabel("")
   }

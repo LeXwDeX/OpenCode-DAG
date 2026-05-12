@@ -135,3 +135,67 @@ const cb = Instance.bind((err, evts) => {
 })
 nativeAddon.subscribe(dir, cb)
 ```
+
+# Hook System
+
+The hook surface (`src/hook/settings.ts`) implements the Claude Code protocol
+across 8 lifecycle events. `Notification` from the upstream CC spec is
+deliberately **not** supported in this fork — permission prompts surface
+through the internal event bus instead.
+
+## Handler abstraction
+
+Each `HookCommand.type` (`command` / `mcp` / `http` / `prompt` / `agent`) maps
+to one `HookHandler` declared inside `layer`'s `Effect.gen` block. Handlers
+are pure `(entry, envelope, cwd, inHook) => Effect<{ json?, exitBlock? }>` —
+all aggregation (`additionalContexts`, `permissionDecision`, `blocked`) lives
+in the `trigger` reducer, never inside a handler.
+
+When adding a new handler, register it in the `handlers` record and extend the
+allow-list in the `trigger` loop's whitelist (`entry.type !== "command" && …`).
+
+## Test pattern
+
+`test/hook/settings.test.ts` uses one describe per event for envelope shape +
+matcher coverage, plus per-handler describes (WP-4A/4B/4C/4D-2/4F) that swap
+in mock `HttpClient` / `Provider` / `Auth` / `MCP` layers via
+`Layer.fresh(SettingsHook.layer)`. The fail-safe contract — handler errors
+must converge on `result.blocked === undefined` — is the single non-negotiable
+invariant every new test must assert.
+
+## Session-scoped hooks (fork extension)
+
+`src/hook/session-hooks.ts` exposes `SessionHooks` — a Service with
+`add / remove / list / clear` for registering hooks at runtime, scoped to a
+single session. Entries with `once: true` are auto-removed after firing.
+`SessionHooks` is provided as an internal dependency of `SettingsHook.layer`
+(`Layer.provide(SessionHooks.defaultLayer)`), so call sites of `trigger`
+require zero changes — session entries are merged transparently inside the
+trigger reducer. When `ctx.isSubAgent === true`, `Stop` event lookup is
+translated to `SubagentStop` for session-hook matching only; upstream
+dispatchers in `prompt.ts` (main session) and `task.ts` (sub-agent) continue
+to emit their original event names.
+
+`SessionHooks.clear` is intentionally not yet wired — call it from a
+`SessionEnd` / `Session.delete` hook in a future WP to avoid long-session
+leaks.
+
+## Performance
+
+`trigger` short-circuits at the entry when neither the on-disk settings chain
+nor the session store has any entry for the current event — skipping envelope
+build, matcher concatenation, and regex matching. The session probe goes
+through `SessionHooks.hasForEvent(sessionID, event)` (O(1) `Map.get` + a small
+`.some` over the per-session array). The `Stop`→`SubagentStop` translation
+runs **before** the session probe so sub-agent contexts hit the right key.
+The file-side check uses the original `payload.event` to address the settings
+chain literally, so wildcard matchers are never falsely skipped.
+
+## Robustness
+
+`execShell` performs an `existsSync(entry.__sourceDir)` pre-check before
+spawning. If the plugin directory has been GC'd (plugin uninstalled, repo
+cleaned, etc.) the handler resolves with `exitCode: 0` + empty stdout — a
+silent allow — instead of letting the shell turn the missing script into a
+misleading exit 2 deny. Only the `command` handler is affected; `agent` /
+`mcp` / `http` / `prompt` do not depend on the plugin's physical directory.

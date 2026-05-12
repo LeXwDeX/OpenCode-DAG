@@ -2215,7 +2215,7 @@ describe("ProviderTransform.variants", () => {
     expect(result).toEqual({})
   })
 
-  test("deepseek returns empty object", () => {
+  test("deepseek-chat returns reasoning efforts (deepseek v4 flash supports variants)", () => {
     const model = createMockModel({
       id: "deepseek/deepseek-chat",
       providerID: "deepseek",
@@ -2226,7 +2226,7 @@ describe("ProviderTransform.variants", () => {
       },
     })
     const result = ProviderTransform.variants(model)
-    expect(result).toEqual({})
+    expect(Object.keys(result)).toEqual(["low", "medium", "high"])
   })
 
   test("minimax returns empty object", () => {
@@ -2820,7 +2820,7 @@ describe("ProviderTransform.variants", () => {
   })
 
   describe("@ai-sdk/openai", () => {
-    test("gpt-5-pro returns empty object", () => {
+    test("gpt-5-pro returns only high effort", () => {
       const model = createMockModel({
         id: "gpt-5-pro",
         providerID: "openai",
@@ -2831,7 +2831,7 @@ describe("ProviderTransform.variants", () => {
         },
       })
       const result = ProviderTransform.variants(model)
-      expect(result).toEqual({})
+      expect(Object.keys(result)).toEqual(["high"])
     })
 
     test("standard openai models return custom efforts with reasoningSummary", () => {
@@ -2871,10 +2871,10 @@ describe("ProviderTransform.variants", () => {
 
     test("models after 2025-12-04 include 'xhigh' effort", () => {
       const model = createMockModel({
-        id: "openai/gpt-5-chat",
+        id: "openai/gpt-5-reasoning",
         providerID: "openai",
         api: {
-          id: "gpt-5-chat",
+          id: "gpt-5-reasoning",
           url: "https://api.openai.com",
           npm: "@ai-sdk/openai",
         },

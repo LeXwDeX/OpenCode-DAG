@@ -13,6 +13,7 @@ import { LSP } from "@/lsp/lsp"
 import { MCP } from "../../src/mcp"
 import { Permission } from "../../src/permission"
 import { SettingsHook } from "../../src/hook/settings"
+import { HookStartContext } from "../../src/hook/start-context"
 import { Plugin } from "../../src/plugin"
 import { Provider as ProviderSvc } from "@/provider/provider"
 import { Env } from "../../src/env"
@@ -163,6 +164,7 @@ function makeHttp() {
     Command.defaultLayer,
     Permission.defaultLayer,
     SettingsHook.defaultLayer,
+    HookStartContext.defaultLayer,
     Plugin.defaultLayer,
     Config.defaultLayer,
     ProviderSvc.defaultLayer,

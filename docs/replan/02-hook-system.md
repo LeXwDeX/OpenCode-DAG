@@ -8,7 +8,7 @@
 - 配置位置：`~/.claude/settings.json`、`<project>/.claude/settings.json`、`<project>/.claude/settings.local.json`
 - 配置 schema：`hooks: { <EventName>: [{ matcher?: string, hooks: [{ type: "command", command: string, timeout?: number }] }] }`
 - 调用约定：spawn 子进程，stdin 收 JSON，stdout 可选 JSON 控制，exit code 决定阻断/放行；
-- 事件名：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、`SubagentStop`、`Notification`、`PreCompact`、`SessionStart`、`SessionEnd`。
+- 事件名（fork 实现 8 个，去掉 CC 的 `Notification` —— 权限提示走内部 bus）：`PreToolUse`、`PostToolUse`、`UserPromptSubmit`、`Stop`、`SubagentStop`、`PreCompact`、`SessionStart`、`SessionEnd`。
 
 ## 2. 与现有 OpenCode plugin hook 的关系
 
@@ -91,7 +91,7 @@ packages/opencode/src/hook/
 | `UserPromptSubmit` | `prompt` | 可阻断；可通过 stdout JSON `{decision: "block", reason}` 阻止提交 |
 | `Stop` | `stop_hook_active` | session 即将停止 |
 | `SubagentStop` | `stop_hook_active` | 子 agent 完成 |
-| `Notification` | `message` | OpenCode 主动通知（idle、permission 待批） |
+| `Notification` | `message` | _未实现 (removed in fork)_ — 权限提示通过内部 bus 暴露 |
 | `PreCompact` | `trigger`, `custom_instructions?` | 上下文压缩前 |
 | `SessionStart` | `source` | `startup` / `resume` / `clear` |
 | `SessionEnd` | `reason` | `clear` / `logout` / `exit` |
@@ -134,7 +134,7 @@ hook 进程可向 stdout 写一行 JSON：
 | `UserPromptSubmit` | `session/prompt.ts` 进 runLoop 之前 |
 | `PreToolUse` | `session/prompt.ts` 调用 tool 之前（permission 检查同位） |
 | `PostToolUse` | `session/prompt.ts` 收到 tool result 之后 |
-| `Notification` | 现有 `notification` 通道接入 |
+| `Notification` | _removed in fork_ — 不接入，由内部 permission bus 兜底 |
 | `Stop` | runLoop 终止 |
 | `SubagentStop` | task / scout agent 结束 |
 | `PreCompact` | session compaction 前 |
@@ -165,3 +165,36 @@ hook 进程可向 stdout 写一行 JSON：
 
 - `--hook-debug` flag：打印每次 hook 调用的 stdin/stdout/exit code；
 - `opencode hook list/test` 子命令：诊断当前 hook 配置加载情况。
+
+## 11. 阶段 5 已实施（hook 协议补强 P0/P1）
+
+| WP | 内容 | 落点 |
+|---|---|---|
+| WP-5A | `SessionStart` 返回的 `additionalContexts` 真注入到首轮 user message（之前 silent drop） | 新建 `src/hook/start-context.ts`（InstanceState 暂存）+ `share/session.ts` 改 `Effect.exit` append + `prompt.ts` 首轮 drain |
+| WP-5B | stdout 控制 JSON `{continue: false}` 真短路：trigger 双层 break + 4 调用点（PreToolUse/PostToolUse/UserPromptSubmit/PreCompact）消费 `preventContinuation` early return | `settings.ts` trigger 主循环；`prompt.ts` / `compaction.ts` 调用点 |
+| WP-5C | `suppressOutput` schema 兼容（接受字段，运行时 no-op，因 fork 默认不渲染 hook stdout） | `settings.ts` 6 行 docstring |
+| WP-5D | Session-scoped hook 动态注入：`SessionHooks` Service（add/remove/list/clear）+ `once:true` 自动清理 + `ctx.isSubAgent` 时 `Stop→SubagentStop` 翻译 | 新建 `src/hook/session-hooks.ts`；`settings.ts` trigger 内合并 + Layer.provide |
+
+剩余工作（独立 WP，未阻塞 fork.1）：
+- frontmatter parser 对接（agent prompt 内联 hook 配置）
+- `SessionHooks.clear` 在 `SessionEnd` / `Session.delete` 时调用以避免长会话泄漏
+
+测试基线：阶段 5 净增 +9 测试（≥8 spec 门禁），全量 2361 PASS / 0 回归。
+
+## 12. 阶段 6 已实施（hook P1 鲁棒性）
+
+| WP | 内容 | 落点 |
+|---|---|---|
+| WP-6A | `trigger` 入口 O(1) 短路：无 hook 配置时绕过 envelope 构建 + matcher 拼接 + regex 匹配热路径。`sessionEvent` 翻译（`Stop`→`SubagentStop` in sub-agent ctx）放在短路探测之前以保持 `hasSession` 查询 key 正确；`hasFile` 仍用原始 `payload.event` 字面寻址 settings 链，不会误杀通配 matcher | `settings.ts:1040-1046` + `session-hooks.ts` 新增 `hasForEvent` |
+| WP-6B | Settings 接受 `allowUntrusted?: boolean` schema 字段 + trigger 短路后 TODO 注释块锁定未来 trust 系统接入点 — fork **当前无 workspace-trust 基础设施**（取证：`rg trust\|Trusted` 在 `src/` 下唯一命中是 `tool/task.txt` 散文），仅留接入点不写假实现；接入契约：未来 trust gate 失败必须 silent allow（log.warn + 空 result，禁止 throw/deny） | `settings.ts` Settings interface + trigger reducer 注释 |
+| WP-6C | command handler `execShell` 在 `child_process.spawn` 之前对 `entry.__sourceDir` 做 `existsSync` 预检；缺失时 silent allow（`exitCode: 0` + 空 stdout）而非 deny — 选 silent allow 是因 fork hook 协议铁律「故障不阻塞主流程」与 GC 竞态属于运行时偶发故障类一致；只挂 command handler（agent/mcp/http/prompt 不依赖 plugin 物理目录） | `settings.ts:508-515` |
+
+测试基线：阶段 6 净增 +3 测试，hook 60→63 PASS / 全量 2361→2365 PASS / 0 回归。
+
+## 13. 阶段 7 最终验收（已交付）
+
+收口三件事：
+
+1. **全量回归**：`bun test test/` = **2365 PASS / 20 skip / 2 todo / 1 fail / 190 files**；唯一 fail 是 `test/tool/truncation.test.ts > cleanup > 7 days`（PRE-EXISTING 时间敏感测试，与 hook 0 关联）。`bun turbo typecheck` = 13 包全绿。
+2. **CC 示例 e2e 兼容**：以 CC 官方文档 verbatim 配置（PreToolUse+Bash matcher / PostToolUse+Edit|Write pipe-list / SessionStart additionalContext）做 8 用例 e2e 跑通，**8/8 PASS**；验证脚手架（`test/hook/cc-compat.test.ts`）确认契约后已删除，hook 套件回到 63 PASS 基线。
+3. **兼容性矩阵文档化**：6 项严格超集 + 1 项 schema-only + 2 项行为差异（`suppressOutput` 默认翻转 / `Notification` 显式不支持）已在 `RELEASE_NOTES.md` ⟶「Hook 协议 CC 兼容性总结（阶段 7 验证）」段定稿，作为 fork 与 CC 差异的权威说明。

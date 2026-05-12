@@ -4,6 +4,7 @@ import { SyncEvent } from "@/sync"
 import { Effect, Layer, Scope, Context } from "effect"
 import { Config } from "@/config/config"
 import { SettingsHook } from "@/hook/settings"
+import { HookStartContext } from "@/hook/start-context"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import * as ShareNext from "./share-next"
 
@@ -22,6 +23,7 @@ export const layer = Layer.effect(
     const session = yield* Session.Service
     const shareNext = yield* ShareNext.Service
     const settingsHook = yield* SettingsHook.Service
+    const startCtx = yield* HookStartContext.Service
     const scope = yield* Scope.Scope
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
@@ -45,12 +47,18 @@ export const layer = Layer.effect(
       // sessions only. Sub-agent sessions (parentID set) are excluded; CC has
       // no SubagentStart event. Failures never abort session creation.
       if (!result.parentID) {
-        yield* settingsHook
+        const exit = yield* settingsHook
           .trigger(
             { event: "SessionStart", source: "startup" },
             { sessionID: result.id, transcriptPath: "" },
           )
-          .pipe(Effect.ignore)
+          .pipe(Effect.exit)
+        if (exit._tag === "Success") {
+          for (const ctx of exit.value.additionalContexts) {
+            yield* startCtx.append(result.id, ctx)
+          }
+        }
+        // Failures are silently swallowed (matches prior Effect.ignore semantics)
       }
       if (result.parentID) return result
       const conf = yield* cfg.get()
@@ -68,6 +76,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(SettingsHook.defaultLayer),
+  Layer.provide(HookStartContext.defaultLayer),
 )
 
 export * as SessionShare from "./session"
