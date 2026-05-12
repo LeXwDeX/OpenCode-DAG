@@ -87,7 +87,11 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
+  // 版本号 guard：providerID 切换或新一轮 refresh 启动时，旧的 in-flight
+  // 请求 resolve 后会被丢弃，避免用过期数据覆盖当前 provider 的显示。
+  let refreshSeq = 0
   async function refresh() {
+    const seq = ++refreshSeq
     const pid = providerID()
     if (!pid || !isCopilotMode(pid)) {
       setLabel("")
@@ -97,6 +101,7 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
     // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
     // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
     const authEntry = await readCopilotAuthEntry(Global.Path.data)
+    if (seq !== refreshSeq) return
     const endpoint = resolveEndpoint({ providerConfig, authEntry })
     if (!endpoint) {
       console.debug(`[quota] resolveEndpoint null providerID=${pid}`)
@@ -104,6 +109,7 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
       return
     }
     const q = await fetchQuota(endpoint)
+    if (seq !== refreshSeq) return
     if (q) applyQuota(q)
     else setLabel("")
   }
