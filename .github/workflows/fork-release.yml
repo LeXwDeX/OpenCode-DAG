@@ -64,6 +64,11 @@ jobs:
           OPENCODE_CHANNEL: latest
           OPENCODE_VERSION: ${{ inputs.version || '' }}
 
+      # Bundle ripgrep into each dist/opencode-*/bin so air-gapped users do not
+      # hit the runtime download in packages/opencode/src/file/ripgrep.ts.
+      - name: Prefetch ripgrep
+        run: bun run ./packages/opencode/script/prefetch-ripgrep.ts
+
       - name: Package artifacts
         working-directory: packages/opencode/dist
         run: |
