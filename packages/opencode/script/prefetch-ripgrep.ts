@@ -111,12 +111,28 @@ async function extractRg(archive: string, rgKey: RgKey, targetBinDir: string): P
     return
   }
   fs.mkdirSync(targetBinDir, { recursive: true })
-  // Extract to a sibling temp dir, then copy. Use bsdtar / GNU tar — both handle
-  // .tar.gz and .zip on Linux/macOS/modern Windows (libarchive-backed `tar`).
+  // Extract to a sibling temp dir, then copy.
+  // On Windows, Git Bash's cygwin tar treats `D:\foo` as a remote `host:path`,
+  // so spawn the Windows-native tar.exe (libarchive, accepts native paths and
+  // handles both .tar.gz and .zip) directly via Bun.spawnSync — bypassing the
+  // shell entirely. On POSIX, just use system tar the same way.
   const tmp = path.join(cacheDir, `extract-${rgKey}`)
   fs.rmSync(tmp, { recursive: true, force: true })
   fs.mkdirSync(tmp, { recursive: true })
-  await $`tar -xf ${archive} -C ${tmp}`.quiet()
+  const tarBin =
+    process.platform === "win32" && fs.existsSync("C:\\Windows\\System32\\tar.exe")
+      ? "C:\\Windows\\System32\\tar.exe"
+      : "tar"
+  const proc = Bun.spawnSync({
+    cmd: [tarBin, "-xf", archive, "-C", tmp],
+    stdout: "pipe",
+    stderr: "pipe",
+  })
+  if (proc.exitCode !== 0) {
+    throw new Error(
+      `tar extract failed (exit ${proc.exitCode}) for ${archive}\nstderr: ${proc.stderr?.toString() ?? ""}`,
+    )
+  }
   // ripgrep archives extract to ripgrep-<version>-<platform>/rg(.exe)
   const subdirs = fs.readdirSync(tmp, { withFileTypes: true }).filter((e) => e.isDirectory())
   let extractedRg: string | undefined
