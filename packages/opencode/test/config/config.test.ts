@@ -1968,7 +1968,8 @@ test("wellknown remote_config supports templated env vars in headers", async () 
   let remoteHeaders: HeadersInit | undefined
   globalThis.fetch = mock((url: string | URL | Request, init?: RequestInit) => {
     const urlStr = url instanceof Request ? url.url : url instanceof URL ? url.href : url
-    if (urlStr.includes(".well-known/opencode")) {
+    const parsedUrl = new URL(urlStr)
+    if (parsedUrl.pathname.includes(".well-known/opencode")) {
       wellknownFetchedUrl = urlStr
       return Promise.resolve(
         new Response(
@@ -1984,7 +1985,7 @@ test("wellknown remote_config supports templated env vars in headers", async () 
         ),
       )
     }
-    if (urlStr.includes("config.example.com")) {
+    if (parsedUrl.hostname === "config.example.com") {
       remoteFetchedUrl = urlStr
       remoteHeaders = init?.headers
       return Promise.resolve(
