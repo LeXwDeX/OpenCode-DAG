@@ -1,13 +1,13 @@
 // view.tsx — 在 session prompt 右侧显示 Copilot premium request 配额。
 //
-// Provider 选择策略：
-//   从当前 session 最后一条 AssistantMessage 取 providerID（响应式）；
-//   无消息时降级到 config.model 解析的 providerID；
-//   启用判定：isCopilotMode(providerID)。
+// 设计原则（参考 f32284cf8b 老版本）：
+//   不依赖 providerID / 会话 messages — 只看 auth.json 与 config.provider 是否能
+//   解析出有效 endpoint，能就显示，不能就空字符串。这样无论用户处于什么 provider
+//   下，只要装了 github-copilot 凭据就能看到额度。
 //
 // 端点选择：
-//   优先读 api.state.config.provider["github-copilot"]，由 resolveEndpoint
-//   决定走代理（provider.api 存在）还是原厂 api.github.com。
+//   provider.github-copilot.api 存在 → 走代理 ${api}/quota（扁平 schema）
+//   否则走 GitHub 原厂 /copilot_internal/user（嵌套 schema）
 //
 // 颜色规则（按已用量绝对值）：
 //   used ≤ 100 → success（绿）；≤ 200 → warning（黄）；> 200 → error（红）
@@ -16,15 +16,15 @@
 // 因此组件在数据就绪前显示 "⊘ …" 占位。
 import path from "node:path"
 import { readFile } from "node:fs/promises"
-import type { AssistantMessage } from "@opencode-ai/sdk/v2"
 import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { createSignal, onCleanup } from "solid-js"
 import { Global } from "@opencode-ai/core/global"
-import { isCopilotMode } from "./enabled"
+import * as Log from "@opencode-ai/core/util/log"
 import { resolveEndpoint, type AuthEntrySlice, type ProviderConfigSlice } from "./endpoint"
 import { fetchQuota, type QuotaInfo } from "./fetch"
 
 const id = "internal:session-quota"
+const log = Log.create({ service: "tui.quota" })
 
 async function readCopilotAuthEntry(stateDir: string): Promise<AuthEntrySlice | undefined> {
   try {
@@ -43,13 +43,19 @@ async function readCopilotAuthEntry(stateDir: string): Promise<AuthEntrySlice | 
 function readCopilotProviderConfig(api: TuiPluginApi): ProviderConfigSlice | undefined {
   const raw = api.state.config.provider?.["github-copilot"]
   if (!raw) return undefined
-  const apiUrl = typeof raw.api === "string" ? raw.api : undefined
+  // 兼容两种 schema：
+  //   1) 顶层 `api`（老式 / 直接 endpoint 字段）
+  //   2) `options.baseURL`（ai-sdk OpenAI-compatible 标准字段，用户实际使用）
+  // 任一存在即视作 proxy 模式根 URL，由 endpoint.ts 拼 `/quota`。
+  const topApi = typeof raw.api === "string" ? raw.api : undefined
+  const baseURL = typeof raw.options?.baseURL === "string" ? raw.options.baseURL : undefined
+  const apiUrl = topApi ?? baseURL
   const rawApiKey = raw.options?.apiKey
   const apiKey = typeof rawApiKey === "string" ? rawApiKey : undefined
-  return { api: apiUrl, options: { apiKey } }
+  return { api: apiUrl?.replace(/\/+$/, ""), options: { apiKey } }
 }
 
-export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
+export function QuotaView(props: { api: TuiPluginApi }) {
   const theme = () => props.api.theme.current
   const [label, setLabel] = createSignal("⊘ …")
   const [tone, setTone] = createSignal<"muted" | "success" | "warning" | "error">("muted")
@@ -67,18 +73,7 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
-  // 从最后一条 AssistantMessage 取 providerID；无消息时从 config.model 解析
-  const providerID = createMemo(() => {
-    const messages = props.api.state.session.messages(props.session_id)
-    const last = messages.findLast((m): m is AssistantMessage => m.role === "assistant")
-    if (last) return last.providerID
-    const configModel = props.api.state.config.model ?? ""
-    const slash = configModel.indexOf("/")
-    return slash > 0 ? configModel.slice(0, slash) : configModel
-  })
-
   function applyQuota(q: QuotaInfo) {
-    // q.used 是已消费量，直接用于显示和颜色判断
     setTone(q.used <= 100 ? "success" : q.used <= 200 ? "warning" : "error")
     if (q.accounts_total > 0) {
       setLabel(`[${q.accounts_active}/${q.accounts_total} | ${q.used}/${q.entitlement}]`)
@@ -87,38 +82,41 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
     }
   }
 
-  // 版本号 guard：providerID 切换或新一轮 refresh 启动时，旧的 in-flight
-  // 请求 resolve 后会被丢弃，避免用过期数据覆盖当前 provider 的显示。
   let refreshSeq = 0
   async function refresh() {
     const seq = ++refreshSeq
-    const pid = providerID()
-    if (!pid || !isCopilotMode(pid)) {
-      setLabel("")
-      return
-    }
     const providerConfig = readCopilotProviderConfig(props.api)
+    // 内网代理 + apiKey 齐备 → 仅走 proxy 分支，auth.json 不影响结果，省一次 I/O。
+    // 外网模式（无 baseURL）或 proxy 模式缺 apiKey 时仍需 OAuth refresh token，必须读 auth.json。
     // 注意：auth.json 位于 Global.Path.data（XDG_DATA_HOME），
     // 不能用 props.api.state.path.state（XDG_STATE_HOME），二者是不同目录。
-    const authEntry = await readCopilotAuthEntry(Global.Path.data)
+    const proxyWithKey = !!(providerConfig?.api && providerConfig.options?.apiKey)
+    const authEntry = proxyWithKey ? undefined : await readCopilotAuthEntry(Global.Path.data)
     if (seq !== refreshSeq) return
     const endpoint = resolveEndpoint({ providerConfig, authEntry })
     if (!endpoint) {
-      console.debug(`[quota] resolveEndpoint null providerID=${pid}`)
+      log.debug("refresh.skip endpoint null", {
+        has_providerConfig: !!providerConfig,
+        has_authEntry: !!authEntry,
+        auth_type: authEntry?.type ?? "<none>",
+      })
       setLabel("")
       return
     }
+    log.debug("refresh.fetch", { mode: endpoint.mode, url: endpoint.url })
     const q = await fetchQuota(endpoint)
     if (seq !== refreshSeq) return
-    if (q) applyQuota(q)
-    else setLabel("")
+    if (q) {
+      log.debug("refresh.ok", { used: q.used, entitlement: q.entitlement })
+      applyQuota(q)
+    } else {
+      log.debug("refresh.skip fetchQuota null", { mode: endpoint.mode })
+      setLabel("")
+    }
   }
 
-  // providerID 变化时立即重新拉取（含首次挂载）
-  createEffect(() => {
-    void refresh()
-  })
-
+  // 首次挂载立即拉取
+  void refresh()
   // 每 60 秒刷新一次
   const timer = setInterval(() => void refresh(), 60_000)
   onCleanup(() => clearInterval(timer))
@@ -132,14 +130,16 @@ export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  log.info("plugin tui() called", { id })
   api.slots.register({
     order: 100,
     slots: {
-      session_prompt_right(_ctx, props) {
-        return <QuotaView api={api} session_id={props.session_id} />
+      session_prompt_right() {
+        return <QuotaView api={api} />
       },
     },
   })
+  log.info("plugin slot registered", { id, slot: "session_prompt_right" })
 }
 
 const plugin: TuiPluginModule & { id: string } = {
