@@ -13,7 +13,10 @@ const basePayload = z.object({
 })
 
 const groups = z
-  .object({ result: z.union([z.number(), z.string()]).nullish(), group: z.object({ key: z.string(), value: z.string() }).array() })
+  .object({
+    result: z.union([z.number(), z.string()]).nullish(),
+    group: z.object({ key: z.string(), value: z.string() }).array(),
+  })
   .array()
 
 const honeycombWebhookPayload = z.discriminatedUnion("type", [
