@@ -2712,3 +2712,46 @@ test("opencode loader keeps paid models when auth exists", async () => {
     }
   }
 })
+
+test("github-copilot custom loader registers when baseURL is configured (no auth, no env)", async () => {
+  // Regression for fix/copilot-config-provider-modelloader:
+  // When the user declares github-copilot in `provider.*` config with a `baseURL`
+  // (corporate proxy / gateway / self-host), the built-in custom loader must
+  // return autoload:true so its modelLoader gets registered. Without registration,
+  // gpt-5.x routes through the fallback `sdk.languageModel(...)` path
+  // (-> /chat/completions) instead of `sdk.responses(...)` (-> /responses).
+  //
+  // Internal `state.modelLoaders` isn't exposed via Provider.Interface, so we
+  // assert observable proxies: the provider lands in list() with baseURL
+  // preserved, and copilot's models.dev catalog (e.g. gpt-5) is reachable.
+  // The new `(input: Info) =>` loader signature is exercised here — a regression
+  // to `() =>` (or a crash reading `input.options`) would fail this test.
+  await using tmp = await tmpdir({
+    init: async (dir) => {
+      await Bun.write(
+        path.join(dir, "opencode.json"),
+        JSON.stringify({
+          $schema: "https://opencode.ai/config.json",
+          provider: {
+            "github-copilot": {
+              options: {
+                baseURL: "https://copilot-proxy.internal/v1",
+              },
+            },
+          },
+        }),
+      )
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const providers = await list()
+      const copilot = providers[ProviderID.make("github-copilot")]
+      expect(copilot).toBeDefined()
+      expect(copilot.options.baseURL).toBe("https://copilot-proxy.internal/v1")
+      // models.dev catalog should be intact (custom loader does not strip models)
+      expect(Object.keys(copilot.models).length).toBeGreaterThan(0)
+    },
+  })
+})
