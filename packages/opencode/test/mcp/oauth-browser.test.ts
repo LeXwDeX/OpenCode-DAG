@@ -167,7 +167,11 @@ const trackBrowserOpenFailed = Effect.gen(function* () {
 const authenticateScoped = (name: string) =>
   Effect.gen(function* () {
     const mcp = yield* service
-    yield* mcp.authenticate(name).pipe(Effect.ignore, Effect.catchCause(() => Effect.void), Effect.forkScoped)
+    yield* mcp.authenticate(name).pipe(
+      Effect.ignore,
+      Effect.catchCause(() => Effect.void),
+      Effect.forkScoped,
+    )
   })
 
 mcpTest.instance(
@@ -180,10 +184,7 @@ mcpTest.instance(
       const event = yield* trackBrowserOpenFailed
       yield* authenticateScoped("test-oauth-server")
 
-      const failure = yield* awaitWithTimeout(
-        Deferred.await(event),
-        "Timed out waiting for BrowserOpenFailed event",
-      )
+      const failure = yield* awaitWithTimeout(Deferred.await(event), "Timed out waiting for BrowserOpenFailed event")
 
       expect(failure.mcpName).toBe("test-oauth-server")
       expect(failure.url).toContain("https://")
