@@ -196,9 +196,9 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         },
         options: {},
       }),
-    "github-copilot": () =>
+    "github-copilot": (input: Info) =>
       Effect.succeed({
-        autoload: false,
+        autoload: Boolean(input.options?.baseURL),
         async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
           if (useLanguageModel(sdk)) return sdk.languageModel(modelID)
           return shouldUseCopilotResponsesApi(modelID) ? sdk.responses(modelID) : sdk.chat(modelID)
