@@ -2061,3 +2061,100 @@ it.live(
     ),
   30_000,
 )
+
+// When the model calls `todowrite`, the tool output already contains the
+// full todo list as JSON. The per-tool-result reminder injection must skip
+// this case so the same state isn't duplicated inside one assistant message.
+it.live(
+  "skips per-tool-result todo reminder injection when the tool is todowrite",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "todo-reminder-skip-self",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        yield* llm.tool("todowrite", {
+          todos: [{ content: "ship the fix", status: "in_progress", priority: "high" }],
+        })
+        yield* llm.text("noted")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "track this todo" }],
+        })
+
+        // Locate the todowrite tool part across all assistant messages.
+        const msgs = yield* sessions.messages({ sessionID: chat.id })
+        const toolParts = msgs.flatMap((m) => m.parts).filter((p): p is MessageV2.ToolPart => p.type === "tool")
+        const todoTool = toolParts.find((p) => p.tool === "todowrite")
+        expect(todoTool).toBeDefined()
+        if (!todoTool || todoTool.state.status !== "completed") return
+
+        // The tool's own output is the JSON of todos — sanity check first.
+        expect(todoTool.state.output).toContain("ship the fix")
+        // No hook_additional_context wrapper containing the rendered reminder.
+        // The reminder header "Current TODO list" comes only from renderTodoReminder.
+        expect(todoTool.state.output).not.toContain("<hook_additional_context>")
+        expect(todoTool.state.output).not.toContain("Current TODO list")
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)
+
+// Sibling case: for any non-todowrite tool, the reminder MUST still be
+// appended to the tool result so the LLM keeps seeing its plan after each
+// step. Guards against regressing the gate from "skip todowrite" to "skip all".
+// Note: must exercise the LLM-driven tool execute path (where the gate lives),
+// not direct invocations like prompt.shell which bypass that wrapper.
+it.live(
+  "still appends todo reminder to non-todowrite tool results",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const todo = yield* Todo.Service
+        const chat = yield* sessions.create({
+          title: "todo-reminder-other-tool",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        yield* todo.update({
+          sessionID: chat.id,
+          todos: [{ content: "ship the fix", status: "in_progress", priority: "high" }],
+        })
+
+        yield* llm.tool("bash", {
+          command: "printf hi",
+          description: "say hi",
+          timeout: 5_000,
+        })
+        yield* llm.text("done")
+
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          parts: [{ type: "text", text: "go" }],
+        })
+
+        const msgs = yield* sessions.messages({ sessionID: chat.id })
+        const toolParts = msgs.flatMap((m) => m.parts).filter((p): p is MessageV2.ToolPart => p.type === "tool")
+        const bashTool = toolParts.find((p) => p.tool === "bash")
+        expect(bashTool).toBeDefined()
+        if (!bashTool || bashTool.state.status !== "completed") return
+
+        expect(bashTool.state.output).toContain("hi")
+        expect(bashTool.state.output).toContain("<hook_additional_context>")
+        expect(bashTool.state.output).toContain("Current TODO list")
+        expect(bashTool.state.output).toContain("ship the fix")
+      }),
+      { git: true, config: providerCfg },
+    ),
+  30_000,
+)

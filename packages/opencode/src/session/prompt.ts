@@ -556,8 +556,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   // (additionalContext / systemMessage injection). Tool result still returns.
                   const postContexts = postHook.preventContinuation ? [] : postHook.additionalContexts
                   const hookContexts = [...preHook.additionalContexts, ...postContexts]
-                  // Inject TODO reminder into every tool result so the LLM stays on track
-                  if (input.agent.todo_reminder !== false) {
+                  // Inject TODO reminder into every tool result so the LLM stays on track.
+                  // Skip when the tool call itself is `todowrite` — its output already
+                  // contains the full todo list as JSON, so re-injecting the rendered
+                  // reminder would duplicate the same state inside a single message and
+                  // waste tokens. For every other tool, append the reminder so the LLM
+                  // sees its current plan after each step.
+                  if (input.agent.todo_reminder !== false && item.id !== "todowrite") {
                     const todos = yield* todo.get(input.session.id)
                     const todoText = renderTodoReminder(todos)
                     if (todoText) hookContexts.push(todoText)
