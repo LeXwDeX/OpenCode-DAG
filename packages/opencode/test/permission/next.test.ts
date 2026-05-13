@@ -556,372 +556,398 @@ test("disabled - specific allow overrides wildcard deny", () => {
 
 // ask tests
 
-it.instance("ask - resolves immediately when action is allow", () =>
-  Effect.gen(function* () {
-    const result = yield* ask({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
-    })
-    expect(result).toBeUndefined()
-  }),
-  { git: true },
-)
-
-it.instance("ask - throws DeniedError when action is deny", () =>
-  Effect.gen(function* () {
-    const err = yield* fail(
-      ask({
+it.instance(
+  "ask - resolves immediately when action is allow",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* ask({
         sessionID: SessionID.make("session_test"),
         permission: "bash",
-        patterns: ["rm -rf /"],
+        patterns: ["ls"],
         metadata: {},
         always: [],
-        ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
-      }),
-    )
-    expect(err).toBeInstanceOf(Permission.DeniedError)
-  }),
+        ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+      })
+      expect(result).toBeUndefined()
+    }),
   { git: true },
 )
 
-it.instance("ask - stays pending when action is ask", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
-    }).pipe(Effect.forkScoped)
-
-    expect(yield* waitForPending(1)).toHaveLength(1)
-    yield* rejectAll()
-    yield* Fiber.await(fiber)
-  }),
-  { git: true },
-)
-
-it.instance("ask - adds request to pending list", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: { cmd: "ls" },
-      always: ["ls"],
-      tool: {
-        messageID: MessageID.make("msg_test"),
-        callID: "call_test",
-      },
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
-
-    const items = yield* waitForPending(1)
-    expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: { cmd: "ls" },
-      always: ["ls"],
-      tool: {
-        messageID: MessageID.make("msg_test"),
-        callID: "call_test",
-      },
-    })
-
-    yield* rejectAll()
-    yield* Fiber.await(fiber)
-  }),
-  { git: true },
-)
-
-it.instance("ask - publishes asked event", () =>
-  Effect.gen(function* () {
-    const bus = yield* Bus.Service
-    const seen = yield* Deferred.make<Permission.Request>()
-    const unsub = yield* bus.subscribeCallback(Permission.Event.Asked, (event) => {
-      Deferred.doneUnsafe(seen, Effect.succeed(event.properties))
-    })
-    yield* Effect.addFinalizer(() => Effect.sync(unsub))
-
-    const fiber = yield* ask({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: { cmd: "ls" },
-      always: ["ls"],
-      tool: {
-        messageID: MessageID.make("msg_test"),
-        callID: "call_test",
-      },
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
-
-    expect(yield* waitForPending(1)).toHaveLength(1)
-    expect(
-      yield* Deferred.await(seen).pipe(
-        Effect.timeoutOrElse({
-          duration: "1 second",
-          orElse: () => Effect.fail(new Error("timed out waiting for permission asked event")),
+it.instance(
+  "ask - throws DeniedError when action is deny",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [{ permission: "bash", pattern: "*", action: "deny" }],
         }),
-      ),
-    ).toMatchObject({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-    })
+      )
+      expect(err).toBeInstanceOf(Permission.DeniedError)
+    }),
+  { git: true },
+)
 
-    yield* rejectAll()
-    yield* Fiber.await(fiber)
-  }),
+it.instance(
+  "ask - stays pending when action is ask",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - adds request to pending list",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: { cmd: "ls" },
+        always: ["ls"],
+        tool: {
+          messageID: MessageID.make("msg_test"),
+          callID: "call_test",
+        },
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+
+      const items = yield* waitForPending(1)
+      expect(items).toHaveLength(1)
+      expect(items[0]).toMatchObject({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: { cmd: "ls" },
+        always: ["ls"],
+        tool: {
+          messageID: MessageID.make("msg_test"),
+          callID: "call_test",
+        },
+      })
+
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - publishes asked event",
+  () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const seen = yield* Deferred.make<Permission.Request>()
+      const unsub = yield* bus.subscribeCallback(Permission.Event.Asked, (event) => {
+        Deferred.doneUnsafe(seen, Effect.succeed(event.properties))
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(unsub))
+
+      const fiber = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: { cmd: "ls" },
+        always: ["ls"],
+        tool: {
+          messageID: MessageID.make("msg_test"),
+          callID: "call_test",
+        },
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      expect(
+        yield* Deferred.await(seen).pipe(
+          Effect.timeoutOrElse({
+            duration: "1 second",
+            orElse: () => Effect.fail(new Error("timed out waiting for permission asked event")),
+          }),
+        ),
+      ).toMatchObject({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+      })
+
+      yield* rejectAll()
+      yield* Fiber.await(fiber)
+    }),
   { git: true },
 )
 
 // reply tests
 
-it.instance("reply - once resolves the pending ask", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      id: PermissionID.make("per_test1"),
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - once resolves the pending ask",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        id: PermissionID.make("per_test1"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(1)
-    yield* reply({ requestID: PermissionID.make("per_test1"), reply: "once" })
-    yield* Fiber.join(fiber)
-  }),
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionID.make("per_test1"), reply: "once" })
+      yield* Fiber.join(fiber)
+    }),
   { git: true },
 )
 
-it.instance("reply - reject throws RejectedError", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      id: PermissionID.make("per_test2"),
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - reject throws RejectedError",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        id: PermissionID.make("per_test2"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(1)
-    yield* reply({ requestID: PermissionID.make("per_test2"), reply: "reject" })
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionID.make("per_test2"), reply: "reject" })
 
-    const exit = yield* Fiber.await(fiber)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
-  }),
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
+    }),
   { git: true },
 )
 
-it.instance("reply - reject with message throws CorrectedError", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      id: PermissionID.make("per_test2b"),
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - reject with message throws CorrectedError",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        id: PermissionID.make("per_test2b"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(1)
-    yield* reply({
-      requestID: PermissionID.make("per_test2b"),
-      reply: "reject",
-      message: "Use a safer command",
-    })
+      yield* waitForPending(1)
+      yield* reply({
+        requestID: PermissionID.make("per_test2b"),
+        reply: "reject",
+        message: "Use a safer command",
+      })
 
-    const exit = yield* Fiber.await(fiber)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) {
-      const err = Cause.squash(exit.cause)
-      expect(err).toBeInstanceOf(Permission.CorrectedError)
-      expect(String(err)).toContain("Use a safer command")
-    }
-  }),
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) {
+        const err = Cause.squash(exit.cause)
+        expect(err).toBeInstanceOf(Permission.CorrectedError)
+        expect(String(err)).toContain("Use a safer command")
+      }
+    }),
   { git: true },
 )
 
-it.instance("reply - always persists approval and resolves", () =>
-  Effect.gen(function* () {
-    const fiber = yield* ask({
-      id: PermissionID.make("per_test3"),
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: ["ls"],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - always persists approval and resolves",
+  () =>
+    Effect.gen(function* () {
+      const fiber = yield* ask({
+        id: PermissionID.make("per_test3"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(1)
-    yield* reply({ requestID: PermissionID.make("per_test3"), reply: "always" })
-    yield* Fiber.join(fiber)
+      yield* waitForPending(1)
+      yield* reply({ requestID: PermissionID.make("per_test3"), reply: "always" })
+      yield* Fiber.join(fiber)
 
-    const result = yield* ask({
-      sessionID: SessionID.make("session_test2"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    })
-    expect(result).toBeUndefined()
-  }),
+      const result = yield* ask({
+        sessionID: SessionID.make("session_test2"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      })
+      expect(result).toBeUndefined()
+    }),
   { git: true },
 )
 
-it.instance("reply - reject cancels all pending for same session", () =>
-  Effect.gen(function* () {
-    const a = yield* ask({
-      id: PermissionID.make("per_test4a"),
-      sessionID: SessionID.make("session_same"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - reject cancels all pending for same session",
+  () =>
+    Effect.gen(function* () {
+      const a = yield* ask({
+        id: PermissionID.make("per_test4a"),
+        sessionID: SessionID.make("session_same"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    const b = yield* ask({
-      id: PermissionID.make("per_test4b"),
-      sessionID: SessionID.make("session_same"),
-      permission: "edit",
-      patterns: ["foo.ts"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+      const b = yield* ask({
+        id: PermissionID.make("per_test4b"),
+        sessionID: SessionID.make("session_same"),
+        permission: "edit",
+        patterns: ["foo.ts"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(2)
-    yield* reply({ requestID: PermissionID.make("per_test4a"), reply: "reject" })
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionID.make("per_test4a"), reply: "reject" })
 
-    const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
-    expect(Exit.isFailure(ea)).toBe(true)
-    expect(Exit.isFailure(eb)).toBe(true)
-    if (Exit.isFailure(ea)) expect(Cause.squash(ea.cause)).toBeInstanceOf(Permission.RejectedError)
-    if (Exit.isFailure(eb)) expect(Cause.squash(eb.cause)).toBeInstanceOf(Permission.RejectedError)
-  }),
+      const [ea, eb] = yield* Effect.all([Fiber.await(a), Fiber.await(b)])
+      expect(Exit.isFailure(ea)).toBe(true)
+      expect(Exit.isFailure(eb)).toBe(true)
+      if (Exit.isFailure(ea)) expect(Cause.squash(ea.cause)).toBeInstanceOf(Permission.RejectedError)
+      if (Exit.isFailure(eb)) expect(Cause.squash(eb.cause)).toBeInstanceOf(Permission.RejectedError)
+    }),
   { git: true },
 )
 
-it.instance("reply - always resolves matching pending requests in same session", () =>
-  Effect.gen(function* () {
-    const a = yield* ask({
-      id: PermissionID.make("per_test5a"),
-      sessionID: SessionID.make("session_same"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: ["ls"],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - always resolves matching pending requests in same session",
+  () =>
+    Effect.gen(function* () {
+      const a = yield* ask({
+        id: PermissionID.make("per_test5a"),
+        sessionID: SessionID.make("session_same"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    const b = yield* ask({
-      id: PermissionID.make("per_test5b"),
-      sessionID: SessionID.make("session_same"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+      const b = yield* ask({
+        id: PermissionID.make("per_test5b"),
+        sessionID: SessionID.make("session_same"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(2)
-    yield* reply({ requestID: PermissionID.make("per_test5a"), reply: "always" })
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionID.make("per_test5a"), reply: "always" })
 
-    yield* Fiber.join(a)
-    yield* Fiber.join(b)
-    expect(yield* list()).toHaveLength(0)
-  }),
+      yield* Fiber.join(a)
+      yield* Fiber.join(b)
+      expect(yield* list()).toHaveLength(0)
+    }),
   { git: true },
 )
 
-it.instance("reply - always keeps other session pending", () =>
-  Effect.gen(function* () {
-    const a = yield* ask({
-      id: PermissionID.make("per_test6a"),
-      sessionID: SessionID.make("session_a"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: ["ls"],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "reply - always keeps other session pending",
+  () =>
+    Effect.gen(function* () {
+      const a = yield* ask({
+        id: PermissionID.make("per_test6a"),
+        sessionID: SessionID.make("session_a"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: ["ls"],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    const b = yield* ask({
-      id: PermissionID.make("per_test6b"),
-      sessionID: SessionID.make("session_b"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+      const b = yield* ask({
+        id: PermissionID.make("per_test6b"),
+        sessionID: SessionID.make("session_b"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(2)
-    yield* reply({ requestID: PermissionID.make("per_test6a"), reply: "always" })
+      yield* waitForPending(2)
+      yield* reply({ requestID: PermissionID.make("per_test6a"), reply: "always" })
 
-    yield* Fiber.join(a)
-    expect((yield* list()).map((item) => item.id)).toEqual([PermissionID.make("per_test6b")])
+      yield* Fiber.join(a)
+      expect((yield* list()).map((item) => item.id)).toEqual([PermissionID.make("per_test6b")])
 
-    yield* rejectAll()
-    yield* Fiber.await(b)
-  }),
+      yield* rejectAll()
+      yield* Fiber.await(b)
+    }),
   { git: true },
 )
 
-it.instance("reply - publishes replied event", () =>
-  Effect.gen(function* () {
-    const bus = yield* Bus.Service
-    const seen = yield* Deferred.make<{ sessionID: SessionID; requestID: PermissionID; reply: Permission.Reply }>()
+it.instance(
+  "reply - publishes replied event",
+  () =>
+    Effect.gen(function* () {
+      const bus = yield* Bus.Service
+      const seen = yield* Deferred.make<{ sessionID: SessionID; requestID: PermissionID; reply: Permission.Reply }>()
 
-    const fiber = yield* ask({
-      id: PermissionID.make("per_test7"),
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
+      const fiber = yield* ask({
+        id: PermissionID.make("per_test7"),
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    yield* waitForPending(1)
+      yield* waitForPending(1)
 
-    const unsub = yield* bus.subscribeCallback(Permission.Event.Replied, (event) => {
-      Deferred.doneUnsafe(seen, Effect.succeed(event.properties))
-    })
-    yield* Effect.addFinalizer(() => Effect.sync(unsub))
+      const unsub = yield* bus.subscribeCallback(Permission.Event.Replied, (event) => {
+        Deferred.doneUnsafe(seen, Effect.succeed(event.properties))
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(unsub))
 
-    yield* reply({ requestID: PermissionID.make("per_test7"), reply: "once" })
-    yield* Fiber.join(fiber)
-    expect(
-      yield* Deferred.await(seen).pipe(
-        Effect.timeoutOrElse({
-          duration: "1 second",
-          orElse: () => Effect.fail(new Error("timed out waiting for permission replied event")),
-        }),
-      ),
-    ).toEqual({
-      sessionID: SessionID.make("session_test"),
-      requestID: PermissionID.make("per_test7"),
-      reply: "once",
-    })
-  }),
+      yield* reply({ requestID: PermissionID.make("per_test7"), reply: "once" })
+      yield* Fiber.join(fiber)
+      expect(
+        yield* Deferred.await(seen).pipe(
+          Effect.timeoutOrElse({
+            duration: "1 second",
+            orElse: () => Effect.fail(new Error("timed out waiting for permission replied event")),
+          }),
+        ),
+      ).toEqual({
+        sessionID: SessionID.make("session_test"),
+        requestID: PermissionID.make("per_test7"),
+        reply: "once",
+      })
+    }),
   { git: true },
 )
 
@@ -977,142 +1003,156 @@ it.live("permission requests stay isolated by directory", () =>
   }),
 )
 
-it.instance("pending permission rejects on instance dispose", () =>
-  Effect.gen(function* () {
-    const test = yield* TestInstance
-    const store = yield* InstanceStore.Service
-    const fiber = yield* ask({
-      id: PermissionID.make("per_dispose"),
-      sessionID: SessionID.make("session_dispose"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
-
-    expect(yield* waitForPending(1)).toHaveLength(1)
-    const ctx = yield* store.load({ directory: test.directory })
-    yield* store.dispose(ctx)
-
-    const exit = yield* Fiber.await(fiber)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
-  }),
-  { git: true },
-)
-
-it.instance("pending permission rejects on instance reload", () =>
-  Effect.gen(function* () {
-    const test = yield* TestInstance
-    const store = yield* InstanceStore.Service
-    const fiber = yield* ask({
-      id: PermissionID.make("per_reload"),
-      sessionID: SessionID.make("session_reload"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [],
-    }).pipe(Effect.forkScoped)
-
-    expect(yield* waitForPending(1)).toHaveLength(1)
-    yield* store.reload({ directory: test.directory })
-
-    const exit = yield* Fiber.await(fiber)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
-  }),
-  { git: true },
-)
-
-it.instance("reply - does nothing for unknown requestID", () =>
-  Effect.gen(function* () {
-    yield* reply({ requestID: PermissionID.make("per_unknown"), reply: "once" })
-    expect(yield* list()).toHaveLength(0)
-  }),
-  { git: true },
-)
-
-it.instance("ask - checks all patterns and stops on first deny", () =>
-  Effect.gen(function* () {
-    const err = yield* fail(
-      ask({
-        sessionID: SessionID.make("session_test"),
+it.instance(
+  "pending permission rejects on instance dispose",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const fiber = yield* ask({
+        id: PermissionID.make("per_dispose"),
+        sessionID: SessionID.make("session_dispose"),
         permission: "bash",
-        patterns: ["echo hello", "rm -rf /"],
+        patterns: ["ls"],
         metadata: {},
         always: [],
-        ruleset: [
-          { permission: "bash", pattern: "*", action: "allow" },
-          { permission: "bash", pattern: "rm *", action: "deny" },
-        ],
-      }),
-    )
-    expect(err).toBeInstanceOf(Permission.DeniedError)
-  }),
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
+
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      const ctx = yield* store.load({ directory: test.directory })
+      yield* store.dispose(ctx)
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
+    }),
   { git: true },
 )
 
-it.instance("ask - allows all patterns when all match allow rules", () =>
-  Effect.gen(function* () {
-    const result = yield* ask({
-      sessionID: SessionID.make("session_test"),
-      permission: "bash",
-      patterns: ["echo hello", "ls -la", "pwd"],
-      metadata: {},
-      always: [],
-      ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
-    })
-    expect(result).toBeUndefined()
-  }),
-  { git: true },
-)
-
-it.instance("ask - should deny even when an earlier pattern is ask", () =>
-  Effect.gen(function* () {
-    const err = yield* fail(
-      ask({
-        sessionID: SessionID.make("session_test"),
+it.instance(
+  "pending permission rejects on instance reload",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+      const fiber = yield* ask({
+        id: PermissionID.make("per_reload"),
+        sessionID: SessionID.make("session_reload"),
         permission: "bash",
-        patterns: ["echo hello", "rm -rf /"],
+        patterns: ["ls"],
         metadata: {},
         always: [],
-        ruleset: [
-          { permission: "bash", pattern: "echo *", action: "ask" },
-          { permission: "bash", pattern: "rm *", action: "deny" },
-        ],
-      }),
-    )
+        ruleset: [],
+      }).pipe(Effect.forkScoped)
 
-    expect(err).toBeInstanceOf(Permission.DeniedError)
-    expect(yield* list()).toHaveLength(0)
-  }),
+      expect(yield* waitForPending(1)).toHaveLength(1)
+      yield* store.reload({ directory: test.directory })
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
+    }),
   { git: true },
 )
 
-it.instance("ask - abort should clear pending request", () =>
-  Effect.gen(function* () {
-    const test = yield* TestInstance
-    const store = yield* InstanceStore.Service
+it.instance(
+  "reply - does nothing for unknown requestID",
+  () =>
+    Effect.gen(function* () {
+      yield* reply({ requestID: PermissionID.make("per_unknown"), reply: "once" })
+      expect(yield* list()).toHaveLength(0)
+    }),
+  { git: true },
+)
 
-    const fiber = yield* ask({
-      id: PermissionID.make("per_reload"),
-      sessionID: SessionID.make("session_reload"),
-      permission: "bash",
-      patterns: ["ls"],
-      metadata: {},
-      always: [],
-      ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
-    }).pipe(Effect.forkScoped)
+it.instance(
+  "ask - checks all patterns and stops on first deny",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["echo hello", "rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [
+            { permission: "bash", pattern: "*", action: "allow" },
+            { permission: "bash", pattern: "rm *", action: "deny" },
+          ],
+        }),
+      )
+      expect(err).toBeInstanceOf(Permission.DeniedError)
+    }),
+  { git: true },
+)
 
-    const pending = yield* waitForPending(1)
-    expect(pending).toHaveLength(1)
-    yield* store.reload({ directory: test.directory })
+it.instance(
+  "ask - allows all patterns when all match allow rules",
+  () =>
+    Effect.gen(function* () {
+      const result = yield* ask({
+        sessionID: SessionID.make("session_test"),
+        permission: "bash",
+        patterns: ["echo hello", "ls -la", "pwd"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "allow" }],
+      })
+      expect(result).toBeUndefined()
+    }),
+  { git: true },
+)
 
-    const exit = yield* Fiber.await(fiber)
-    expect(Exit.isFailure(exit)).toBe(true)
-    if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
-  }),
+it.instance(
+  "ask - should deny even when an earlier pattern is ask",
+  () =>
+    Effect.gen(function* () {
+      const err = yield* fail(
+        ask({
+          sessionID: SessionID.make("session_test"),
+          permission: "bash",
+          patterns: ["echo hello", "rm -rf /"],
+          metadata: {},
+          always: [],
+          ruleset: [
+            { permission: "bash", pattern: "echo *", action: "ask" },
+            { permission: "bash", pattern: "rm *", action: "deny" },
+          ],
+        }),
+      )
+
+      expect(err).toBeInstanceOf(Permission.DeniedError)
+      expect(yield* list()).toHaveLength(0)
+    }),
+  { git: true },
+)
+
+it.instance(
+  "ask - abort should clear pending request",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const store = yield* InstanceStore.Service
+
+      const fiber = yield* ask({
+        id: PermissionID.make("per_reload"),
+        sessionID: SessionID.make("session_reload"),
+        permission: "bash",
+        patterns: ["ls"],
+        metadata: {},
+        always: [],
+        ruleset: [{ permission: "bash", pattern: "*", action: "ask" }],
+      }).pipe(Effect.forkScoped)
+
+      const pending = yield* waitForPending(1)
+      expect(pending).toHaveLength(1)
+      yield* store.reload({ directory: test.directory })
+
+      const exit = yield* Fiber.await(fiber)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.RejectedError)
+    }),
   { git: true },
 )

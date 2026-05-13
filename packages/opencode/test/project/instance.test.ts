@@ -31,7 +31,10 @@ const setBootstrap = (run: Effect.Effect<void>) =>
   )
 
 const registerDisposerScoped = (disposer: (directory: string) => Promise<void>) =>
-  Effect.acquireRelease(Effect.sync(() => registerDisposer(disposer)), (off) => Effect.sync(off))
+  Effect.acquireRelease(
+    Effect.sync(() => registerDisposer(disposer)),
+    (off) => Effect.sync(off),
+  )
 
 describe("InstanceStore", () => {
   it.live("loads instance context without installing ALS for the caller", () =>
