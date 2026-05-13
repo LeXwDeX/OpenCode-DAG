@@ -197,7 +197,8 @@ export function createTuiAttention(input: {
         const volume = soundVolume(request, input.config)
         const requestedSound = typeof request.sound === "object" ? request.sound : undefined
         const soundSkip = volume === undefined ? undefined : focusSkip(requestedSound?.when ?? "always", focus)
-        const soundName = requestedSound?.name && isAttentionSoundName(requestedSound.name) ? requestedSound.name : "default"
+        const soundName =
+          requestedSound?.name && isAttentionSoundName(requestedSound.name) ? requestedSound.name : "default"
         const sound = volume === undefined || soundSkip ? false : await playSound(soundName, volume)
 
         if (!notification && !sound) {
