@@ -15,6 +15,7 @@ export class Service extends ConfigService.Service<Service>()("@opencode/Runtime
   autoShare: bool("OPENCODE_AUTO_SHARE"),
   pure: bool("OPENCODE_PURE"),
   disableDefaultPlugins: bool("OPENCODE_DISABLE_DEFAULT_PLUGINS"),
+  disableChannelDb: bool("OPENCODE_DISABLE_CHANNEL_DB"),
   disableEmbeddedWebUi: bool("OPENCODE_DISABLE_EMBEDDED_WEB_UI"),
   disableClaudeCodeSkills: Config.all({
     broad: bool("OPENCODE_DISABLE_CLAUDE_CODE"),
