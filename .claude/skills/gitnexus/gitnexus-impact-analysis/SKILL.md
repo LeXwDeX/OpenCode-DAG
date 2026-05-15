@@ -1,6 +1,6 @@
 ---
 name: gitnexus-impact-analysis
-description: "Use when the user wants to know what will break if they change something, or needs safety analysis before editing code. Examples: \"Is it safe to change X?\", \"What depends on this?\", \"What will break?\""
+description: "当用户想知道某处修改会破坏什么、或在编辑代码前需要安全性分析时使用。示例：\"修改 X 安全吗？\"、\"什么依赖于这个？\"、\"会破坏什么？\""
 ---
 
 # Impact Analysis with GitNexus

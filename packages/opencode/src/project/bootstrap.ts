@@ -11,6 +11,7 @@ import { Instance } from "./instance"
 import * as Log from "@opencode-ai/core/util/log"
 import { FileWatcher } from "@/file/watcher"
 import { ShareNext } from "@/share/share-next"
+import { GoalLoop } from "@/goal/loop"
 import * as Effect from "effect/Effect"
 import { Config } from "@/config/config"
 
@@ -29,6 +30,7 @@ export const InstanceBootstrap = Effect.gen(function* () {
       FileWatcher.Service,
       Vcs.Service,
       Snapshot.Service,
+      GoalLoop.Service,
     ].map((s) => Effect.forkDetach(s.use((i) => i.init()))),
   ).pipe(Effect.withSpan("InstanceBootstrap.init"))
 

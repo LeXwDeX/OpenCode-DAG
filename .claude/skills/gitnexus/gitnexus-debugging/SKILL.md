@@ -1,6 +1,6 @@
 ---
 name: gitnexus-debugging
-description: "Use when the user is debugging a bug, tracing an error, or asking why something fails. Examples: \"Why is X failing?\", \"Where does this error come from?\", \"Trace this bug\""
+description: "当用户在调试 bug、追踪错误或询问失败原因时使用。示例：\"X 为什么失败？\"、\"这个错误从哪里来？\"、\"追踪这个 bug\""
 ---
 
 # Debugging with GitNexus

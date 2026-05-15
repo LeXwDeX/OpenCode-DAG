@@ -10,6 +10,7 @@ import z from "zod"
 export const Info = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("idle"),
+    cause: Schema.optional(Schema.Literals(["complete", "abort", "error"])),
   }),
   Schema.Struct({
     type: Schema.Literal("retry"),

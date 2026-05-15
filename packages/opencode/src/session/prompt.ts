@@ -58,6 +58,7 @@ import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect/bridge"
 import { Todo } from "./todo"
+import { Goal } from "@/goal/goal"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -168,6 +169,7 @@ export const layer = Layer.effect(
     const settingsHook = yield* SettingsHook.Service
     const startContext = yield* HookStartContext.Service
     const todo = yield* Todo.Service
+    const goal = yield* Goal.Service
     const runner = Effect.fn("SessionPrompt.runner")(function* () {
       return yield* EffectBridge.make()
     })
@@ -1836,6 +1838,79 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
+
+      // /goal and /subgoal are dispatched through Goal.Service rather than processed
+      // as ordinary template commands. The dispatcher returns either:
+      //   - { type: "message" }: an info-only response, injected as a synthetic
+      //     user-facing TextPart (ignored: true → not sent to LLM, displayed in TUI)
+      //   - { type: "kick"    }: text that should drive a real LLM turn — fed
+      //     through the normal template path as if the user had typed it.
+      let effectiveArguments = input.arguments
+      if (input.command === "goal" || input.command === "subgoal") {
+        const result = yield* (input.command === "goal"
+          ? goal.dispatch(input.sessionID, input.arguments)
+          : goal.dispatchSubgoal(input.sessionID, input.arguments))
+        if (result.type === "message") {
+          const agentName = input.agent ?? (yield* agents.defaultAgent())
+          const model = input.model
+            ? Provider.parseModel(input.model)
+            : yield* lastModel(input.sessionID)
+          const userMsg: MessageV2.User = {
+            id: input.messageID ?? MessageID.ascending(),
+            sessionID: input.sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agentName,
+            model: { providerID: model.providerID, modelID: model.modelID },
+          }
+          yield* sessions.updateMessage(userMsg)
+          const part: MessageV2.TextPart = {
+            type: "text",
+            id: PartID.ascending(),
+            messageID: userMsg.id,
+            sessionID: input.sessionID,
+            text: result.text,
+            ignored: true,
+          }
+          yield* sessions.updatePart(part)
+          yield* bus.publish(Command.Event.Executed, {
+            name: input.command,
+            sessionID: input.sessionID,
+            arguments: input.arguments,
+            messageID: userMsg.id,
+          })
+          return { info: userMsg, parts: [part] } satisfies MessageV2.WithParts
+        }
+        // kick branch: optionally publish an announce-only user message (ignored:true,
+        // never fed to the LLM, never affecting prompt cache — I1) before the real
+        // first-turn user message that the template path will build below.
+        if (result.announce) {
+          const agentName = input.agent ?? (yield* agents.defaultAgent())
+          const model = input.model
+            ? Provider.parseModel(input.model)
+            : yield* lastModel(input.sessionID)
+          const announceMsg: MessageV2.User = {
+            id: MessageID.ascending(),
+            sessionID: input.sessionID,
+            role: "user",
+            time: { created: Date.now() },
+            agent: agentName,
+            model: { providerID: model.providerID, modelID: model.modelID },
+          }
+          yield* sessions.updateMessage(announceMsg)
+          const announcePart: MessageV2.TextPart = {
+            type: "text",
+            id: PartID.ascending(),
+            messageID: announceMsg.id,
+            sessionID: input.sessionID,
+            text: result.announce,
+            ignored: true,
+          }
+          yield* sessions.updatePart(announcePart)
+        }
+        effectiveArguments = result.text
+      }
+
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)
@@ -1846,7 +1921,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       }
       const agentName = cmd.agent ?? input.agent ?? (yield* agents.defaultAgent())
 
-      const raw = input.arguments.match(argsRegex) ?? []
+      const raw = effectiveArguments.match(argsRegex) ?? []
       const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
       const templateCommand = yield* Effect.promise(async () => cmd.template)
 
@@ -1865,10 +1940,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         return args[argIndex]
       })
       const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
+      let template = withArgs.replaceAll("$ARGUMENTS", effectiveArguments)
 
-      if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
-        template = template + "\n\n" + input.arguments
+      if (placeholders.length === 0 && !usesArgumentsPlaceholder && effectiveArguments.trim()) {
+        template = template + "\n\n" + effectiveArguments
       }
 
       const shellMatches = ConfigMarkdown.shell(template)
@@ -1992,6 +2067,7 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         Todo.defaultLayer,
         HookStartContext.defaultLayer,
+        Goal.defaultLayer,
       ),
     ),
   ),
