@@ -27,13 +27,9 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
     <Show when={goal()}>
       {(g) => (
         <box>
-          <text fg={theme().text}>
-            <b>目标</b> <text fg={theme().textMuted}>[{STATUS_LABEL[g().status] ?? g().status}]</text>
-          </text>
+          <text fg={theme().text}>{`目标 [${STATUS_LABEL[g().status] ?? g().status}]`}</text>
           <text fg={theme().textMuted}>{g().goal.length > 60 ? g().goal.slice(0, 57) + "..." : g().goal}</text>
-          <text fg={theme().textMuted}>
-            {g().turnsUsed}/{g().maxTurns} 轮
-          </text>
+          <text fg={theme().textMuted}>{`${g().turnsUsed}/${g().maxTurns} 轮`}</text>
         </box>
       )}
     </Show>
