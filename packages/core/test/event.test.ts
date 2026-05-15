@@ -129,5 +129,4 @@ describe("EventV2", () => {
       expect(received).toEqual([Message.type, "stream"])
     }),
   )
-
 })
