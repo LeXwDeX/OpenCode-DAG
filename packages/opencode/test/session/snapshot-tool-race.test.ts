@@ -20,6 +20,7 @@ import { Session } from "@/session/session"
 import { LLM } from "../../src/session/llm"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
+import { Goal } from "../../src/goal/goal"
 import { SessionSummary } from "../../src/session/summary"
 import { MessageV2 } from "../../src/session/message-v2"
 import * as Log from "@opencode-ai/core/util/log"
@@ -155,6 +156,7 @@ function makeHttp() {
       Layer.provideMerge(trunc),
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(SystemPrompt.defaultLayer),
+      Layer.provide(Goal.defaultLayer),
       Layer.provideMerge(deps),
     ),
   )
