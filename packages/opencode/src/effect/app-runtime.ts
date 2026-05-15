@@ -47,6 +47,8 @@ import { Pty } from "@/pty"
 import { Installation } from "@/installation"
 import { ShareNext } from "@/share/share-next"
 import { SessionShare } from "@/share/session"
+import { GoalLoop } from "@/goal/loop"
+import { Goal } from "@/goal/goal"
 import { Npm } from "@opencode-ai/core/npm"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
 
@@ -97,6 +99,8 @@ export const AppLayer = Layer.mergeAll(
   Installation.defaultLayer,
   ShareNext.defaultLayer,
   SessionShare.defaultLayer,
+  GoalLoop.defaultLayer,
+  Goal.defaultLayer,
 ).pipe(Layer.provideMerge(Observability.layer))
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

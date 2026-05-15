@@ -59,6 +59,8 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  GOAL: "goal",
+  SUBGOAL: "subgoal",
 } as const
 
 export interface Interface {
@@ -82,7 +84,7 @@ export const layer = Layer.effect(
 
       commands[Default.INIT] = {
         name: Default.INIT,
-        description: "guided AGENTS.md setup",
+        description: "引导式生成 AGENTS.md",
         source: "command",
         get template() {
           return PROMPT_INITIALIZE.replace("${path}", ctx.worktree)
@@ -91,13 +93,27 @@ export const layer = Layer.effect(
       }
       commands[Default.REVIEW] = {
         name: Default.REVIEW,
-        description: "review changes [commit|branch|pr], defaults to uncommitted",
+        description: "审查变更 [commit|branch|pr]，默认审查未提交内容",
         source: "command",
         get template() {
           return PROMPT_REVIEW.replace("${path}", ctx.worktree)
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.GOAL] = {
+        name: Default.GOAL,
+        description: "设定持久目标，自动循环执行直到完成 [status|pause|resume|clear]",
+        source: "command",
+        template: "",
+        hints: ["$ARGUMENTS"],
+      }
+      commands[Default.SUBGOAL] = {
+        name: Default.SUBGOAL,
+        description: "管理子目标 [list|<text>|remove <n>|clear]",
+        source: "command",
+        template: "",
+        hints: ["$ARGUMENTS"],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

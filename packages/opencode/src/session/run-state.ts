@@ -56,7 +56,7 @@ export const layer = Layer.effect(
       const next = Runner.make<MessageV2.WithParts>(data.scope, {
         onIdle: Effect.gen(function* () {
           data.runners.delete(sessionID)
-          yield* status.set(sessionID, { type: "idle" })
+          yield* status.set(sessionID, { type: "idle", cause: "complete" })
         }),
         onBusy: status.set(sessionID, { type: "busy" }),
         onInterrupt,
@@ -78,7 +78,7 @@ export const layer = Layer.effect(
       const data = yield* InstanceState.get(state)
       const existing = data.runners.get(sessionID)
       if (!existing || !existing.busy) {
-        yield* status.set(sessionID, { type: "idle" })
+        yield* status.set(sessionID, { type: "idle", cause: "abort" })
         return
       }
       yield* existing.cancel

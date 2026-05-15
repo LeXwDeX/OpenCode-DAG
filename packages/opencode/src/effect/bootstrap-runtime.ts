@@ -8,6 +8,7 @@ import { ShareNext } from "@/share/share-next"
 import { File } from "@/file"
 import { Vcs } from "@/project/vcs"
 import { Snapshot } from "@/snapshot"
+import { GoalLoop } from "@/goal/loop"
 import { Bus } from "@/bus"
 import { Config } from "@/config/config"
 import * as Observability from "@opencode-ai/core/effect/observability"
@@ -23,6 +24,7 @@ export const BootstrapLayer = Layer.mergeAll(
   FileWatcher.defaultLayer,
   Vcs.defaultLayer,
   Snapshot.defaultLayer,
+  GoalLoop.defaultLayer,
   Bus.defaultLayer,
 ).pipe(Layer.provide(Observability.layer))
 

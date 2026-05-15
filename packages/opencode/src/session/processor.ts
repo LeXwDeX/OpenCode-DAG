@@ -561,7 +561,7 @@ export const layer: Layer.Layer<
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
         })
-        yield* status.set(ctx.sessionID, { type: "idle" })
+        yield* status.set(ctx.sessionID, { type: "idle", cause: "error" })
       })
 
       const process = Effect.fn("SessionProcessor.process")(function* (streamInput: LLM.StreamInput) {
