@@ -36,3 +36,6 @@ tsconfig.tsbuildinfo
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+
+# Goal-driven planning audit state (per-task scratchpad, never commit)
+.task_state/

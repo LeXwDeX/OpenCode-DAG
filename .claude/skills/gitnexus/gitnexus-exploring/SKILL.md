@@ -1,6 +1,6 @@
 ---
 name: gitnexus-exploring
-description: "Use when the user asks how code works, wants to understand architecture, trace execution flows, or explore unfamiliar parts of the codebase. Examples: \"How does X work?\", \"What calls this function?\", \"Show me the auth flow\""
+description: "当用户询问代码如何工作、想理解架构、追踪执行流，或探索代码库中不熟悉的部分时使用。示例：\"X 是怎么工作的？\"、\"什么地方调用了这个函数？\"、\"展示一下鉴权流程\""
 ---
 
 # Exploring Codebases with GitNexus

@@ -1,6 +1,6 @@
 ---
 name: gitnexus-cli
-description: "Use when the user needs to run GitNexus CLI commands like analyze/index a repo, check status, clean the index, generate a wiki, or list indexed repos. Examples: \"Index this repo\", \"Reanalyze the codebase\", \"Generate a wiki\""
+description: "当用户需要运行 GitNexus CLI 命令时使用，例如分析/索引仓库、查看状态、清理索引、生成 wiki、列出已索引仓库。示例：\"索引这个仓库\"、\"重新分析代码库\"、\"生成 wiki\""
 ---
 
 # GitNexus CLI Commands
