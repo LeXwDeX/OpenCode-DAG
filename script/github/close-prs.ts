@@ -8,6 +8,7 @@ const defaultThreshold = 2
 const defaultSleepMs = 20_000
 const defaultPrintLimit = 50
 const positiveReactions = new Set(["THUMBS_UP", "HEART", "HOORAY", "ROCKET"])
+const cleanupLabel = "automated-pr-cleanup"
 
 const { values } = parseArgs({
   args: Bun.argv.slice(2),
@@ -87,6 +88,11 @@ type PullRequest = {
       totalCount: number
     }
   }>
+  labels: {
+    nodes: Array<{
+      name: string
+    }>
+  }
 }
 
 type GraphqlResponse = {
@@ -140,16 +146,18 @@ async function main() {
 
   const prs = await fetchOpenPullRequests()
   const recentCount = prs.filter((pr) => new Date(pr.createdAt) >= cutoff).length
-  const candidates = prs
+  const matching = prs
     .map((pr) => ({ ...pr, positiveReactions: positiveReactionCount(pr) }))
     .filter((pr) => new Date(pr.createdAt) < cutoff && pr.positiveReactions < threshold)
+  const candidates = matching.filter((pr) => !hasPriorCleanup(pr))
   const selected = maxClose === undefined ? candidates : candidates.slice(0, maxClose)
 
   console.log(`Fetched ${prs.length} open PRs`)
-  console.log(`Matching cleanup criteria: ${candidates.length}`)
+  console.log(`Matching cleanup criteria: ${matching.length}`)
+  console.log(`Skipped previously cleaned PRs: ${matching.length - candidates.length}`)
   console.log(`Recent PRs untouched: ${recentCount}`)
   console.log(
-    `Older PRs with at least ${threshold} positive reactions untouched: ${prs.length - candidates.length - recentCount}`,
+    `Older PRs with at least ${threshold} positive reactions untouched: ${prs.length - matching.length - recentCount}`,
   )
 
   if (selected.length === 0) return
@@ -163,6 +171,8 @@ async function main() {
     if (selected.length > printLimit) console.log(`... ${selected.length - printLimit} more not shown`)
     return
   }
+
+  await ensureCleanupLabel()
 
   console.log(`\nCommenting and closing ${selected.length} PRs...`)
   for (const pr of selected) {
@@ -199,6 +209,11 @@ async function fetchOpenPullRequests() {
                 content
                 users {
                   totalCount
+                }
+              }
+              labels(first: 100) {
+                nodes {
+                  name
                 }
               }
             }
@@ -249,7 +264,32 @@ async function closePullRequest(pr: CleanupCandidate) {
     method: "PATCH",
     body: JSON.stringify({ state: "closed" }),
   })
+  await githubRequest(`/repos/${repo.owner}/${repo.name}/issues/${pr.number}/labels`, {
+    method: "POST",
+    body: JSON.stringify({ labels: [cleanupLabel] }),
+  })
   console.log(`Closed #${pr.number} positive=${pr.positiveReactions} ${pr.url}`)
+}
+
+async function ensureCleanupLabel() {
+  const response = await fetch(
+    `https://api.github.com/repos/${repo.owner}/${repo.name}/labels/${encodeURIComponent(cleanupLabel)}`,
+    {
+      headers,
+    },
+  )
+  if (response.ok) return
+  if (response.status !== 404)
+    throw new Error(`Failed to check cleanup label: ${response.status} ${response.statusText}`)
+
+  await githubRequest(`/repos/${repo.owner}/${repo.name}/labels`, {
+    method: "POST",
+    body: JSON.stringify({
+      name: cleanupLabel,
+      color: "ededed",
+      description: "PR was closed by automated cleanup",
+    }),
+  })
 }
 
 async function githubRequest(path: string, init: RequestInit, attempt = 0): Promise<Response> {
@@ -272,10 +312,12 @@ async function githubRequest(path: string, init: RequestInit, attempt = 0): Prom
       ? Math.max(0, Number(reset) * 1000 - Date.now()) + 1_000
       : body.toLowerCase().includes("secondary rate limit")
         ? 300_000
-        : 0
+        : response.status >= 500
+          ? Math.min(300_000, 10_000 * 2 ** attempt)
+          : 0
 
-  if ((response.status === 403 || response.status === 429) && retryMs > 0 && attempt < 10) {
-    console.warn(`GitHub rate limit hit; sleeping ${Math.ceil(retryMs / 1000)}s before retry ${attempt + 1}`)
+  if ((response.status === 403 || response.status === 429 || response.status >= 500) && retryMs > 0 && attempt < 10) {
+    console.warn(`GitHub request failed; sleeping ${Math.ceil(retryMs / 1000)}s before retry ${attempt + 1}`)
     await sleep(retryMs)
     return githubRequest(path, init, attempt + 1)
   }
@@ -287,6 +329,10 @@ function positiveReactionCount(pr: PullRequest) {
   return pr.reactionGroups
     .filter((group) => positiveReactions.has(group.content))
     .reduce((total, group) => total + group.users.totalCount, 0)
+}
+
+function hasPriorCleanup(pr: PullRequest) {
+  return pr.labels.nodes.some((label) => label.name === cleanupLabel)
 }
 
 function requireRepo(value: string | undefined) {
