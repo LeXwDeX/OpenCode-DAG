@@ -91,7 +91,6 @@ describe("RuntimeFlags", () => {
     }),
   )
 
-
   it.effect("layer accepts partial test overrides and fills defaults from Config definitions", () =>
     Effect.gen(function* () {
       const flags = yield* readFlags.pipe(
