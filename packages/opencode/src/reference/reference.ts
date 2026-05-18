@@ -104,11 +104,7 @@ export function resolve(input: {
   return resolveGit({ name: input.name, repository: input.reference.repository, branch: input.reference.branch })
 }
 
-export function resolveAll(input: {
-  references: ConfigReference.NormalizedInfo
-  directory: string
-  worktree: string
-}) {
+export function resolveAll(input: { references: ConfigReference.NormalizedInfo; directory: string; worktree: string }) {
   const seen = new Map<string, { name: string; branch?: string }>()
   return Object.entries(input.references).map(([name, reference]) => {
     const resolved = resolve({ name, reference, directory: input.directory, worktree: input.worktree })
