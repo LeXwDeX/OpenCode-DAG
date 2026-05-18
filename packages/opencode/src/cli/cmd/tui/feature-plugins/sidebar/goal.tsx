@@ -22,16 +22,21 @@ const STATUS_LABEL: Record<string, string> = {
 function View(props: { api: TuiPluginApi; session_id: string }) {
   const theme = () => props.api.theme.current
   const goal = () => goals[props.session_id]
+  const goalText = () => goal()?.goal
 
   return (
-    <Show when={goal()}>
-      {(g) => (
-        <box>
-          <text fg={theme().text}>{`目标 [${STATUS_LABEL[g().status] ?? g().status}]`}</text>
-          <text fg={theme().textMuted}>{g().goal.length > 60 ? g().goal.slice(0, 57) + "..." : g().goal}</text>
-          <text fg={theme().textMuted}>{`${g().turnsUsed}/${g().maxTurns} 轮`}</text>
-        </box>
-      )}
+    <Show when={goalText()}>
+      {(text) => {
+        const g = goal()
+        if (!g) return null
+        return (
+          <box>
+            <text fg={theme().text}>{`目标 [${STATUS_LABEL[g.status] ?? g.status}]`}</text>
+            <text fg={theme().textMuted}>{text().length > 60 ? text().slice(0, 57) + "..." : text()}</text>
+            <text fg={theme().textMuted}>{`${g.turnsUsed}/${g.maxTurns} 轮`}</text>
+          </box>
+        )
+      }}
     </Show>
   )
 }
@@ -51,7 +56,12 @@ const tui: TuiPlugin = async (api) => {
 
   on("goal.continued", (e) => {
     const p = e.properties
-    setGoals(p.sessionID as string, { turnsUsed: p.turnsUsed as number, maxTurns: p.maxTurns as number })
+    setGoals(produce((draft) => {
+      const goal = draft[p.sessionID as string]
+      if (!goal) return
+      goal.turnsUsed = p.turnsUsed as number
+      goal.maxTurns = p.maxTurns as number
+    }))
   })
 
   on("goal.achieved", (e) => {
