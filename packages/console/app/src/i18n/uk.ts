@@ -153,7 +153,8 @@ export const dict = {
   "home.faq.q3": "Чи потрібні додаткові AI-підписки для використання OpenCode?",
   "home.faq.a3.p1":
     "Не обов'язково, OpenCode має набір безкоштовних моделей, які можна використовувати без реєстрації.",
-  "home.faq.a3.p2.beforeZen": "Крім цього, ви можете використовувати будь-які популярні моделі, створивши обліковий запис",
+  "home.faq.a3.p2.beforeZen":
+    "Крім цього, ви можете використовувати будь-які популярні моделі, створивши обліковий запис",
   "home.faq.a3.p2.afterZen": ".",
   "home.faq.a3.p3":
     "Хоча ми рекомендуємо Zen, OpenCode також працює з усіма популярними провайдерами, такими як OpenAI, Anthropic, xAI тощо.",
@@ -171,7 +172,8 @@ export const dict = {
   "home.faq.a6":
     "OpenCode є 100% безкоштовним. Він також має набір безкоштовних моделей. Додаткові витрати можливі, якщо ви підключите іншого провайдера.",
   "home.faq.q7": "А як щодо даних та конфіденційності?",
-  "home.faq.a7.p1": "Ваші дані зберігаються лише тоді, коли ви використовуєте безкоштовні моделі або створюєте посилання для обміну.",
+  "home.faq.a7.p1":
+    "Ваші дані зберігаються лише тоді, коли ви використовуєте безкоштовні моделі або створюєте посилання для обміну.",
   "home.faq.a7.p2.beforeModels": "Дізнайтеся більше про",
   "home.faq.a7.p2.modelsLink": "наші моделі",
   "home.faq.a7.p2.and": "та",
@@ -194,8 +196,7 @@ export const dict = {
     "Zen дає доступ до добірки AI-моделей, які OpenCode протестував спеціально для агентів кодування. Не турбуйтеся про нестабільну якість — використовуйте перевірені моделі.",
 
   "zen.faq.q1": "Що таке OpenCode Zen?",
-  "zen.faq.a1":
-    "Zen — це добірка AI-моделей, протестованих для агентів кодування, створена командою OpenCode.",
+  "zen.faq.a1": "Zen — це добірка AI-моделей, протестованих для агентів кодування, створена командою OpenCode.",
   "zen.faq.q2": "Чому Zen точніший?",
   "zen.faq.a2":
     "Zen надає лише моделі, спеціально протестовані для агентів кодування. Ви ж не використовуєте масло ніж для стейка — не використовуйте погані моделі для кодування.",
@@ -234,7 +235,8 @@ export const dict = {
   "zen.problem.item2": "Співпраця з провайдерами для забезпечення правильної доставки",
   "zen.problem.item3": "Бенчмаркінг усіх комбінацій моделей та провайдерів, які ми рекомендуємо",
   "zen.how.title": "Як працює Zen",
-  "zen.how.body": "Хоча ми пропонуємо використовувати Zen з OpenCode, ви можете використовувати Zen з будь-яким агентом.",
+  "zen.how.body":
+    "Хоча ми пропонуємо використовувати Zen з OpenCode, ви можете використовувати Zen з будь-яким агентом.",
   "zen.how.step1.title": "Зареєструйтеся та додайте $20 балансу",
   "zen.how.step1.beforeLink": "дотримуйтесь",
   "zen.how.step1.link": "інструкцій з налаштування",
@@ -260,7 +262,8 @@ export const dict = {
   "go.cta.text": "Підписатися на Go",
   "go.cta.price": "$10/місяць",
   "go.cta.promo": "$5 перший місяць",
-  "go.pricing.body": "Використовуйте з будь-яким агентом. $5 перший місяць, потім $10/місяць. Поповнюйте за потреби. Скасуйте в будь-який час.",
+  "go.pricing.body":
+    "Використовуйте з будь-яким агентом. $5 перший місяць, потім $10/місяць. Поповнюйте за потреби. Скасуйте в будь-який час.",
   "go.graph.free": "Безкоштовно",
   "go.graph.freePill": "Big Pickle та безкоштовні моделі",
   "go.graph.go": "Go",
@@ -300,7 +303,8 @@ export const dict = {
   "go.problem.item4":
     "Включає GLM-5.1, GLM-5, Kimi K2.5, Kimi K2.6, MiMo-V2.5-Pro, MiMo-V2.5, Qwen3.5 Plus, Qwen3.6 Plus, MiniMax M2.5, MiniMax M2.7, DeepSeek V4 Pro та DeepSeek V4 Flash",
   "go.how.title": "Як працює Go",
-  "go.how.body": "Go починається від $5 за перший місяць, потім $10/місяць. Використовуйте з OpenCode або будь-яким агентом.",
+  "go.how.body":
+    "Go починається від $5 за перший місяць, потім $10/місяць. Використовуйте з OpenCode або будь-яким агентом.",
   "go.how.step1.title": "Створіть обліковий запис",
   "go.how.step1.beforeLink": "дотримуйтесь",
   "go.how.step1.link": "інструкцій з налаштування",
@@ -646,18 +650,14 @@ export const dict = {
   "workspace.lite.subscription.monthlyUsage": "Місячне використання",
   "workspace.lite.subscription.resetsIn": "Скидається через",
   "workspace.lite.subscription.useBalance": "Використовуйте доступний баланс після досягнення лімітів",
-  "workspace.lite.subscription.selectProvider":
-    'Виберіть "OpenCode Go" як провайдера в конфігурації opencode.',
+  "workspace.lite.subscription.selectProvider": 'Виберіть "OpenCode Go" як провайдера в конфігурації opencode.',
   "workspace.lite.black.message":
     "Ви вже підписані на OpenCode Black або в списку очікування. Спочатку скасуйте підписку, якщо хочете перейти на Go.",
-  "workspace.lite.other.message":
-    "Інший учасник цього робочого простору вже підписаний на OpenCode Go.",
-  "workspace.lite.promo.description":
-    "OpenCode Go починається від {{price}}, потім $10/місяць, із щедрими лімітами.",
+  "workspace.lite.other.message": "Інший учасник цього робочого простору вже підписаний на OpenCode Go.",
+  "workspace.lite.promo.description": "OpenCode Go починається від {{price}}, потім $10/місяць, із щедрими лімітами.",
   "workspace.lite.promo.price": "$5 за перший місяць",
   "workspace.lite.promo.modelsTitle": "Що включено",
-  "workspace.lite.promo.footer":
-    "План призначений для міжнародних користувачів. Ціни можуть змінюватися.",
+  "workspace.lite.promo.footer": "План призначений для міжнародних користувачів. Ціни можуть змінюватися.",
   "workspace.lite.promo.subscribe": "Підписатися на Go",
   "workspace.lite.promo.subscribing": "Перенаправлення...",
   "workspace.lite.promo.otherMethods": "Інші способи оплати",
