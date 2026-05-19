@@ -37,6 +37,8 @@ export type OpenTuiKeymap = ReturnType<typeof useKeymap>
 const KEY_ALIASES = {
   enter: "return",
   esc: "escape",
+  pgdown: "pagedown",
+  pgup: "pageup",
 } as const
 
 function expandKeyAliases(input: string) {
