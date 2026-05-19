@@ -298,6 +298,7 @@ export const dict = {
   "mcp.status.connected": "forbundet",
   "mcp.status.failed": "mislykkedes",
   "mcp.status.needs_auth": "kræver godkendelse",
+  "mcp.auth.clickToAuthenticate": "Klik for at godkende",
   "mcp.status.disabled": "deaktiveret",
 
   "dialog.fork.empty": "Ingen beskeder at forgrene fra",
@@ -446,6 +447,8 @@ export const dict = {
   "error.page.description": "Der opstod en fejl under indlæsning af applikationen.",
   "error.page.details.label": "Fejldetaljer",
   "error.page.action.restart": "Genstart",
+  "error.page.action.report": "Rapportér fejl",
+  "error.page.action.reported": "Fejl rapporteret",
   "error.page.action.checking": "Tjekker...",
   "error.page.action.checkUpdates": "Tjek for opdateringer",
   "error.page.action.updateTo": "Opdater til {{version}}",

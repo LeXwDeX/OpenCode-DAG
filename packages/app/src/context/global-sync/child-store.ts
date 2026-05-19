@@ -1,7 +1,7 @@
 import { createRoot, getOwner, onCleanup, runWithOwner, type Owner } from "solid-js"
 import { createStore, type SetStoreFunction, type Store } from "solid-js/store"
 import { Persist, persisted } from "@/utils/persist"
-import type { OpencodeClient, VcsInfo } from "@opencode-ai/sdk/v2/client"
+import type { ProviderListResponse, VcsInfo } from "@opencode-ai/sdk/v2/client"
 import {
   DIR_IDLE_TTL_MS,
   MAX_DIR_STORES,
@@ -15,8 +15,7 @@ import {
 } from "./types"
 import { canDisposeDirectory, pickDirectoriesToEvict } from "./eviction"
 import { useQueries } from "@tanstack/solid-query"
-import { loadPathQuery, loadProvidersQuery } from "./bootstrap"
-import { loadLspQuery, loadMcpQuery } from "../global-sync"
+import { QueryOptionsApi } from "../global-sync"
 import { directoryKey, type DirectoryKey } from "./utils"
 
 export function createChildStoreManager(input: {
@@ -26,7 +25,10 @@ export function createChildStoreManager(input: {
   onBootstrap: (directory: string) => void
   onDispose: (directory: string) => void
   translate: (key: string, vars?: Record<string, string | number>) => string
-  getSdk: (directory: string) => OpencodeClient
+  queryOptions: QueryOptionsApi
+  global: {
+    provider: ProviderListResponse
+  }
 }) {
   const children: Record<string, [Store<State>, SetStoreFunction<State>]> = {}
   const vcsCache = new Map<string, VcsCache>()
@@ -168,17 +170,15 @@ export function createChildStoreManager(input: {
 
       const init = () =>
         createRoot((dispose) => {
-          const sdk = input.getSdk(directory)
-
           const initialMeta = meta[0].value
           const initialIcon = icon[0].value
 
           const [pathQuery, mcpQuery, lspQuery, providerQuery] = useQueries(() => ({
             queries: [
-              loadPathQuery(key, sdk),
-              loadMcpQuery(key, sdk),
-              loadLspQuery(key, sdk),
-              loadProvidersQuery(key, sdk),
+              input.queryOptions.path(key),
+              input.queryOptions.mcp(key),
+              input.queryOptions.lsp(key),
+              input.queryOptions.providers(key),
             ],
           }))
 
@@ -187,9 +187,15 @@ export function createChildStoreManager(input: {
             projectMeta: initialMeta,
             icon: initialIcon,
             get provider_ready() {
-              return providerQuery.isLoading
+              return !providerQuery.isLoading
             },
-            provider: { all: [], connected: [], default: {} },
+            get provider() {
+              const EMPTY = { all: [], connected: [], default: {} }
+              if (providerQuery.isLoading) return EMPTY
+              if (providerQuery.data?.all.length === 0 && input.global.provider.all.length > 0)
+                return input.global.provider
+              return providerQuery.data ?? EMPTY
+            },
             config: {},
             get path() {
               if (pathQuery.isLoading || !pathQuery.data)
@@ -202,18 +208,22 @@ export function createChildStoreManager(input: {
             session: [],
             sessionTotal: 0,
             session_status: {},
+            session_working(id: string) {
+              const type = this.session_status[id]?.type
+              return (type ?? "idle") !== "idle"
+            },
             session_diff: {},
             todo: {},
             permission: {},
             question: {},
             get mcp_ready() {
-              return mcpQuery.isLoading
+              return !mcpQuery.isLoading
             },
             get mcp() {
               return mcpQuery.isLoading ? {} : (mcpQuery.data ?? {})
             },
             get lsp_ready() {
-              return lspQuery.isLoading
+              return !lspQuery.isLoading
             },
             get lsp() {
               return lspQuery.isLoading ? [] : (lspQuery.data ?? [])
@@ -222,6 +232,7 @@ export function createChildStoreManager(input: {
             limit: 5,
             message: {},
             part: {},
+            part_text_accum_delta: {},
           })
           children[key] = child
           disposers.set(key, dispose)

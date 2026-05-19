@@ -1,11 +1,9 @@
 import type { ModelMessage, ToolResultPart } from "ai"
 import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
-import type { JSONSchema } from "zod/v4/core"
 import type * as Provider from "./provider"
-import type * as ModelsDev from "./models"
+import type * as ModelsDev from "@opencode-ai/core/models-dev"
 import { iife } from "@/util/iife"
-import { Flag } from "@opencode-ai/core/flag/flag"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -17,7 +15,11 @@ function mimeToModality(mime: string): Modality | undefined {
   return undefined
 }
 
-export const OUTPUT_TOKEN_MAX = Flag.OPENCODE_EXPERIMENTAL_OUTPUT_TOKEN_MAX || 32_000
+export const OUTPUT_TOKEN_MAX = 32_000
+
+export function sanitizeSurrogates(content: string) {
+  return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
+}
 
 // Replace unpaired UTF-16 surrogates with U+FFFD. The AI SDK / providers
 // can choke on lone surrogates emitted from tool output (e.g. truncated
@@ -59,68 +61,70 @@ function sdkKey(npm: string): string | undefined {
   return undefined
 }
 
+// TODO: fix this stupid inefficient dogshit function
 function normalizeMessages(
   msgs: ModelMessage[],
   model: Provider.Model,
   _options: Record<string, unknown>,
 ): ModelMessage[] {
-  // Scrub unpaired UTF-16 surrogates from every text-bearing part. Tool
-  // output streamed from external processes can split a multi-code-unit
-  // character at a chunk boundary, leaving a lone surrogate that breaks
-  // downstream JSON encoders / provider APIs.
-  const sanitizeToolResultOutput = (content: ToolResultPart["output"]): ToolResultPart["output"] => {
-    if (content.type === "text" || content.type === "error-text") {
-      return { ...content, value: sanitizeSurrogates(content.value) }
+  const sanitizeToolResultOutput = (content: ToolResultPart) => {
+    if (content.output.type === "text" || content.output.type === "error-text") {
+      content.output.value = sanitizeSurrogates(content.output.value)
     }
-    if (content.type === "content") {
-      return {
-        ...content,
-        value: content.value.map((item) =>
-          item.type === "text" ? { ...item, text: sanitizeSurrogates(item.text) } : item,
-        ),
-      }
+    if (content.output.type === "content") {
+      content.output.value = content.output.value.map((item) => {
+        if (item.type === "text") {
+          item.text = sanitizeSurrogates(item.text)
+        }
+        return item
+      })
     }
     return content
   }
-  msgs = msgs.map((msg): ModelMessage => {
+
+  msgs = msgs.map((msg) => {
     switch (msg.role) {
-      case "tool": {
+      case "tool":
         if (!Array.isArray(msg.content)) return msg
-        return {
-          ...msg,
-          content: msg.content.map((part) =>
-            part.type === "tool-result" ? { ...part, output: sanitizeToolResultOutput(part.output) } : part,
-          ),
+        msg.content = msg.content.map((content) => {
+          if (content.type === "tool-result") {
+            return sanitizeToolResultOutput(content)
+          }
+          return content
+        })
+        return msg
+
+      case "system":
+        msg.content = sanitizeSurrogates(msg.content)
+        return msg
+
+      case "user":
+        if (typeof msg.content === "string") {
+          msg.content = sanitizeSurrogates(msg.content)
+        } else {
+          msg.content = msg.content.map((content) => {
+            if (content.type === "text") {
+              content.text = sanitizeSurrogates(content.text)
+            }
+            return content
+          })
         }
-      }
-      case "system": {
-        if (typeof msg.content !== "string") return msg
-        return { ...msg, content: sanitizeSurrogates(msg.content) }
-      }
-      case "user": {
-        if (typeof msg.content === "string") return { ...msg, content: sanitizeSurrogates(msg.content) }
-        if (!Array.isArray(msg.content)) return msg
-        return {
-          ...msg,
-          content: msg.content.map((part) =>
-            part.type === "text" ? { ...part, text: sanitizeSurrogates(part.text) } : part,
-          ),
+        return msg
+
+      case "assistant":
+        if (typeof msg.content === "string") {
+          msg.content = sanitizeSurrogates(msg.content)
+        } else {
+          msg.content = msg.content.map((content) => {
+            if (content.type === "text" || content.type === "reasoning") {
+              content.text = sanitizeSurrogates(content.text)
+            }
+            if (content.type === "tool-result") {
+              return sanitizeToolResultOutput(content)
+            }
+            return content
+          })
         }
-      }
-      case "assistant": {
-        if (typeof msg.content === "string") return { ...msg, content: sanitizeSurrogates(msg.content) }
-        if (!Array.isArray(msg.content)) return msg
-        return {
-          ...msg,
-          content: msg.content.map((part) => {
-            if (part.type === "text") return { ...part, text: sanitizeSurrogates(part.text) }
-            if (part.type === "reasoning") return { ...part, text: sanitizeSurrogates(part.text) }
-            if (part.type === "tool-result") return { ...part, output: sanitizeToolResultOutput(part.output) }
-            return part
-          }),
-        }
-      }
-      default:
         return msg
     }
   })
@@ -555,7 +559,16 @@ const OPENAI_GPT5_CHAT_EFFORTS = ["medium"]
 const OPENAI_GPT5_CODEX_XHIGH_EFFORTS = [...WIDELY_SUPPORTED_EFFORTS, "xhigh"]
 const OPENAI_GPT5_CODEX_3_PLUS_EFFORTS = ["none", ...OPENAI_GPT5_CODEX_XHIGH_EFFORTS]
 
-// Match identifiers like "gpt-5", "openai/gpt-5-codex", "gpt-5.2-pro" etc.
+// OpenAI rolled out the `none` reasoning_effort tier on this date (Responses API).
+// Models released before it 400 on `reasoning_effort: "none"`, so we only expose
+// it as a variant for models new enough to accept it.
+const OPENAI_NONE_EFFORT_RELEASE_DATE = "2025-11-13"
+
+// OpenAI rolled out the `xhigh` reasoning_effort tier on this date. Same reasoning.
+const OPENAI_XHIGH_EFFORT_RELEASE_DATE = "2025-12-04"
+
+// Matches members of the gpt-5 family across the id formats we encounter:
+//   "gpt-5", "gpt-5-nano", "gpt-5.4", "openai/gpt-5.4-codex".
 // Anchored to start-of-string or "/" so it doesn't false-match "gpt-50" or "gpt-5o".
 const GPT5_FAMILY_RE = /(?:^|\/)gpt-5(?:[.-]|$)/
 const GPT5_VERSION_RE = /(?:^|\/)gpt-5[.-](\d+)(?:[.-]|$)/
@@ -587,9 +600,10 @@ function gpt5ChatReasoningEfforts(apiId: string) {
   return gpt5Version(apiId) === undefined ? [] : OPENAI_GPT5_CHAT_EFFORTS
 }
 
-// Computes the reasoning_effort tiers an OpenAI model exposes.
-// Effort order: weakest to strongest.
-function openaiReasoningEfforts(apiId: string, releaseDate: string): string[] {
+// Computes the reasoning_effort tiers an OpenAI (or OpenAI-compatible upstream
+// routed through it, e.g. cf-ai-gateway) model exposes. Effort order: weakest
+// to strongest.
+function openaiReasoningEfforts(apiId: string, releaseDate: string) {
   const id = apiId.toLowerCase()
   if (id.includes("deep-research")) return ["medium"]
   const chatEfforts = gpt5ChatReasoningEfforts(id)
@@ -597,19 +611,17 @@ function openaiReasoningEfforts(apiId: string, releaseDate: string): string[] {
   if (GPT5_PRO_RE.test(id)) return OPENAI_GPT5_PRO_EFFORTS
   const codexEfforts = gpt5CodexReasoningEfforts(id)
   if (codexEfforts) return codexEfforts
-  // GPT-5.1 replaced GPT-5's `minimal` effort with `none`; GPT-5.2+ also accepts `xhigh`.
   const versionedEfforts = versionedGpt5ReasoningEfforts(id)
+  // GPT-5.1 replaced GPT-5's `minimal` effort with `none`; GPT-5.2+
+  // additionally accepts `xhigh`. Model pages list the supported subset.
   if (versionedEfforts) return versionedEfforts
   const efforts = [...WIDELY_SUPPORTED_EFFORTS]
   if (GPT5_FAMILY_RE.test(id)) efforts.unshift("minimal")
-  if (releaseDate >= "2025-11-13") efforts.unshift("none")
-  if (releaseDate >= "2025-12-04") efforts.push("xhigh")
+  if (releaseDate >= OPENAI_NONE_EFFORT_RELEASE_DATE) efforts.unshift("none")
+  if (releaseDate >= OPENAI_XHIGH_EFFORT_RELEASE_DATE) efforts.push("xhigh")
   return efforts
 }
 
-// Same logic as openaiReasoningEfforts but used by openai-compatible providers
-// where we don't have a release_date — falls back to OPENAI_EFFORTS for
-// non-versioned models.
 function openaiCompatibleReasoningEfforts(id: string) {
   const apiId = id.toLowerCase()
   const chatEfforts = gpt5ChatReasoningEfforts(apiId)
@@ -626,6 +638,21 @@ function anthropicAdaptiveEfforts(apiId: string): string[] | null {
     return ["low", "medium", "high", "max"]
   }
   return null
+}
+
+function googleThinkingLevelEfforts(apiId: string) {
+  const id = apiId.toLowerCase()
+  if (!id.includes("gemini-3")) return ["low", "high"]
+  if (id.includes("flash-image")) return ["minimal", "high"]
+  if (id.includes("pro-image")) return ["high"]
+  if (id.includes("flash")) return ["minimal", "low", "medium", "high"]
+  return ["low", "medium", "high"]
+}
+
+function googleThinkingBudgetMax(apiId: string) {
+  const id = apiId.toLowerCase()
+  if (id.includes("2.5") && id.includes("pro") && !id.includes("flash")) return 32_768
+  return 24_576
 }
 
 export function variants(model: Provider.Model): Record<string, Record<string, any>> {
@@ -662,9 +689,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
 
   switch (model.api.npm) {
     case "@openrouter/ai-sdk-provider":
-      if (!model.id.includes("gpt") && !model.id.includes("gemini-3") && !model.id.includes("claude")) return {}
+      if (!id.includes("gpt") && !id.includes("gemini-3") && !id.includes("claude")) return {}
       return Object.fromEntries(
-        (model.id.includes("gpt") ? openaiCompatibleReasoningEfforts(model.api.id) : OPENAI_EFFORTS).map((effort) => [
+        (id.includes("gpt") ? openaiCompatibleReasoningEfforts(id) : OPENAI_EFFORTS).map((effort) => [
           effort,
           { reasoning: { effort } },
         ]),
@@ -741,7 +768,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           ]),
         )
       }
-      return Object.fromEntries(OPENAI_EFFORTS.map((effort) => [effort, { reasoningEffort: effort }]))
+      return Object.fromEntries(
+        openaiCompatibleReasoningEfforts(model.api.id).map((effort) => [effort, { reasoningEffort: effort }]),
+      )
 
     case "@ai-sdk/github-copilot":
       if (model.id.includes("gemini")) {
@@ -807,9 +836,9 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
       )
     case "@ai-sdk/openai": {
       // https://v5.ai-sdk.dev/providers/ai-sdk-providers/openai
-      const openaiEfforts = openaiReasoningEfforts(model.api.id, model.release_date)
+      const efforts = openaiReasoningEfforts(model.api.id, model.release_date)
       return Object.fromEntries(
-        openaiEfforts.map((effort) => [
+        efforts.map((effort) => [
           effort,
           {
             reasoningEffort: effort,
@@ -952,18 +981,14 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           max: {
             thinkingConfig: {
               includeThoughts: true,
-              thinkingBudget: 24576,
+              thinkingBudget: googleThinkingBudgetMax(id),
             },
           },
         }
       }
-      let levels = ["low", "high"]
-      if (id.includes("3.1")) {
-        levels = ["low", "medium", "high"]
-      }
 
       return Object.fromEntries(
-        levels.map((effort) => [
+        googleThinkingLevelEfforts(id).map((effort) => [
           effort,
           {
             thinkingConfig: {
@@ -1160,19 +1185,15 @@ export function options(input: {
     result["enable_thinking"] = true
   }
 
+  if (input.model.api.npm === "@ai-sdk/azure" && input.model.api.id.includes("gpt-5.5")) {
+    result["reasoningSummary"] = "auto"
+    return result
+  }
+
   if (input.model.api.id.includes("gpt-5") && !input.model.api.id.includes("gpt-5-chat")) {
     if (!input.model.api.id.includes("gpt-5-pro")) {
       result["reasoningEffort"] = "medium"
-      // Only inject reasoningSummary for providers that support it natively.
-      // @ai-sdk/openai-compatible proxies (e.g. LiteLLM) do not understand this
-      // parameter and return "Unknown parameter: 'reasoningSummary'".
-      if (
-        input.model.api.npm === "@ai-sdk/openai" ||
-        input.model.api.npm === "@ai-sdk/azure" ||
-        input.model.api.npm === "@ai-sdk/github-copilot"
-      ) {
-        result["reasoningSummary"] = "auto"
-      }
+      result["reasoningSummary"] = "auto"
     }
 
     // Only set textVerbosity for non-chat gpt-5.x models
@@ -1210,43 +1231,27 @@ export function options(input: {
 }
 
 export function smallOptions(model: Provider.Model) {
+  const small = Object.values(model.variants ?? {})[0] ?? {}
   if (
     model.providerID === "openai" ||
     model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/github-copilot"
   ) {
-    if (model.api.id.includes("gpt-5")) {
-      if (model.api.id.includes("-chat")) {
-        if (gpt5Version(model.api.id) === undefined) return { store: false }
-        return { store: false, reasoningEffort: "medium" }
-      }
-      if (model.api.id.includes("search-api")) return { store: false }
-      if (model.api.id.includes("5.") || model.api.id.includes("5-mini")) {
-        return { store: false, reasoningEffort: "low" }
-      }
-      return { store: false, reasoningEffort: "minimal" }
-    }
-    return { store: false }
-  }
-  if (model.providerID === "google") {
-    // gemini-3 uses thinkingLevel, gemini-2.5 uses thinkingBudget
-    if (model.api.id.includes("gemini-3")) {
-      return { thinkingConfig: { thinkingLevel: "minimal" } }
-    }
-    return { thinkingConfig: { thinkingBudget: 0 } }
+    const base = { store: false }
+    return mergeDeep(base, small)
   }
   if (model.providerID === "openrouter" || model.providerID === "llmgateway") {
-    if (model.api.id.includes("google")) {
+    if (Object.keys(small).length === 0 && model.api.id.includes("google")) {
       return { reasoning: { enabled: false } }
     }
-    return { reasoningEffort: "minimal" }
   }
 
   if (model.providerID === "venice") {
+    if (Object.keys(small).length > 0) return small
     return { veniceParameters: { disableThinking: true } }
   }
 
-  return {}
+  return small
 }
 
 // Maps model ID prefix to provider slug used in providerOptions.
@@ -1295,8 +1300,7 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
     model.api.npm === "@ai-sdk/openai-compatible" ||
     model.api.npm === "@ai-sdk/openai" ||
     model.api.npm === "@ai-sdk/anthropic"
-  const key =
-    sdkKey(model.api.npm) ?? (usesDotSplitOptions ? model.providerID.split(".")[0] : model.providerID)
+  const key = sdkKey(model.api.npm) ?? (usesDotSplitOptions ? model.providerID.split(".")[0] : model.providerID)
   // @ai-sdk/azure delegates to OpenAIChatLanguageModel which reads from
   // providerOptions["openai"], but OpenAIResponsesLanguageModel checks
   // "azure" first. Pass both so model options work on either code path.
@@ -1306,11 +1310,11 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   return { [key]: options }
 }
 
-export function maxOutputTokens(model: Provider.Model): number {
-  return Math.min(model.limit.output, OUTPUT_TOKEN_MAX) || OUTPUT_TOKEN_MAX
+export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
+  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
 }
 
-export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JSONSchema7): JSONSchema7 {
+export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 {
   /*
   if (["openai", "azure"].includes(providerID)) {
     if (schema.type === "object" && schema.properties) {
@@ -1341,7 +1345,10 @@ export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JS
       return result
     }
 
-    schema = sanitizeMoonshot(schema) as JSONSchema.BaseSchema | JSONSchema7
+    const sanitized = sanitizeMoonshot(schema)
+    if (typeof sanitized === "object" && sanitized !== null && !Array.isArray(sanitized)) {
+      schema = sanitized
+    }
   }
 
   // Convert integer enums to string enums for Google/Gemini
@@ -1423,7 +1430,7 @@ export function schema(model: Provider.Model, schema: JSONSchema.BaseSchema | JS
     schema = sanitizeGemini(schema)
   }
 
-  return schema as JSONSchema7
+  return schema
 }
 
 export * as ProviderTransform from "./transform"

@@ -299,6 +299,7 @@ export const dict = {
   "mcp.status.connected": "подключено",
   "mcp.status.failed": "ошибка",
   "mcp.status.needs_auth": "требуется авторизация",
+  "mcp.auth.clickToAuthenticate": "Нажмите, чтобы авторизоваться",
   "mcp.status.disabled": "отключено",
 
   "dialog.fork.empty": "Нет сообщений для ответвления",
@@ -448,6 +449,8 @@ export const dict = {
   "error.page.description": "Произошла ошибка при загрузке приложения.",
   "error.page.details.label": "Детали ошибки",
   "error.page.action.restart": "Перезапустить",
+  "error.page.action.report": "Сообщить об ошибке",
+  "error.page.action.reported": "Об ошибке сообщено",
   "error.page.action.checking": "Проверка...",
   "error.page.action.checkUpdates": "Проверить обновления",
   "error.page.action.updateTo": "Обновить до {{version}}",

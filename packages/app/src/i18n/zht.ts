@@ -299,6 +299,7 @@ export const dict = {
   "mcp.status.connected": "已連線",
   "mcp.status.failed": "失敗",
   "mcp.status.needs_auth": "需要授權",
+  "mcp.auth.clickToAuthenticate": "點擊以進行授權",
   "mcp.status.disabled": "已停用",
 
   "dialog.fork.empty": "沒有可用於分支的訊息",
@@ -445,6 +446,8 @@ export const dict = {
   "error.page.description": "載入應用程式時發生錯誤。",
   "error.page.details.label": "錯誤詳情",
   "error.page.action.restart": "重新啟動",
+  "error.page.action.report": "回報錯誤",
+  "error.page.action.reported": "已回報錯誤",
   "error.page.action.checking": "檢查中...",
   "error.page.action.checkUpdates": "檢查更新",
   "error.page.action.updateTo": "更新到 {{version}}",

@@ -6,6 +6,7 @@ import { Config } from "@/config/config"
 import { SettingsHook } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
 import { Flag } from "@opencode-ai/core/flag/flag"
+import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as ShareNext from "./share-next"
 
 export interface Interface {
@@ -25,20 +26,20 @@ export const layer = Layer.effect(
     const settingsHook = yield* SettingsHook.Service
     const startCtx = yield* HookStartContext.Service
     const scope = yield* Scope.Scope
+    const sync = yield* SyncEvent.Service
+    const flags = yield* RuntimeFlags.Service
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
       if (conf.share === "disabled") throw new Error("Sharing is disabled in configuration")
       const result = yield* shareNext.create(sessionID)
-      yield* Effect.sync(() =>
-        SyncEvent.run(Session.Event.Updated, { sessionID, info: { share: { url: result.url } } }),
-      )
+      yield* sync.run(Session.Event.Updated, { sessionID, info: { share: { url: result.url } } })
       return result
     })
 
     const unshare = Effect.fn("SessionShare.unshare")(function* (sessionID: SessionID) {
       yield* shareNext.remove(sessionID)
-      yield* Effect.sync(() => SyncEvent.run(Session.Event.Updated, { sessionID, info: { share: { url: null } } }))
+      yield* sync.run(Session.Event.Updated, { sessionID, info: { share: { url: null } } })
     })
 
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
@@ -62,7 +63,7 @@ export const layer = Layer.effect(
       }
       if (result.parentID) return result
       const conf = yield* cfg.get()
-      if (!(Flag.OPENCODE_AUTO_SHARE || conf.share === "auto")) return result
+      if (!(flags.autoShare || conf.share === "auto")) return result
       yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
       return result
     })
@@ -77,6 +78,8 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Config.defaultLayer),
   Layer.provide(SettingsHook.defaultLayer),
   Layer.provide(HookStartContext.defaultLayer),
+  Layer.provide(SyncEvent.defaultLayer),
+  Layer.provide(RuntimeFlags.defaultLayer),
 )
 
 export * as SessionShare from "./session"

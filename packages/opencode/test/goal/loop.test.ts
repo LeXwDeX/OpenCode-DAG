@@ -25,7 +25,8 @@ describe("Goal afterIdle (logic via updateAfterJudge + pause)", () => {
         const id = sid()
 
         const seen = yield* Deferred.make<{ sessionID: string; reason: string }>()
-        yield* Stream.runForEach(bus.subscribe(GoalEvent.Event.Achieved), (evt) =>
+        const achieved = yield* bus.subscribe(GoalEvent.Event.Achieved)
+        yield* Stream.runForEach(achieved, (evt) =>
           Effect.sync(() => Deferred.doneUnsafe(seen, Effect.succeed(evt.properties as any))),
         ).pipe(Effect.forkScoped)
 
@@ -48,7 +49,8 @@ describe("Goal afterIdle (logic via updateAfterJudge + pause)", () => {
         const id = sid()
 
         const seen = yield* Deferred.make<{ turnsUsed: number }>()
-        yield* Stream.runForEach(bus.subscribe(GoalEvent.Event.Continued), (evt) =>
+        const continued = yield* bus.subscribe(GoalEvent.Event.Continued)
+        yield* Stream.runForEach(continued, (evt) =>
           Effect.sync(() => Deferred.doneUnsafe(seen, Effect.succeed(evt.properties as any))),
         ).pipe(Effect.forkScoped)
 
@@ -72,7 +74,8 @@ describe("Goal afterIdle (logic via updateAfterJudge + pause)", () => {
         const id = sid()
 
         const seen = yield* Deferred.make<{ reason: string }>()
-        yield* Stream.runForEach(bus.subscribe(GoalEvent.Event.Paused), (evt) =>
+        const paused = yield* bus.subscribe(GoalEvent.Event.Paused)
+        yield* Stream.runForEach(paused, (evt) =>
           Effect.sync(() => Deferred.doneUnsafe(seen, Effect.succeed(evt.properties as any))),
         ).pipe(Effect.forkScoped)
 

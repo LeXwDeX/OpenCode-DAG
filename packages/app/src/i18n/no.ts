@@ -302,6 +302,7 @@ export const dict = {
   "mcp.status.connected": "tilkoblet",
   "mcp.status.failed": "mislyktes",
   "mcp.status.needs_auth": "trenger autentisering",
+  "mcp.auth.clickToAuthenticate": "Klikk for å autentisere",
   "mcp.status.disabled": "deaktivert",
 
   "dialog.fork.empty": "Ingen meldinger å forgrene fra",
@@ -450,6 +451,8 @@ export const dict = {
   "error.page.description": "Det oppstod en feil under lasting av applikasjonen.",
   "error.page.details.label": "Feildetaljer",
   "error.page.action.restart": "Start på nytt",
+  "error.page.action.report": "Rapporter feil",
+  "error.page.action.reported": "Feil rapportert",
   "error.page.action.checking": "Sjekker...",
   "error.page.action.checkUpdates": "Se etter oppdateringer",
   "error.page.action.updateTo": "Oppdater til {{version}}",

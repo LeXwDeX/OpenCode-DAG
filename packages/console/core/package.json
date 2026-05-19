@@ -44,9 +44,9 @@
     "@tsconfig/node22": "22.0.2",
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
+    "@typescript/native-preview": "catalog:",
     "drizzle-kit": "catalog:",
     "mysql2": "3.14.4",
-    "typescript": "catalog:",
-    "@typescript/native-preview": "catalog:"
+    "typescript": "catalog:"
   }
 }

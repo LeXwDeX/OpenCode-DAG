@@ -61,7 +61,7 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("GoalLoop.state")(function* (_ctx) {
         const scope = yield* Scope.Scope
-        yield* bus.subscribe(SessionStatus.Event.Status).pipe(
+        yield* (yield* bus.subscribe(SessionStatus.Event.Status)).pipe(
           Stream.filter((evt) => evt.properties.status.type === "idle"),
           Stream.runForEach((evt) =>
             Effect.gen(function* () {

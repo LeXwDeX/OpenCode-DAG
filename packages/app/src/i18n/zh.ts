@@ -319,6 +319,7 @@ export const dict = {
   "mcp.status.connected": "已连接",
   "mcp.status.failed": "失败",
   "mcp.status.needs_auth": "需要授权",
+  "mcp.auth.clickToAuthenticate": "点击进行授权",
   "mcp.status.disabled": "已禁用",
 
   "dialog.fork.empty": "没有可用于分叉的消息",
@@ -452,6 +453,8 @@ export const dict = {
   "error.page.description": "加载应用程序时发生错误。",
   "error.page.details.label": "错误详情",
   "error.page.action.restart": "重启",
+  "error.page.action.report": "上报错误",
+  "error.page.action.reported": "错误已上报",
   "error.page.action.checking": "检查中...",
   "error.page.action.checkUpdates": "检查更新",
   "error.page.action.updateTo": "更新到 {{version}}",

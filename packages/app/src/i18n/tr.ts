@@ -304,6 +304,7 @@ export const dict = {
   "mcp.status.connected": "bağlı",
   "mcp.status.failed": "başarısız",
   "mcp.status.needs_auth": "kimlik doğrulama gerekli",
+  "mcp.auth.clickToAuthenticate": "Kimlik doğrulamak için tıklayın",
   "mcp.status.disabled": "devre dışı",
 
   "dialog.fork.empty": "Dallandırılacak mesaj yok",
@@ -452,6 +453,8 @@ export const dict = {
   "error.page.description": "Uygulama yüklenirken bir hata oluştu.",
   "error.page.details.label": "Hata Detayları",
   "error.page.action.restart": "Yeniden Başlat",
+  "error.page.action.report": "Hatayı Bildir",
+  "error.page.action.reported": "Hata Bildirildi",
   "error.page.action.checking": "Kontrol ediliyor...",
   "error.page.action.checkUpdates": "Güncellemeleri kontrol et",
   "error.page.action.updateTo": "{{version}} sürümüne güncelle",
