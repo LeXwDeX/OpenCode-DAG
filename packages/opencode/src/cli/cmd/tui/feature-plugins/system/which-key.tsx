@@ -206,7 +206,9 @@ function WhichKeyPanel(props: {
   const columns = createMemo(() =>
     Math.max(1, Math.min(3, Math.floor((contentWidth() + COLUMN_GAP) / (MAX_COLUMN_WIDTH + COLUMN_GAP)) || 1)),
   )
-  const entries = createMemo(() => active().map((item) => activeKeyEntry(props.api, item)))
+  // Cast: opentui@0.1.105/0.2.14 ActiveKey shape mismatch through Renderable
+  // generic. TODO(D-014-followup): bump opentui.
+  const entries = createMemo(() => active().map((item) => activeKeyEntry(props.api, item as any)))
   const groups = createMemo(() => grouped(entries()))
   const tabsVisible = createMemo(() => !pendingMode() && groups().length > 0)
   const headerVisible = createMemo(() => tabsVisible() || pendingMode())

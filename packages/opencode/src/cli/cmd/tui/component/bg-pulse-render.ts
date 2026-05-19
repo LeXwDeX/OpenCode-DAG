@@ -374,8 +374,9 @@ export class GoUpsellArtPainter {
     if (this.logoIndexes.length === 0) return
 
     const buffers = frameBuffer.buffers
-    const fg = buffers.fg
-    const bg = buffers.bg
+    // @opentui/core types fg/bg as Float32Array; runtime is Uint16Array (matches writeLogoTint).
+    const fg = buffers.fg as unknown as Uint16Array
+    const bg = buffers.bg as unknown as Uint16Array
     const shadow: Rgb = [
       mixChannel(this.panelRgb[0], this.logoBaseRgb[0], 0.25),
       mixChannel(this.panelRgb[1], this.logoBaseRgb[1], 0.25),

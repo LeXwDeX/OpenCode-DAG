@@ -239,8 +239,9 @@ function makeHttp(input?: { processor?: "blocking" }) {
   ).pipe(Layer.provide(summary))
 }
 
-const it = testEffect(makeHttp())
-const race = testEffect(makeHttp({ processor: "blocking" }))
+// TODO(D-014-followup): remaining `Service` leak in makeHttp() (post-RuntimeFlags refactor) — cast until layer R surfaced & closed.
+const it = testEffect(makeHttp() as any)
+const race = testEffect(makeHttp({ processor: "blocking" }) as any)
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 
 // Config that registers a custom "test" provider with a "test-model" model

@@ -48,7 +48,8 @@ function expectRgba(color: unknown) {
 }
 
 function expectIndexed(color: unknown) {
-  const rgba = expectRgba(color)
+  const rgba = expectRgba(color) as any
+  // TODO(D-014-followup): `intent`/`slot` are fork-extended RGBA props not yet in @opentui/core types.
   expect(rgba.intent).toBe("indexed")
   expect(rgba.slot).toBeLessThan(256)
 }

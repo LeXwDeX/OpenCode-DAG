@@ -1,5 +1,5 @@
 import { runtimeModules as keymapRuntimeModules } from "@opentui/keymap/runtime-modules"
-import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support/configure"
+import { ensureRuntimePluginSupport } from "@opentui/solid/runtime-plugin-support"
 import {
   type TuiDispose,
   type TuiPlugin,
@@ -43,7 +43,10 @@ import { createCommandShim } from "./command-shim"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Effect } from "effect"
 
-ensureRuntimePluginSupport({ additional: keymapRuntimeModules })
+// Cast: legacy @opentui/solid 0.1.105 signature is `() => boolean`; the fork's
+// runtime-modules wiring was added in a later opentui version. Treat as `any`
+// until opentui is bumped. TODO(D-014-followup): upgrade @opentui/solid.
+;(ensureRuntimePluginSupport as unknown as (opts: unknown) => boolean)({ additional: keymapRuntimeModules })
 
 type PluginLoad = {
   options: ConfigPlugin.Options | undefined

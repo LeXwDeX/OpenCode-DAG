@@ -209,7 +209,10 @@ export function createTuiApi(input: Input): TuiPluginApi {
     app: appApi(),
     attention: input.attention,
     // Keep deprecated `api.command` working for v1 plugins; remove in v2.
-    command: createCommandShim(input.keymap, input.dialog, input.tuiConfig.keybinds),
+    // Cast: createCommandShim expects the plugin-public TuiKeymap surface;
+    // OpenTuiKeymap is structurally compatible. TODO(D-014-followup): align
+    // plugin-public type with internal OpenTuiKeymap.
+    command: createCommandShim(input.keymap as any, input.dialog, input.tuiConfig.keybinds),
     keys: {
       formatSequence(parts) {
         return Keymap.formatKeySequence(parts, input.tuiConfig)
@@ -218,7 +221,7 @@ export function createTuiApi(input: Input): TuiPluginApi {
         return Keymap.formatKeyBindings(bindings, input.tuiConfig)
       },
     },
-    keymap: input.keymap,
+    keymap: input.keymap as any,
     route: {
       register(list) {
         return routeRegister(input.routes, list, input.bump)

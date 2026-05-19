@@ -186,7 +186,8 @@ function makeHttp() {
   )
 }
 
-const it = testEffect(makeHttp())
+// TODO(D-014-followup): residual Service leak in makeHttp() — cast until layer R surfaced & closed.
+const it = testEffect(makeHttp() as any)
 
 const providerCfg = (url: string) => ({
   provider: {

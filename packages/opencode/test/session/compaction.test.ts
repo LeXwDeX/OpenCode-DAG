@@ -246,7 +246,11 @@ const env = Layer.mergeAll(
 
 const it = testEffect(env)
 
-const compactionEnv = Layer.mergeAll(SessionNs.defaultLayer, CrossSpawnSpawner.defaultLayer)
+const compactionEnv = Layer.mergeAll(
+  SessionNs.defaultLayer,
+  CrossSpawnSpawner.defaultLayer,
+  SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
+)
 const itCompaction = testEffect(compactionEnv)
 
 type CompactionProcessOptions = {

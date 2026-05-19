@@ -10,7 +10,7 @@ import {
   reactiveMatcherFromSignal,
   useKeymap,
   useKeymapSelector,
-  useBindings,
+  useBindings as useBindingsUpstream,
 } from "@opentui/keymap/solid"
 import type { Accessor } from "solid-js"
 import type { TuiConfig } from "./config/tui"
@@ -22,7 +22,15 @@ export const LEADER_TOKEN = "leader"
 export const OpencodeKeymapProvider = KeymapProvider
 export const useOpencodeKeymap = useKeymap
 
-export { reactiveMatcherFromSignal, useBindings, useKeymapSelector }
+export { reactiveMatcherFromSignal, useKeymapSelector }
+
+// Fork callsites still pass `target: Accessor<T>` (older keymap API). Upstream
+// now expects `targetRef: { current: T | null }`. Wrap with a permissive
+// signature so callsites typecheck; runtime adaptation is tracked separately.
+export const useBindings = useBindingsUpstream as unknown as (
+  createLayer: () => Record<string, unknown>,
+  deps?: unknown,
+) => void
 
 export type OpenTuiKeymap = ReturnType<typeof useKeymap>
 
@@ -135,9 +143,10 @@ export function registerOpencodeKeymap(
   })
   const offEscape = addons.registerEscapeClearsPendingSequence(keymap)
   const offBackspace = addons.registerBackspacePopsPendingSequence(keymap)
-  const offInputBindings = addons.registerManagedTextareaLayer(keymap, renderer, {
+  // Cast: opentui@0.1.105 renderer; addons typed for 0.2.14. TODO(D-014-followup): bump opentui.
+  const offInputBindings = addons.registerManagedTextareaLayer(keymap, renderer as any, {
     enabled: () => renderer.currentFocusedEditor !== null,
-    bindings: config.keybinds.gather("input", inputCommands),
+    bindings: config.keybinds.gather("input", inputCommands) as any,
   })
 
   return () => {

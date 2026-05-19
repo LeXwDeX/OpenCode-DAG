@@ -396,7 +396,6 @@ export const layer: Layer.Layer<Service, never, Git.Service | Bus.Service> = Lay
         }
         return { applied: true }
       }),
-      }),
     })
   }),
 )

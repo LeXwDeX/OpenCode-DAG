@@ -2707,10 +2707,10 @@ test("github-copilot custom loader registers when baseURL is configured (no auth
       )
     },
   })
-  await Instance.provide({
+  await withTestInstance({
     directory: tmp.path,
-    fn: async () => {
-      const providers = await list()
+    fn: async (ctx) => {
+      const providers = await list(ctx)
       const copilot = providers[ProviderID.make("github-copilot")]
       expect(copilot).toBeDefined()
       expect(copilot.options.baseURL).toBe("https://copilot-proxy.internal/v1")

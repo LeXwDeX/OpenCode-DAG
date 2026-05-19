@@ -20,9 +20,9 @@ export const schema = Schema.Struct({
         // Some upstream models may return limits with missing numeric fields;
         // default to 0 so the model is still usable (just without precise token budgets).
         limits: Schema.Struct({
-          max_context_window_tokens: Schema.optionalWith(Schema.Number, { default: () => 0 }),
-          max_output_tokens: Schema.optionalWith(Schema.Number, { default: () => 0 }),
-          max_prompt_tokens: Schema.optionalWith(Schema.Number, { default: () => 0 }),
+          max_context_window_tokens: Schema.optional(Schema.Number),
+          max_output_tokens: Schema.optional(Schema.Number),
+          max_prompt_tokens: Schema.optional(Schema.Number),
           vision: Schema.optional(
             Schema.Struct({
               max_prompt_image_size: Schema.Number,
@@ -72,9 +72,9 @@ function build(key: string, remote: Item, url: string, prev?: Model): Model {
     // API response wins
     status: "active",
     limit: {
-      context: remote.capabilities.limits.max_context_window_tokens,
-      input: remote.capabilities.limits.max_prompt_tokens,
-      output: remote.capabilities.limits.max_output_tokens,
+      context: remote.capabilities.limits.max_context_window_tokens ?? 0,
+      input: remote.capabilities.limits.max_prompt_tokens ?? 0,
+      output: remote.capabilities.limits.max_output_tokens ?? 0,
     },
     capabilities: {
       temperature: prev?.capabilities.temperature ?? true,

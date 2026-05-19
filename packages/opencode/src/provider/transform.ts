@@ -17,10 +17,6 @@ function mimeToModality(mime: string): Modality | undefined {
 
 export const OUTPUT_TOKEN_MAX = 32_000
 
-export function sanitizeSurrogates(content: string) {
-  return content.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD")
-}
-
 // Replace unpaired UTF-16 surrogates with U+FFFD. The AI SDK / providers
 // can choke on lone surrogates emitted from tool output (e.g. truncated
 // emoji at a buffer boundary), so we proactively scrub them.

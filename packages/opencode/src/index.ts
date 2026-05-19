@@ -123,7 +123,7 @@ const cli = yargs(args)
     // channels (local/dev/snapshot/...). Hardcoding "opencode.db" here meant
     // the marker never existed on those channels, so JsonMigration re-ran on
     // every startup whenever ~/.local/share/opencode was empty/new.
-    if (!(await Filesystem.exists(Database.Path))) {
+    if (!(await Filesystem.exists(Database.getPath()))) {
       // First-time launch: JsonMigration + drizzle are lazy-imported. Database
       // module itself is already eager-loaded at the top of this file (needed
       // by the process.on("exit") hook), but `Database.Client()` is still

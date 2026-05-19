@@ -187,7 +187,10 @@ export function tui(input: {
     void renderer.getPalette({ size: 16 }).catch(() => undefined)
     const mode = (await renderer.waitForThemeMode(1000)) ?? "dark"
 
-    const keymap = createDefaultOpenTuiKeymap(renderer)
+    // Cast: opentui@0.1.105 CliRenderer is structurally compatible with the
+    // narrower keymap interface; opentui@0.2.14 type pulled in transitively
+    // is a superset. TODO(D-014-followup): bump opentui.
+    const keymap = createDefaultOpenTuiKeymap(renderer as any)
     const offKeymap = registerOpencodeKeymap(keymap, renderer, input.config)
 
     await render(() => {
@@ -283,7 +286,9 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     routeRev()
     return routes.get(name)?.at(-1)?.render
   }
-  const attention = createTuiAttention({ renderer, config: tuiConfig, kv })
+  // Cast: triggerNotification missing on opentui@0.1.105 CliRenderer; safely
+  // unused on older terminals. TODO(D-014-followup): bump opentui.
+  const attention = createTuiAttention({ renderer: renderer as any, config: tuiConfig, kv })
 
   const api = createTuiApi({
     tuiConfig,

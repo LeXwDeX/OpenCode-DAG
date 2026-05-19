@@ -5,18 +5,18 @@ export type ClientOptions = {
 }
 
 export type Event =
-  | EventTuiPromptAppend
-  | EventTuiCommandExecute
-  | EventTuiToastShow1
-  | EventTuiSessionSelect
-  | EventServerConnected
-  | EventGlobalDisposed
   | EventServerInstanceDisposed
   | EventFileEdited
   | EventFileWatcherUpdated
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
+  | EventTuiPromptAppend
+  | EventTuiCommandExecute
+  | EventTuiToastShow1
+  | EventTuiSessionSelect
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
   | EventPermissionAsked
   | EventPermissionReplied
   | EventSessionDiff
@@ -27,11 +27,15 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
   | EventCommandExecuted
   | EventProjectUpdated
   | EventSessionCompacted
+  | EventGoalSet1
+  | EventGoalUpdated1
+  | EventGoalContinued1
+  | EventGoalAchieved
+  | EventGoalPaused
+  | EventGoalCleared
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
@@ -77,6 +81,8 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
+  | EventServerConnected
+  | EventGlobalDisposed
   | EventCatalogModelUpdated
 
 export type OAuth = {
@@ -317,6 +323,7 @@ export type Todo = {
 export type SessionStatus =
   | {
       type: "idle"
+      cause?: "complete" | "abort" | "error"
     }
   | {
       type: "retry"
@@ -790,18 +797,18 @@ export type GlobalEvent = {
   project?: string
   workspace?: string
   payload:
-    | EventTuiPromptAppend
-    | EventTuiCommandExecute
-    | EventTuiToastShow
-    | EventTuiSessionSelect
-    | EventServerConnected
-    | EventGlobalDisposed
     | EventServerInstanceDisposed
     | EventFileEdited
     | EventFileWatcherUpdated
     | EventLspClientDiagnostics
     | EventLspUpdated
     | EventMessagePartDelta
+    | EventTuiPromptAppend
+    | EventTuiCommandExecute
+    | EventTuiToastShow
+    | EventTuiSessionSelect
+    | EventMcpToolsChanged
+    | EventMcpBrowserOpenFailed
     | EventPermissionAsked
     | EventPermissionReplied
     | EventSessionDiff
@@ -812,11 +819,15 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
-    | EventMcpToolsChanged
-    | EventMcpBrowserOpenFailed
     | EventCommandExecuted
     | EventProjectUpdated
     | EventSessionCompacted
+    | EventGoalSet
+    | EventGoalUpdated
+    | EventGoalContinued
+    | EventGoalAchieved
+    | EventGoalPaused
+    | EventGoalCleared
     | EventVcsBranchUpdated
     | EventWorkspaceReady
     | EventWorkspaceFailed
@@ -862,6 +873,8 @@ export type GlobalEvent = {
     | EventSessionNextCompactionStarted
     | EventSessionNextCompactionDelta
     | EventSessionNextCompactionEnded
+    | EventServerConnected
+    | EventGlobalDisposed
     | EventCatalogModelUpdated
     | SyncEventMessageUpdated
     | SyncEventMessageRemoved
@@ -988,6 +1001,7 @@ export type AgentConfig = {
   steps?: number
   maxSteps?: number
   permission?: PermissionConfig
+  todo_reminder?: boolean
   [key: string]:
     | unknown
     | string
@@ -1625,6 +1639,7 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  todo_reminder?: boolean
 }
 
 export type LspStatus = {
@@ -2403,22 +2418,6 @@ export type SyncEventSessionNextCompactionEnded = {
   }
 }
 
-export type EventServerConnected = {
-  id: string
-  type: "server.connected"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventGlobalDisposed = {
-  id: string
-  type: "global.disposed"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
 export type EventServerInstanceDisposed = {
   id: string
   type: "server.instance.disposed"
@@ -2470,6 +2469,23 @@ export type EventMessagePartDelta = {
     partID: string
     field: string
     delta: string
+  }
+}
+
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
   }
 }
 
@@ -2558,23 +2574,6 @@ export type EventSessionIdle = {
   }
 }
 
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
 export type EventCommandExecuted = {
   id: string
   type: "command.executed"
@@ -2595,6 +2594,65 @@ export type EventProjectUpdated = {
 export type EventSessionCompacted = {
   id: string
   type: "session.compacted"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventGoalSet = {
+  id: string
+  type: "goal.set"
+  properties: {
+    sessionID: string
+    goal: string
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventGoalUpdated = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: string
+    status: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventGoalContinued = {
+  id: string
+  type: "goal.continued"
+  properties: {
+    sessionID: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    reason: string
+  }
+}
+
+export type EventGoalAchieved = {
+  id: string
+  type: "goal.achieved"
+  properties: {
+    sessionID: string
+    reason: string
+  }
+}
+
+export type EventGoalPaused = {
+  id: string
+  type: "goal.paused"
+  properties: {
+    sessionID: string
+    reason: string
+  }
+}
+
+export type EventGoalCleared = {
+  id: string
+  type: "goal.cleared"
   properties: {
     sessionID: string
   }
@@ -3145,6 +3203,22 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
+export type EventServerConnected = {
+  id: string
+  type: "server.connected"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventGlobalDisposed = {
+  id: string
+  type: "global.disposed"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
 export type ModelV2Info = {
   id: string
   apiID: string
@@ -3561,6 +3635,39 @@ export type EventTuiToastShow1 = {
     message: string
     variant: "info" | "success" | "warning" | "error"
     duration?: number
+  }
+}
+
+export type EventGoalSet1 = {
+  id: string
+  type: "goal.set"
+  properties: {
+    sessionID: string
+    goal: string
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventGoalUpdated1 = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: string
+    status: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventGoalContinued1 = {
+  id: string
+  type: "goal.continued"
+  properties: {
+    sessionID: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+    reason: string
   }
 }
 

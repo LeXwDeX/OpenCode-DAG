@@ -54,7 +54,9 @@ async function mountPrompt(input: {
 
   function Harness() {
     const renderer = useRenderer()
-    const keymap = createDefaultOpenTuiKeymap(renderer)
+    // TODO(D-014-followup): two opentui versions (0.1.105 + 0.2.14) resolve in node_modules;
+    // CliRenderer type identity differs. Drop cast after opentui dedupe.
+    const keymap = createDefaultOpenTuiKeymap(renderer as any)
     const resolvedConfig = createTuiResolvedConfig({
       keybinds: input.keybinds,
       leader_timeout: 1000,
