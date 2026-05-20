@@ -38,7 +38,7 @@ import { ModelID, ProviderID } from "../../src/provider/schema"
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 const it = testEffect(SettingsHook.defaultLayer.pipe(Layer.provideMerge(infra)))
 
-const ctx: TriggerContext = { sessionID: "test-session", transcriptPath: "" }
+const ctx: TriggerContext = { sessionID: "ses_test_session", transcriptPath: "" }
 
 // Force npm registry deterministic (matches installation.test.ts; harmless side-effect).
 const SAVED_REGISTRY = process.env.npm_config_registry
@@ -113,7 +113,7 @@ describe("SettingsHook.trigger / PreToolUse", () => {
         expect(env.hook_event_name).toBe("PreToolUse")
         expect(env.tool_name).toBe("bash")
         expect(env.tool_input).toEqual({ command: "ls" })
-        expect(env.session_id).toBe("test-session")
+        expect(env.session_id).toBe("ses_test_session")
       }),
     ),
   )
@@ -1172,6 +1172,182 @@ async function writeHookSettingsForType(
   await fs.writeFile(path.join(dir, ".opencode", "settings.json"), JSON.stringify(settings))
 }
 
+// ══════════════════════════════════════════════════════════════════
+// WP-1/2 — Claude Code 27-event schema/envelope compatibility
+// ══════════════════════════════════════════════════════════════════
+
+describe("SettingsHook.trigger / Claude Code compatibility schema", () => {
+  it.live("accepts new event keys and serializes representative payload fields", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(async () => {
+          const captured = path.join(dir, "captured.json").replace(/'/g, "'\\''")
+          await fs.mkdir(path.join(dir, ".opencode"), { recursive: true })
+          await fs.writeFile(
+            path.join(dir, ".opencode", "settings.json"),
+            JSON.stringify({
+              hooks: {
+                Notification: [{ matcher: "*", hooks: [{ type: "command", command: "true" }] }],
+                PostCompact: [
+                  { matcher: "*", hooks: [{ type: "command", command: `cat > '${captured}'` }] },
+                ],
+                PermissionRequest: [{ matcher: "*", hooks: [{ type: "command", command: "true" }] }],
+                FileChanged: [{ matcher: "*", hooks: [{ type: "command", command: "true" }] }],
+              },
+            }),
+          )
+        })
+        const svc = yield* SettingsHook.Service
+        yield* svc.trigger(
+          { event: "PostCompact", trigger: "auto", compactSummary: "trimmed transcript" },
+          ctx,
+        )
+        const env = yield* Effect.promise(() => readEnvelope(dir))
+        expect(env.hook_event_name).toBe("PostCompact")
+        expect(env.compact_summary).toBe("trimmed transcript")
+      }),
+    ),
+  )
+
+  it.live("serializes Claude Code envelope additions without breaking old field names", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => writeHookSettings(dir, "PostToolUse", { matcher: "*" }))
+        const svc = yield* SettingsHook.Service
+        yield* svc.trigger(
+          {
+            event: "PostToolUse",
+            toolUseID: "toolu_123",
+            toolName: "bash",
+            toolInput: { command: "pwd" },
+            toolResponse: { output: "/tmp" },
+          },
+          ctx,
+        )
+        const env = yield* Effect.promise(() => readEnvelope(dir))
+        expect(env.tool_use_id).toBe("toolu_123")
+        expect(env.tool_name).toBe("bash")
+        expect(env.tool_input).toEqual({ command: "pwd" })
+        expect(env.tool_response).toEqual({ output: "/tmp" })
+      }),
+    ),
+  )
+
+  it.live("serializes SessionStart model, SubagentStop transcript, and Notification type", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() => writeHookSettings(dir, "SessionStart"))
+        const svc = yield* SettingsHook.Service
+        yield* svc.trigger({ event: "SessionStart", source: "startup", model: "claude-sonnet" }, ctx)
+        expect((yield* Effect.promise(() => readEnvelope(dir))).model).toBe("claude-sonnet")
+
+        yield* provideTmpdirInstance((subagentDir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => writeHookSettings(subagentDir, "SubagentStop"))
+            const subagentSvc = yield* SettingsHook.Service
+            yield* subagentSvc.trigger(
+              {
+                event: "SubagentStop",
+                stopHookActive: false,
+                agentTranscriptPath: "/tmp/agent.jsonl",
+              },
+              ctx,
+            )
+            expect((yield* Effect.promise(() => readEnvelope(subagentDir))).agent_transcript_path).toBe(
+              "/tmp/agent.jsonl",
+            )
+          }),
+        )
+
+        yield* provideTmpdirInstance((notificationDir) =>
+          Effect.gen(function* () {
+            yield* Effect.promise(() => writeHookSettings(notificationDir, "Notification"))
+            const notificationSvc = yield* SettingsHook.Service
+            yield* notificationSvc.trigger(
+              { event: "Notification", message: "done", notificationType: "info" },
+              ctx,
+            )
+            expect((yield* Effect.promise(() => readEnvelope(notificationDir))).notification_type).toBe("info")
+          }),
+        )
+      }),
+    ),
+  )
+})
+
+describe("SettingsHook.trigger / Claude Code hook command fields", () => {
+  const itHttpUrl = testEffect(
+    settingsHookWithHttp(
+      mockHttpClient((req) => {
+        expect(req.url).toBe("https://example.test/url-field")
+        return new Response("", { status: 200 })
+      }),
+    ),
+  )
+  itHttpUrl.live("type:http uses url field with command fallback retained", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeHookSettingsForType(dir, "PreToolUse", {
+            type: "http",
+            url: "https://example.test/url-field",
+            timeout: 5,
+          }),
+        )
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+      }),
+    ),
+  )
+
+  const provPromptField = ProviderTest.fake({
+    model: ProviderTest.model({
+      id: ModelID.make("test-model"),
+      providerID: ProviderID.make("anthropic"),
+    }),
+  })
+  const itPromptField = testEffect(settingsHookWithProviderAuth(provPromptField.layer, authNoneLayer()))
+  itPromptField.live("type:prompt accepts prompt field", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeHookSettingsForType(dir, "PreToolUse", { type: "prompt", prompt: "Audit." }),
+        )
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+      }),
+    ),
+  )
+
+  const provAgentPromptField = provWithLanguage(fakeLanguageModel([{ text: "thinking" }]))
+  const itAgentPromptField = testEffect(
+    settingsHookWithProviderAuth(provAgentPromptField.layer, authNoneLayer()),
+  )
+  itAgentPromptField.live("type:agent accepts prompt field", () =>
+    provideTmpdirInstance((dir) =>
+      Effect.gen(function* () {
+        yield* Effect.promise(() =>
+          writeHookSettingsForType(dir, "PreToolUse", { type: "agent", prompt: "Audit." }),
+        )
+        const svc = yield* SettingsHook.Service
+        const result = yield* svc.trigger(
+          { event: "PreToolUse", toolName: "bash", toolInput: {} },
+          ctx,
+        )
+        expect(result.blocked).toBeUndefined()
+      }),
+    ),
+  )
+})
+
 describe("SettingsHook.trigger / WP-4F handler × event matrix", () => {
   // ── 1. PostToolUse + mcp (P0): malformed mcp__ prefix → silent allow.
   it.live("dispatches type:mcp on PostToolUse (malformed prefix → silent allow)", () =>
@@ -1511,4 +1687,3 @@ describe("SettingsHook.trigger / WP-6C plugin sourceDir missing", () => {
     ),
   )
 })
-

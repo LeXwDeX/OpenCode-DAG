@@ -40,6 +40,7 @@ import { Global } from "@opencode-ai/core/global"
 import { Effect, Layer, Option, Context, Schema, Types } from "effect"
 import { NonNegativeInt, optionalOmitUndefined } from "@opencode-ai/core/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { SettingsHook } from "@/hook/settings"
 
 const log = Log.create({ service: "session" })
 
@@ -505,10 +506,15 @@ export type Patch = Types.DeepMutable<SyncEvent.Event<typeof Event.Updated>["dat
 const db = <T>(fn: (d: Parameters<typeof Database.use>[0] extends (trx: infer D) => any ? D : never) => T) =>
   Effect.sync(() => Database.use(fn))
 
-export const layer: Layer.Layer<
+const layerBase: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | Bus.Service | Storage.Service | SyncEvent.Service | RuntimeFlags.Service
+  | BackgroundJob.Service
+  | Bus.Service
+  | Storage.Service
+  | SyncEvent.Service
+  | RuntimeFlags.Service
+  | SettingsHook.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -517,6 +523,7 @@ export const layer: Layer.Layer<
     const storage = yield* Storage.Service
     const sync = yield* SyncEvent.Service
     const flags = yield* RuntimeFlags.Service
+    const settingsHook = yield* SettingsHook.Service
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -604,6 +611,15 @@ export const layer: Layer.Layer<
         const kids = yield* children(sessionID)
         for (const child of kids) {
           yield* remove(child.id)
+        }
+
+        if (hasInstance) {
+          yield* settingsHook
+            .trigger(
+              { event: "SessionEnd", reason: "other" },
+              { sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.ignore)
         }
 
         yield* sync.run(Event.Deleted, { sessionID, info: session }, { publish: hasInstance })
@@ -860,6 +876,12 @@ export const layer: Layer.Layer<
     })
   }),
 )
+
+export const layer: Layer.Layer<
+  Service,
+  never,
+  BackgroundJob.Service | Bus.Service | Storage.Service | SyncEvent.Service | RuntimeFlags.Service
+> = layerBase.pipe(Layer.provide(SettingsHook.defaultLayer))
 
 export const defaultLayer = layer.pipe(
   Layer.provide(BackgroundJob.defaultLayer),

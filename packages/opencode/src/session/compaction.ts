@@ -609,6 +609,16 @@ export const layer: Layer.Layer<
             include: selected.tail_start_id,
           })
         }
+        yield* settingsHook
+          .trigger(
+            {
+              event: "PostCompact",
+              trigger: input.auto ? "auto" : "manual",
+              compactSummary: summary ?? "",
+            },
+            { sessionID: input.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.ignore)
         yield* bus.publish(Event.Compacted, { sessionID: input.sessionID })
       }
       return result

@@ -11,17 +11,14 @@
  *   5. <project>/.claude/settings.local.json         (CC project local)
  *   6. <project>/.opencode/settings.local.json       (OpenCode project local)
  *
- * Supports the 8-event Claude Code hook surface (fork drops Notification —
- * permission UI uses the internal bus instead):
- *   PreToolUse, PostToolUse, UserPromptSubmit, Stop, SubagentStop,
- *   PreCompact, SessionStart, SessionEnd
+ * Supports the Claude Code hook event surface at the protocol/schema layer.
  *
  * Hook entry types:
  *   - { type: "command", command: "<shell>", timeout?: <seconds> }
  *   - { type: "mcp",     command: "mcp__<server>__<tool>", timeout?: <seconds> }
- *   - { type: "http",    command: "<url>", timeout?: <seconds> }
- *   - { type: "prompt",  command: "<llm-system-prompt>", timeout?: <seconds> }
- *   - { type: "agent",   command: "<llm-task-prompt>", timeout?: <seconds> }
+ *   - { type: "http",    url: "<url>", command?: "<legacy-url>", timeout?: <seconds> }
+ *   - { type: "prompt",  prompt: "<llm-system-prompt>", command?: "<legacy-prompt>", timeout?: <seconds> }
+ *   - { type: "agent",   prompt: "<llm-task-prompt>", command?: "<legacy-prompt>", timeout?: <seconds> }
  *
  * stdin JSON envelope per Claude Code spec:
  *   { hook_event_name, session_id, transcript_path, cwd, ...event-specific }
@@ -69,12 +66,31 @@ const log = Log.create({ service: "hook.settings" })
 export type HookEvent =
   | "PreToolUse"
   | "PostToolUse"
+  | "PostToolUseFailure"
+  | "Notification"
   | "UserPromptSubmit"
+  | "PermissionRequest"
+  | "PermissionDenied"
+  | "Setup"
   | "Stop"
+  | "StopFailure"
+  | "SubagentStart"
   | "SubagentStop"
   | "PreCompact"
+  | "PostCompact"
   | "SessionStart"
   | "SessionEnd"
+  | "TeammateIdle"
+  | "TaskCreated"
+  | "TaskCompleted"
+  | "Elicitation"
+  | "ElicitationResult"
+  | "ConfigChange"
+  | "WorktreeCreate"
+  | "WorktreeRemove"
+  | "InstructionsLoaded"
+  | "CwdChanged"
+  | "FileChanged"
 
 interface HookCommand {
   /**
@@ -86,8 +102,16 @@ interface HookCommand {
    * - `agent`: autonomous agent loop with bash/read_file/list_dir/grep tools
    */
   type: "command" | "mcp" | "http" | "prompt" | "agent"
-  command: string
+  command?: string
+  /** Claude Code `type:"http"` endpoint. Legacy configs may still use `command`. */
+  url?: string
+  /** Claude Code `type:"prompt" | "agent"` prompt. Legacy configs may still use `command`. */
+  prompt?: string
+  headers?: Record<string, string>
+  allowedEnvVars?: string[]
   timeout?: number
+  statusMessage?: string
+  once?: boolean
   /**
    * Shell selector for `type:"command"`. CC honors `bash` (default on POSIX) and `powershell`
    * (default on Windows). Currently a schema placeholder — execShell still picks based on platform.
@@ -168,6 +192,10 @@ const HookSpecificOutputZodSchema = z.object({
   additionalContext: z.string().optional(),
   initialUserMessage: z.string().optional(),
   updatedMCPToolOutput: z.unknown().optional(),
+  watchPaths: z.array(z.string()).optional(),
+  displayMessage: z.string().optional(),
+  compactSummary: z.string().optional(),
+  customSummary: z.string().optional(),
 })
 
 const HookJSONOutputZodSchema = z.object({
@@ -204,11 +232,41 @@ export type HookSpecificOutput =
       hookEventName: "SessionStart"
       additionalContext?: string
       initialUserMessage?: string
+      watchPaths?: string[]
     }
   | {
       hookEventName: "PostToolUse"
       additionalContext?: string
       updatedMCPToolOutput?: unknown
+    }
+  | {
+      hookEventName: "PostToolUseFailure"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PermissionRequest"
+      permissionDecision?: "allow" | "deny" | "ask"
+      permissionDecisionReason?: string
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PermissionDenied"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "Notification"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "Setup" | "SubagentStart"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PostCompact"
+      additionalContext?: string
+      displayMessage?: string
+      compactSummary?: string
+      customSummary?: string
     }
   | {
       /**
@@ -221,29 +279,87 @@ export type HookSpecificOutput =
 
 /** Per-event payload — discriminated union, TS narrows automatically. */
 export type HookPayload =
-  | { event: "PreToolUse"; toolName: string; toolInput: Record<string, unknown> }
+  | {
+      event: "PreToolUse"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+    }
   | {
       event: "PostToolUse"
+      toolUseID?: string
       toolName: string
       toolInput: Record<string, unknown>
       toolResponse: unknown
     }
+  | {
+      event: "PostToolUseFailure"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      error: string
+      isInterrupt?: boolean
+    }
+  | {
+      event: "PermissionRequest"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      permissionSuggestions?: string[]
+    }
+  | {
+      event: "PermissionDenied"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      reason: string
+    }
+  | { event: "Notification"; message: string; title?: string; notificationType?: string }
   | { event: "UserPromptSubmit"; prompt: string }
-  | { event: "Stop"; stopHookActive: boolean }
-  | { event: "SubagentStop"; stopHookActive: boolean }
+  | { event: "Stop"; stopHookActive: boolean; lastAssistantMessage?: string }
+  | { event: "StopFailure"; stopHookActive: boolean; error: string; lastAssistantMessage?: string }
+  | { event: "SubagentStart"; agentID: string; agentType: string }
+  | {
+      event: "SubagentStop"
+      stopHookActive: boolean
+      agentID?: string
+      agentTranscriptPath?: string
+      agentType?: string
+      lastAssistantMessage?: string
+    }
   | {
       event: "PreCompact"
       trigger: "manual" | "auto"
       customInstructions?: string
     }
   | {
+      event: "PostCompact"
+      trigger?: "manual" | "auto"
+      compactSummary?: string
+      customInstructions?: string
+    }
+  | {
       event: "SessionStart"
       source: "startup" | "resume" | "clear" | "compact"
+      model?: string
+      agentType?: string
     }
   | {
       event: "SessionEnd"
       reason: "clear" | "logout" | "prompt_input_exit" | "other"
     }
+  | { event: "Setup"; trigger: string }
+  | { event: "TeammateIdle"; teammateID?: string; teammateName?: string }
+  | { event: "TaskCreated"; taskID?: string; taskTitle?: string; taskDescription?: string }
+  | { event: "TaskCompleted"; taskID?: string; taskTitle?: string; result?: unknown }
+  | { event: "Elicitation"; prompt?: string; schema?: unknown }
+  | { event: "ElicitationResult"; result?: unknown; cancelled?: boolean }
+  | { event: "ConfigChange"; configPath?: string; changes?: unknown }
+  | { event: "WorktreeCreate"; path?: string; branch?: string }
+  | { event: "WorktreeRemove"; path?: string; branch?: string }
+  | { event: "InstructionsLoaded"; path?: string; content?: string }
+  | { event: "CwdChanged"; oldCwd?: string; newCwd?: string }
+  | { event: "FileChanged"; path?: string; changeType?: string }
 
 export interface TriggerContext {
   sessionID: string
@@ -322,7 +438,7 @@ function computeDataDir(sourceDir: string): string {
  * Read-only: never mutates `entry`.
  */
 function expandCommand(entry: HookCommand): string {
-  return entry.command.replace(/\$\{([^}]+)\}/g, (full, key) => {
+  return commandText(entry).replace(/\$\{([^}]+)\}/g, (full, key) => {
     if (key === "CLAUDE_PLUGIN_ROOT" && entry.__sourceDir) return entry.__sourceDir
     if (key === "CLAUDE_PLUGIN_DATA" && entry.__sourceDir) return computeDataDir(entry.__sourceDir)
     if (key.startsWith("user_config.")) {
@@ -332,6 +448,18 @@ function expandCommand(entry: HookCommand): string {
     }
     return full
   })
+}
+
+function commandText(entry: HookCommand): string {
+  return entry.command ?? ""
+}
+
+function httpUrl(entry: HookCommand): string {
+  return entry.url ?? entry.command ?? ""
+}
+
+function promptText(entry: HookCommand): string {
+  return entry.prompt ?? entry.command ?? ""
 }
 
 // ── Matcher ─────────────────────────────────────────────────────
@@ -497,7 +625,8 @@ function execShell(
     const shell = process.platform === "win32" ? true : "/bin/sh"
     const expandedCommand = expandCommand(entry)
 
-    log.debug("hook spawn", { command: entry.command.slice(0, 200), cwd, timeoutMs })
+    const command = commandText(entry)
+    log.debug("hook spawn", { command: command.slice(0, 200), cwd, timeoutMs })
 
     // WP-6C: plugin-directory liveness pre-check.
     // When __sourceDir is stamped but the directory has since been GC'd
@@ -509,7 +638,7 @@ function execShell(
     // the same allow path it already uses for spawnError-set entries.
     if (entry.__sourceDir && !existsSync(entry.__sourceDir)) {
       log.warn("hook plugin sourceDir missing — silent allow", {
-        command: entry.command,
+        command,
         sourceDir: entry.__sourceDir,
       })
       resolve({ exitCode: 0, stdout: "", stderr: "" })
@@ -545,24 +674,24 @@ function execShell(
 
     // EPIPE on stdin must not crash the host process (fork commit 0f3017f33a)
     child.stdin.on("error", (err) => {
-      log.warn("hook stdin error", { command: entry.command, error: err.message })
+      log.warn("hook stdin error", { command, error: err.message })
     })
 
     try {
       child.stdin.write(stdinJSON + "\n", "utf8")
       child.stdin.end()
     } catch (err) {
-      log.warn("hook stdin write failed", { command: entry.command, error: String(err) })
+      log.warn("hook stdin write failed", { command, error: String(err) })
     }
 
     child.on("error", (err) => {
-      log.error("hook command failed to spawn", { command: entry.command, error: err.message })
+      log.error("hook command failed to spawn", { command, error: err.message })
       resolve({ exitCode: null, stdout, stderr, spawnError: err.message })
     })
 
     child.on("close", (code) => {
       log.debug("hook close", {
-        command: entry.command.slice(0, 80),
+        command: command.slice(0, 80),
         exitCode: code,
         stdoutLen: stdout.length,
         stderrLen: stderr.length,
@@ -602,29 +731,177 @@ function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: stri
   if (ctx.agentType !== undefined) base.agent_type = ctx.agentType
   switch (payload.event) {
     case "PreToolUse":
-      return { ...base, tool_name: payload.toolName, tool_input: payload.toolInput }
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+      }
     case "PostToolUse":
       return {
         ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
         tool_name: payload.toolName,
         tool_input: payload.toolInput,
         tool_response: payload.toolResponse,
       }
+    case "PostToolUseFailure":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        error: payload.error,
+        ...(payload.isInterrupt !== undefined ? { is_interrupt: payload.isInterrupt } : {}),
+      }
+    case "PermissionRequest":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        ...(payload.permissionSuggestions !== undefined
+          ? { permission_suggestions: payload.permissionSuggestions }
+          : {}),
+      }
+    case "PermissionDenied":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        reason: payload.reason,
+      }
+    case "Notification":
+      return {
+        ...base,
+        message: payload.message,
+        ...(payload.title !== undefined ? { title: payload.title } : {}),
+        ...(payload.notificationType !== undefined ? { notification_type: payload.notificationType } : {}),
+      }
     case "UserPromptSubmit":
       return { ...base, prompt: payload.prompt }
     case "Stop":
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
+    case "StopFailure":
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        error: payload.error,
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
+    case "SubagentStart":
+      return { ...base, agent_id: payload.agentID, agent_type: payload.agentType }
     case "SubagentStop":
-      return { ...base, stop_hook_active: payload.stopHookActive }
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        ...(payload.agentID !== undefined ? { agent_id: payload.agentID } : {}),
+        ...(payload.agentTranscriptPath !== undefined
+          ? { agent_transcript_path: payload.agentTranscriptPath }
+          : {}),
+        ...(payload.agentType !== undefined ? { agent_type: payload.agentType } : {}),
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
     case "PreCompact":
       return {
         ...base,
         trigger: payload.trigger,
         custom_instructions: payload.customInstructions ?? "",
       }
+    case "PostCompact":
+      return {
+        ...base,
+        ...(payload.trigger !== undefined ? { trigger: payload.trigger } : {}),
+        ...(payload.compactSummary !== undefined ? { compact_summary: payload.compactSummary } : {}),
+        ...(payload.customInstructions !== undefined
+          ? { custom_instructions: payload.customInstructions }
+          : {}),
+      }
     case "SessionStart":
-      return { ...base, source: payload.source }
+      return {
+        ...base,
+        source: payload.source,
+        ...(payload.model !== undefined ? { model: payload.model } : {}),
+        ...(payload.agentType !== undefined ? { agent_type: payload.agentType } : {}),
+      }
     case "SessionEnd":
       return { ...base, reason: payload.reason }
+    case "Setup":
+      return { ...base, trigger: payload.trigger }
+    case "TeammateIdle":
+      return {
+        ...base,
+        ...(payload.teammateID !== undefined ? { teammate_id: payload.teammateID } : {}),
+        ...(payload.teammateName !== undefined ? { teammate_name: payload.teammateName } : {}),
+      }
+    case "TaskCreated":
+      return {
+        ...base,
+        ...(payload.taskID !== undefined ? { task_id: payload.taskID } : {}),
+        ...(payload.taskTitle !== undefined ? { task_title: payload.taskTitle } : {}),
+        ...(payload.taskDescription !== undefined ? { task_description: payload.taskDescription } : {}),
+      }
+    case "TaskCompleted":
+      return {
+        ...base,
+        ...(payload.taskID !== undefined ? { task_id: payload.taskID } : {}),
+        ...(payload.taskTitle !== undefined ? { task_title: payload.taskTitle } : {}),
+        ...(payload.result !== undefined ? { result: payload.result } : {}),
+      }
+    case "Elicitation":
+      return {
+        ...base,
+        ...(payload.prompt !== undefined ? { prompt: payload.prompt } : {}),
+        ...(payload.schema !== undefined ? { schema: payload.schema } : {}),
+      }
+    case "ElicitationResult":
+      return {
+        ...base,
+        ...(payload.result !== undefined ? { result: payload.result } : {}),
+        ...(payload.cancelled !== undefined ? { cancelled: payload.cancelled } : {}),
+      }
+    case "ConfigChange":
+      return {
+        ...base,
+        ...(payload.configPath !== undefined ? { config_path: payload.configPath } : {}),
+        ...(payload.changes !== undefined ? { changes: payload.changes } : {}),
+      }
+    case "WorktreeCreate":
+    case "WorktreeRemove":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+      }
+    case "InstructionsLoaded":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.content !== undefined ? { content: payload.content } : {}),
+      }
+    case "CwdChanged":
+      return {
+        ...base,
+        ...(payload.oldCwd !== undefined ? { old_cwd: payload.oldCwd } : {}),
+        ...(payload.newCwd !== undefined ? { new_cwd: payload.newCwd } : {}),
+      }
+    case "FileChanged":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.changeType !== undefined ? { change_type: payload.changeType } : {}),
+      }
   }
 }
 
@@ -634,7 +911,13 @@ function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: stri
  * (CC behavior — non-tool events typically have empty matcher).
  */
 function matcherTarget(payload: HookPayload): string {
-  if (payload.event === "PreToolUse" || payload.event === "PostToolUse") {
+  if (
+    payload.event === "PreToolUse" ||
+    payload.event === "PostToolUse" ||
+    payload.event === "PostToolUseFailure" ||
+    payload.event === "PermissionRequest" ||
+    payload.event === "PermissionDenied"
+  ) {
     return payload.toolName
   }
   return ""
@@ -699,25 +982,25 @@ const commandHandler: HookHandler = {
     // Exit-code 2: block + stderr-as-reason (CC contract)
     if (exitCode === 2) {
       const reason = stderr.trim() || "Hook blocked execution"
-      return { json: parseStdout(stdout, entry.command), exitBlock: reason }
+      return { json: parseStdout(stdout, commandText(entry)), exitBlock: reason }
     }
 
     // Other non-zero exits: log and continue (do not abort main flow)
     if (exitCode === null) {
       log.warn("hook command timed out / killed (non-blocking)", {
-        command: entry.command,
+        command: commandText(entry),
         timeoutMs: entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS,
       })
     }
     if (exitCode !== 0 && exitCode !== null) {
       log.warn("hook command exited non-zero (non-blocking)", {
-        command: entry.command,
+        command: commandText(entry),
         exitCode,
         stderr: stderr.trim().slice(0, 200),
       })
     }
 
-    return { json: parseStdout(stdout, entry.command), exitBlock: undefined }
+    return { json: parseStdout(stdout, commandText(entry)), exitBlock: undefined }
   }),
 }
 
@@ -726,10 +1009,10 @@ function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
     type: "mcp",
     run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
       if (inHook) {
-        log.warn("nested mcp hook skipped (re-entry guard)", { command: entry.command })
+        log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
         return { json: undefined, exitBlock: undefined }
       }
-      const json = yield* invokeMcpHook(mcpSvc, entry.command, envelope)
+      const json = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope)
       return { json, exitBlock: undefined }
     }),
   }
@@ -754,7 +1037,8 @@ function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
       // entry.timeout is seconds (matches commandHandler convention); fallback to CC default.
       const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
 
-      const exit = yield* HttpClientRequest.post(entry.command).pipe(
+      const url = httpUrl(entry)
+      const exit = yield* HttpClientRequest.post(url).pipe(
         HttpClientRequest.bodyJson(envelope),
         Effect.flatMap((req) => httpRead.execute(req)),
         Effect.flatMap((res) =>
@@ -769,7 +1053,7 @@ function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
 
       if (exit._tag === "Failure") {
         log.warn("http hook request failed (non-blocking)", {
-          command: entry.command,
+          command: url,
           error: String(exit.cause),
         })
         return { json: undefined, exitBlock: undefined }
@@ -780,7 +1064,7 @@ function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
         return { json: undefined, exitBlock: `http hook returned status ${status}` }
       }
 
-      return { json: parseStdout(text, entry.command), exitBlock: undefined }
+      return { json: parseStdout(text, url), exitBlock: undefined }
     }),
   }
 }
@@ -813,6 +1097,7 @@ function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): 
       // auth.get die via orDie) cannot escape the handler. Hooks must never crash
       // the host on infra errors. The inner gen body is the original logic verbatim.
       const exit = yield* Effect.gen(function* () {
+        const prompt = promptText(entry)
         const m = yield* provider.defaultModel()
         const resolved = yield* provider.getModel(m.providerID, m.modelID)
         const language = yield* provider.getLanguage(resolved)
@@ -823,7 +1108,7 @@ function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): 
         const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
         if (m.providerID === "openai" && authInfo?.type === "oauth") {
           log.warn("prompt hook: OpenAI OAuth provider not supported in v1", {
-            command: entry.command.slice(0, 80),
+            command: prompt.slice(0, 80),
           })
           return { json: undefined, exitBlock: undefined }
         }
@@ -832,7 +1117,7 @@ function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): 
           temperature: 0.3,
           model: language,
           messages: [
-            { role: "system", content: entry.command } as ModelMessage,
+            { role: "system", content: prompt } as ModelMessage,
             { role: "user", content: JSON.stringify(envelope) } as ModelMessage,
           ],
           schema: HookJSONOutputZodSchema,
@@ -886,6 +1171,7 @@ function makeAgentHandler(
     type: "agent",
     run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
       const exit = yield* Effect.gen(function* () {
+        const prompt = promptText(entry)
         const m = yield* provider.defaultModel()
         const resolved = yield* provider.getModel(m.providerID, m.modelID)
         const language = yield* provider.getLanguage(resolved)
@@ -893,7 +1179,7 @@ function makeAgentHandler(
 
         if (m.providerID === "openai" && authInfo?.type === "oauth") {
           log.warn("agent hook: OpenAI OAuth provider not supported in v1", {
-            command: entry.command.slice(0, 80),
+            command: prompt.slice(0, 80),
           })
           return { json: undefined, exitBlock: undefined }
         }
@@ -914,7 +1200,7 @@ function makeAgentHandler(
             try {
               const tools = buildAgentTools({ spawner, fs, signal: ac.signal, cwd, captured })
               const messages: ModelMessage[] = [
-                { role: "system", content: entry.command },
+                { role: "system", content: prompt },
                 { role: "user", content: JSON.stringify(envelope) },
               ]
               for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
@@ -952,12 +1238,12 @@ function makeAgentHandler(
           if (isAbort) {
             log.warn("agent hook timeout / aborted (non-blocking)", {
               error: cause,
-              command: entry.command.slice(0, 80),
+              command: prompt.slice(0, 80),
             })
           } else {
             log.warn("agent hook generateText failed (non-blocking)", {
               error: cause,
-              command: entry.command.slice(0, 80),
+              command: prompt.slice(0, 80),
             })
           }
           return { json: undefined, exitBlock: undefined }
@@ -965,7 +1251,7 @@ function makeAgentHandler(
 
         if (!loopExit.value) {
           log.warn("agent hook reached max turns or no synthetic_output (non-blocking)", {
-            command: entry.command.slice(0, 80),
+            command: prompt.slice(0, 80),
           })
           return { json: undefined, exitBlock: undefined }
         }
@@ -1025,13 +1311,13 @@ export const layer = Layer.effect(
       cwd: string,
       inHook: boolean,
     ) {
-      using _ = log.time("runEntry", { type: entry.type, command: entry.command.slice(0, 80) })
+      using _ = log.time("runEntry", { type: entry.type, command: commandText(entry).slice(0, 80) })
       const handler = handlers[entry.type]
       if (!handler) {
         // Defensive fallback: handlers table is exhaustive over the schema's 5 types
         // (command/mcp/http/prompt/agent). This guards against future schema additions
         // that miss handler registration. Currently dead-code by construction.
-        log.warn("hook type not registered (defensive fallback)", { type: entry.type, command: entry.command })
+        log.warn("hook type not registered (defensive fallback)", { type: entry.type, command: commandText(entry) })
         return {
           json: undefined as HookJSONOutput | undefined,
           exitBlock: `hook type "${entry.type}" not yet implemented` as string | undefined,
@@ -1132,7 +1418,7 @@ export const layer = Layer.effect(
 
           // Exit-code-2 block beats stdout decision
           if (exitBlock) {
-            result.blocked = { reason: exitBlock, command: entry.command }
+            result.blocked = { reason: exitBlock, command: commandText(entry) }
           }
 
           if (!json) {
@@ -1144,7 +1430,7 @@ export const layer = Layer.effect(
           }
 
           if (json.decision === "block" && !result.blocked) {
-            result.blocked = { reason: json.reason ?? "Blocked by hook", command: entry.command }
+            result.blocked = { reason: json.reason ?? "Blocked by hook", command: commandText(entry) }
           }
 
           if (json.continue === false) {

@@ -1839,10 +1839,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
 
         if (input.noReply === true) return message
         const final = yield* loop({ sessionID: input.sessionID })
+        const lastAssistantMessage = final.parts
+          .filter((part): part is MessageV2.TextPart => part.type === "text")
+          .map((part) => part.text.trim())
+          .filter(Boolean)
+          .join("\n\n")
         // Stop hook — fires after the agent loop finishes its turn.
         yield* settingsHook
           .trigger(
-            { event: "Stop", stopHookActive: false },
+            {
+              event: "Stop",
+              stopHookActive: false,
+              ...(lastAssistantMessage ? { lastAssistantMessage } : {}),
+            },
             { sessionID: input.sessionID, transcriptPath: "" },
           )
           .pipe(Effect.ignore)

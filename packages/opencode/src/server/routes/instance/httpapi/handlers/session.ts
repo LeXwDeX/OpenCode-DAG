@@ -3,7 +3,6 @@ import { Bus } from "@/bus"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
-import { SettingsHook } from "@/hook/settings"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
@@ -58,7 +57,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const summary = yield* SessionSummary.Service
     const bus = yield* Bus.Service
     const scope = yield* Scope.Scope
-    const settingsHook = yield* SettingsHook.Service
 
     const list = Effect.fn("SessionHttpApi.list")(function* (ctx: { query: typeof ListQuery.Type }) {
       return yield* session.list({
@@ -168,15 +166,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
-      // SessionEnd hook (Claude Code compatible) — fires before the
-      // session is actually removed. CC `reason` enum is open: use
-      // "other" as the conservative default for explicit deletion.
-      yield* settingsHook
-        .trigger(
-          { event: "SessionEnd", reason: "other" },
-          { sessionID: ctx.params.sessionID, transcriptPath: "" },
-        )
-        .pipe(Effect.ignore)
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
     })

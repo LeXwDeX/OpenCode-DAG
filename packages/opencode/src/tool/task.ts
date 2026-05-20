@@ -284,6 +284,25 @@ export const TaskTool = Tool.define(
           title: params.description,
           metadata,
           run: runTask().pipe(
+            Effect.tap((text) =>
+              settingsHook
+                .trigger(
+                  {
+                    event: "SubagentStop",
+                    stopHookActive: false,
+                    agentID: nextSession.id,
+                    agentType: next.name,
+                    ...(text ? { lastAssistantMessage: text } : {}),
+                  },
+                  {
+                    sessionID: nextSession.id,
+                    transcriptPath: "",
+                    agentID: nextSession.id,
+                    agentType: next.name,
+                  },
+                )
+                .pipe(Effect.ignore),
+            ),
             Effect.tap((text) => inject("completed", text).pipe(Effect.ignore)),
             Effect.catchCause((cause) =>
               (Cause.hasInterruptsOnly(cause)
