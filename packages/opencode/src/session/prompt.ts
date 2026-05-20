@@ -1949,6 +1949,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             Effect.provideService(AppFileSystem.Service, fsys),
             Effect.provideService(Session.Service, sessions),
           )
+          // D-018 restore fork commit 3b17415dc: TODO ephemeral system-reminder
+          // injected pre-LLM-step (in addition to tool-result-after injection)
+          // to keep todo state visible across long sessions / no-tool turns.
+          yield* insertTodoReminder({ messages: msgs, agent, session })
 
           const msg: MessageV2.Assistant = {
             id: MessageID.ascending(),
