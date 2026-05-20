@@ -86,8 +86,8 @@ describe("DiffViewerFileTree", () => {
       await renderFrame(() => <DiffViewerFileTree files={files} loading={false} error={undefined} theme={theme} />),
     )
 
-    expect(focused).toContain("▾ src")
-    expect(unfocused).toContain("▾ src")
+    expect(focused).toContain("▾ src/config")
+    expect(unfocused).toContain("▾ src/config")
     expect(focused.some((line) => line.includes("*"))).toBe(false)
     expect(unfocused.some((line) => line.includes("*"))).toBe(false)
   })
@@ -105,7 +105,7 @@ describe("DiffViewerFileTree", () => {
           <DiffViewerFileTree files={files} loading={false} error={undefined} theme={theme} expandedNodes={collapsed} />
         )),
       ),
-    ).toEqual(["▸ src", "  README.md"])
+    ).toEqual(["▸ src/config", "  README.md"])
 
     expect(
       visibleLines(
@@ -119,7 +119,7 @@ describe("DiffViewerFileTree", () => {
           />
         )),
       ),
-    ).toEqual(["▾ src", "  ▾ config", "      tui.ts", "  README.md"])
+    ).toEqual(["▾ src/config", "    tui.ts", "  README.md"])
   })
 })
 
