@@ -18,14 +18,7 @@ const ChevronRight: Component = () => (
 )
 
 const CheckMark: Component = () => (
-  <svg
-    width="14"
-    height="14"
-    viewBox="0 0 16 16"
-    fill="none"
-    xmlns="http://www.w3.org/2000/svg"
-    aria-hidden="true"
-  >
+  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
     <path
       d="M3.53564 8.17857L6.39279 11.75L12.4642 4.25"
       stroke="currentColor"
@@ -46,12 +39,8 @@ function ItemBody(
   return (
     <>
       <span data-slot="menu-v2-item-content">{props.children}</span>
-      <Show when={props.shortcut}>
-        {(shortcut) => <span data-slot="menu-v2-item-shortcut">{shortcut()}</span>}
-      </Show>
-      <Show when={props.badge}>
-        {(badge) => <span data-slot="menu-v2-item-badge">{badge()}</span>}
-      </Show>
+      <Show when={props.shortcut}>{(shortcut) => <span data-slot="menu-v2-item-shortcut">{shortcut()}</span>}</Show>
+      <Show when={props.badge}>{(badge) => <span data-slot="menu-v2-item-badge">{badge()}</span>}</Show>
       {props.trailing}
     </>
   )
@@ -65,11 +54,7 @@ export interface MenuV2ItemProps extends ComponentProps<typeof DropdownMenu.Item
 function MenuV2Item(props: ParentProps<MenuV2ItemProps>) {
   const [s, r] = splitProps(props, ["class", "classList", "children", "shortcut", "badge"])
   return (
-    <DropdownMenu.Item
-      {...r}
-      data-component="menu-v2-item"
-      classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}
-    >
+    <DropdownMenu.Item {...r} data-component="menu-v2-item" classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}>
       <ItemBody shortcut={s.shortcut} badge={s.badge}>
         {s.children}
       </ItemBody>

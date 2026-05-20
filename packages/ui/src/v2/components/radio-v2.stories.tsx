@@ -45,12 +45,7 @@ export const Controlled = {
     const [value, setValue] = createSignal("weekly")
     return (
       <div style={{ display: "grid", gap: "12px" }}>
-        <RadioGroupV2
-          label="Controlled"
-          value={value()}
-          onChange={(v) => setValue(v)}
-          name="controlled-frequency"
-        >
+        <RadioGroupV2 label="Controlled" value={value()} onChange={(v) => setValue(v)} name="controlled-frequency">
           <RadioItemV2 value="daily" label="Daily" />
           <RadioItemV2 value="weekly" label="Weekly" />
           <RadioItemV2 value="never" label="Never" />
@@ -95,4 +90,3 @@ export const States = {
     </div>
   ),
 }
-

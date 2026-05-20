@@ -7,13 +7,7 @@ export interface TextareaV2Props extends ComponentProps<"textarea"> {
 }
 
 export function TextareaV2(props: TextareaV2Props) {
-  const [local, textareaProps] = splitProps(props, [
-    "class",
-    "classList",
-    "invalid",
-    "disabled",
-    "rows",
-  ])
+  const [local, textareaProps] = splitProps(props, ["class", "classList", "invalid", "disabled", "rows"])
 
   return (
     <div

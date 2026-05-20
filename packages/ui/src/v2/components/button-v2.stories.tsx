@@ -1,4 +1,4 @@
-import { ButtonV2 } from "./button-v2";
+import { ButtonV2 } from "./button-v2"
 
 const docs = `### Overview
 Button v2 with three visual variants and two sizes.
@@ -12,7 +12,7 @@ Button v2 with three visual variants and two sizes.
 ### States
 - default, hover, pressed, focus, disabled.
 - State selectors are available via pseudo-classes and \`[data-state]\`.
-`;
+`
 
 export default {
   title: "UI V2/Button",
@@ -46,9 +46,9 @@ export default {
       options: ["normal", "large"],
     },
   },
-};
+}
 
-export const Playground = {};
+export const Playground = {}
 
 export const Variants = {
   render: () => (
@@ -65,7 +65,7 @@ export const Variants = {
       <ButtonV2 variant="ghost">Ghost</ButtonV2>
     </div>
   ),
-};
+}
 
 export const Sizes = {
   render: () => (
@@ -88,7 +88,7 @@ export const Sizes = {
       </ButtonV2>
     </div>
   ),
-};
+}
 
 export const Icon = {
   render: () => (
@@ -100,40 +100,21 @@ export const Icon = {
         "flex-wrap": "wrap",
       }}
     >
-      <ButtonV2
-        variant="neutral"
-        size="normal"
-        icon="plus"
-      >
+      <ButtonV2 variant="neutral" size="normal" icon="plus">
         Normal
       </ButtonV2>
-      <ButtonV2
-        variant="contrast"
-        size="large"
-        icon="plus"
-      >
+      <ButtonV2 variant="contrast" size="large" icon="plus">
         Large
       </ButtonV2>
     </div>
   ),
-};
+}
 
 export const AllStates = {
   render: () => {
-    const variants = [
-      "neutral",
-      "contrast",
-      "ghost",
-    ] as const;
-    const states = [
-      "default",
-      "hover",
-      "pressed",
-      "focus",
-      "disabled",
-    ] as const;
-    const toTitleCase = (value: string) =>
-      value.charAt(0).toUpperCase() + value.slice(1);
+    const variants = ["neutral", "contrast", "ghost"] as const
+    const states = ["default", "hover", "pressed", "focus", "disabled"] as const
+    const toTitleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
     return (
       <div style={{ display: "grid", gap: "12px" }}>
         {variants.map((variant) => (
@@ -161,6 +142,6 @@ export const AllStates = {
           </div>
         ))}
       </div>
-    );
+    )
   },
-};
+}

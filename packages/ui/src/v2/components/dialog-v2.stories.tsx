@@ -103,7 +103,11 @@ export const CustomAction = {
         <Dialog
           title="Custom action"
           description="Dialog with a custom header action"
-          action={<ButtonV2 variant="neutral" size="small">Help</ButtonV2>}
+          action={
+            <ButtonV2 variant="neutral" size="small">
+              Help
+            </ButtonV2>
+          }
         >
           Dialog body content.
         </Dialog>

@@ -91,7 +91,9 @@ export const NoChildren = {
 export const CustomTrigger = {
   render: () => (
     <BasicToolV2
-      trigger={<span style={{ color: "#161616", "font-size": "13px", "font-weight": "440" }}>Custom trigger content</span>}
+      trigger={
+        <span style={{ color: "#161616", "font-size": "13px", "font-weight": "440" }}>Custom trigger content</span>
+      }
     >
       Expandable detail for custom trigger.
     </BasicToolV2>

@@ -1,12 +1,5 @@
 import { Select as Kobalte } from "@kobalte/core/select"
-import {
-  Show,
-  createMemo,
-  onCleanup,
-  splitProps,
-  type ComponentProps,
-  type JSX,
-} from "solid-js"
+import { Show, createMemo, onCleanup, splitProps, type ComponentProps, type JSX } from "solid-js"
 import "./select-v2.css"
 
 function groupOptions<T>(options: T[], groupBy?: (x: T) => string): { category: string; options: T[] }[] {
@@ -49,14 +42,7 @@ const CheckSmall = () => (
 
 export type SelectV2Props<T> = Omit<
   ComponentProps<typeof Kobalte<T, { category: string; options: T[] }>>,
-  | "value"
-  | "onChange"
-  | "children"
-  | "options"
-  | "itemComponent"
-  | "sectionComponent"
-  | "defaultValue"
-  | "multiple"
+  "value" | "onChange" | "children" | "options" | "itemComponent" | "sectionComponent" | "defaultValue" | "multiple"
 > & {
   placeholder?: string
   options: T[]
@@ -163,7 +149,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
         </Kobalte.Item>
       )}
       onChange={(next) => {
-        const v = next == null ? null : (Array.isArray(next) ? (next[0] as T) ?? null : (next as T))
+        const v = next == null ? null : Array.isArray(next) ? ((next[0] as T) ?? null) : (next as T)
         local.onSelect?.(v)
         stop()
       }}
@@ -199,10 +185,7 @@ export function SelectV2<T>(props: SelectV2Props<T>) {
         </span>
       </Kobalte.Trigger>
       <Kobalte.Portal>
-        <Kobalte.Content
-          data-component="menu-v2-content"
-          data-slot="select-v2-content"
-        >
+        <Kobalte.Content data-component="menu-v2-content" data-slot="select-v2-content">
           <Kobalte.Listbox data-slot="select-v2-listbox" />
         </Kobalte.Content>
       </Kobalte.Portal>

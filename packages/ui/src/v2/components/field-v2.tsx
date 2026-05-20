@@ -82,10 +82,7 @@ function FieldV2Root(props: ParentProps<FieldV2Props>) {
     const root = rootRef
     if (!root) return
 
-    const control = root.querySelector(CONTROL_SELECTOR) as
-      | HTMLInputElement
-      | HTMLTextAreaElement
-      | null
+    const control = root.querySelector(CONTROL_SELECTOR) as HTMLInputElement | HTMLTextAreaElement | null
     if (!control) return
 
     const shell = control.closest(
@@ -142,14 +139,7 @@ function FieldV2Root(props: ParentProps<FieldV2Props>) {
 
 function FieldLabelInfoIcon() {
   return (
-    <svg
-      width="16"
-      height="16"
-      viewBox="0 0 16 16"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-      aria-hidden="true"
-    >
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path
         fill-rule="evenodd"
         clip-rule="evenodd"

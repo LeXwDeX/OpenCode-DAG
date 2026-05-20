@@ -47,16 +47,13 @@ export function LineCommentV2(props: LineCommentV2Props) {
           <div data-slot="line-comment-v2-text">{local.comment}</div>
           <div data-slot="line-comment-v2-meta">{local.selection}</div>
         </div>
-        <Show when={local.actions}>
-          {(actions) => <div data-slot="line-comment-v2-tools">{actions()}</div>}
-        </Show>
+        <Show when={local.actions}>{(actions) => <div data-slot="line-comment-v2-tools">{actions()}</div>}</Show>
       </div>
     </div>
   )
 }
 
-export interface LineCommentEditorV2Props
-  extends Omit<ComponentProps<"div">, "children" | "onInput" | "onSubmit"> {
+export interface LineCommentEditorV2Props extends Omit<ComponentProps<"div">, "children" | "onInput" | "onSubmit"> {
   /** Visible field label above the textarea (default: “Comment”). */
   heading?: JSX.Element | string
   value: string
@@ -147,13 +144,7 @@ export function LineCommentEditorV2(props: LineCommentEditorV2Props) {
             <ButtonV2 type="button" size="normal" variant="neutral" onClick={() => local.onCancel()}>
               {local.cancelLabel ?? "Cancel"}
             </ButtonV2>
-            <ButtonV2
-              type="button"
-              size="normal"
-              variant="contrast"
-              disabled={!canSubmit()}
-              onClick={submit}
-            >
+            <ButtonV2 type="button" size="normal" variant="contrast" disabled={!canSubmit()} onClick={submit}>
               {local.submitLabel ?? "Comment"}
             </ButtonV2>
           </div>

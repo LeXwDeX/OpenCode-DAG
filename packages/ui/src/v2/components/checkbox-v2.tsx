@@ -54,9 +54,7 @@ export function CheckboxV2(props: CheckboxV2Props) {
           <div data-slot="checkbox-v2-text">
             <span data-slot="checkbox-v2-label-text">{local.label}</span>
             <Show when={local.description}>
-              {(description) => (
-                <span data-slot="checkbox-v2-description">{description()}</span>
-              )}
+              {(description) => <span data-slot="checkbox-v2-description">{description()}</span>}
             </Show>
           </div>
         </Kobalte.Label>

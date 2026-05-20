@@ -86,13 +86,7 @@ export const States = {
       <CheckboxV2 name="s4" disabled label="Disabled" />
       <CheckboxV2 name="s5" disabled defaultChecked label="Checked disabled" />
       <CheckboxV2 name="s6" disabled indeterminate label="Indeterminate disabled" />
-      <CheckboxV2
-        name="s7"
-        label="Invalid"
-        description="Must be checked."
-        required
-        validationState="invalid"
-      />
+      <CheckboxV2 name="s7" label="Invalid" description="Must be checked." required validationState="invalid" />
     </div>
   ),
 }

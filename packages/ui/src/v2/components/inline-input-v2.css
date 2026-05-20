@@ -10,9 +10,7 @@
   border-radius: 6px;
   outline: 1px solid transparent;
   outline-offset: 0;
-  background:
-    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-base);
+  background: linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
   box-shadow: var(--elevation-button-neutral);
   flex: none;
   align-self: stretch;
@@ -30,8 +28,7 @@
 [data-component="inline-input-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within) {
   background:
     linear-gradient(0deg, var(--overlay-simple-overlay-hover), var(--overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-base);
+    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
 }
 
 [data-component="inline-input-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within)
@@ -177,11 +174,13 @@
   outline: none;
 }
 
-[data-component="inline-input-v2"] [data-slot="inline-input-v2-icon-button"]:is(:hover, [data-state="hover"]):not(:disabled) {
+[data-component="inline-input-v2"]
+  [data-slot="inline-input-v2-icon-button"]:is(:hover, [data-state="hover"]):not(:disabled) {
   background-color: var(--overlay-simple-overlay-hover);
 }
 
-[data-component="inline-input-v2"] [data-slot="inline-input-v2-icon-button"]:is(:active, [data-state="pressed"]):not(:disabled) {
+[data-component="inline-input-v2"]
+  [data-slot="inline-input-v2-icon-button"]:is(:active, [data-state="pressed"]):not(:disabled) {
   background-color: var(--overlay-simple-overlay-pressed);
 }
 

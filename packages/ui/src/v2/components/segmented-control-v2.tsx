@@ -59,7 +59,7 @@ export function SegmentedControlV2(props: SegmentedControlV2Props) {
 
   const [internal, setInternal] = createSignal<string | null>(local.defaultValue ?? null)
 
-  const selected = createMemo(() => (isControlled() ? local.value ?? null : internal()))
+  const selected = createMemo(() => (isControlled() ? (local.value ?? null) : internal()))
 
   const setSelected = (next: string | null) => {
     if (!isControlled()) setInternal(next)
@@ -78,9 +78,9 @@ export function SegmentedControlV2(props: SegmentedControlV2Props) {
   const focusNext = (from: HTMLButtonElement, direction: 1 | -1) => {
     const root = from.closest(`[data-slot="segmented-control-v2"]`)
     if (!root) return
-    const buttons = Array.from(root.querySelectorAll<HTMLButtonElement>(`button[data-slot="segmented-control-v2-item"]`)).filter(
-      (b) => !b.disabled,
-    )
+    const buttons = Array.from(
+      root.querySelectorAll<HTMLButtonElement>(`button[data-slot="segmented-control-v2-item"]`),
+    ).filter((b) => !b.disabled)
     const i = buttons.indexOf(from)
     const next = buttons[i + direction]
     next?.focus()
@@ -134,7 +134,15 @@ function invokeButtonHandler<E extends Event>(
 
 export function SegmentedControlItemV2(props: SegmentedControlItemV2Props) {
   const merged = mergeProps({ disabled: false }, props)
-  const [local, rest] = splitProps(merged, ["class", "classList", "children", "value", "disabled", "onClick", "onKeyDown"])
+  const [local, rest] = splitProps(merged, [
+    "class",
+    "classList",
+    "children",
+    "value",
+    "disabled",
+    "onClick",
+    "onKeyDown",
+  ])
   const ctx = useSegmentedControlContext()
 
   const pressed = createMemo(() => ctx.selected() === local.value)
@@ -151,25 +159,29 @@ export function SegmentedControlItemV2(props: SegmentedControlItemV2Props) {
     invokeButtonHandler(local.onKeyDown, e)
     if (e.defaultPrevented || disabled()) return
     const t = e.currentTarget
-    
+
     if (e.key === "ArrowRight") {
       e.preventDefault()
       ctx.focusNext(t, 1)
     } else if (e.key === "ArrowLeft") {
       e.preventDefault()
       ctx.focusNext(t, -1)
-    } 
-    
+    }
+
     // accessibility stuff
     else if (e.key === "Home") {
       e.preventDefault()
       const root = t.closest(`[data-slot="segmented-control-v2"]`)
-      const first = root?.querySelector<HTMLButtonElement>(`button[data-slot="segmented-control-v2-item"]:not(:disabled)`)
+      const first = root?.querySelector<HTMLButtonElement>(
+        `button[data-slot="segmented-control-v2-item"]:not(:disabled)`,
+      )
       first?.focus()
     } else if (e.key === "End") {
       e.preventDefault()
       const root = t.closest(`[data-slot="segmented-control-v2"]`)
-      const buttons = root?.querySelectorAll<HTMLButtonElement>(`button[data-slot="segmented-control-v2-item"]:not(:disabled)`)
+      const buttons = root?.querySelectorAll<HTMLButtonElement>(
+        `button[data-slot="segmented-control-v2-item"]:not(:disabled)`,
+      )
       const last = buttons?.[buttons.length - 1]
       last?.focus()
     }

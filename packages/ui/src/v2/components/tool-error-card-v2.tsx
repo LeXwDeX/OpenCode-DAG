@@ -1,11 +1,5 @@
 import { Collapsible } from "@kobalte/core/collapsible"
-import {
-  type ComponentProps,
-  type JSX,
-  Show,
-  createMemo,
-  splitProps,
-} from "solid-js"
+import { type ComponentProps, type JSX, Show, createMemo, splitProps } from "solid-js"
 import "./tool-error-card-v2.css"
 
 function BanIcon() {
@@ -129,11 +123,7 @@ export function ToolErrorCardV2(props: ToolErrorCardV2Props) {
         [local.class ?? ""]: !!local.class,
       }}
     >
-      <Collapsible.Trigger
-        as="div"
-        role="button"
-        data-slot="tool-error-card-trigger"
-      >
+      <Collapsible.Trigger as="div" role="button" data-slot="tool-error-card-trigger">
         <span data-slot="tool-error-card-icon-wrap">
           <Show when={local.loading} fallback={<BanIcon />}>
             <LoaderIcon />

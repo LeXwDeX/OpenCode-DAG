@@ -26,13 +26,7 @@ export interface AccordionV2ContentProps extends ComponentProps<typeof Kobalte.C
 
 function AccordionV2Root(props: ParentProps<AccordionV2Props>) {
   const [s, r] = splitProps(props, ["class", "classList"])
-  return (
-    <Kobalte
-      {...r}
-      data-component="accordion-v2"
-      classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}
-    />
-  )
+  return <Kobalte {...r} data-component="accordion-v2" classList={{ ...s.classList, [s.class ?? ""]: !!s.class }} />
 }
 
 function AccordionV2Item(props: ParentProps<AccordionV2ItemProps>) {
@@ -49,11 +43,7 @@ function AccordionV2Item(props: ParentProps<AccordionV2ItemProps>) {
 function AccordionV2Header(props: ParentProps<AccordionV2HeaderProps>) {
   const [s, r] = splitProps(props, ["class", "classList", "children"])
   return (
-    <Kobalte.Header
-      {...r}
-      data-slot="accordion-v2-header"
-      classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}
-    >
+    <Kobalte.Header {...r} data-slot="accordion-v2-header" classList={{ ...s.classList, [s.class ?? ""]: !!s.class }}>
       {s.children}
     </Kobalte.Header>
   )

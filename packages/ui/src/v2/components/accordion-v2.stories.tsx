@@ -161,7 +161,9 @@ export const NoChevron = {
           <AccordionV2.Header>
             <AccordionV2.Trigger hideChevron>Trigger without chevron</AccordionV2.Trigger>
           </AccordionV2.Header>
-          <AccordionV2.Content>Pass <code>hideChevron</code> on the trigger.</AccordionV2.Content>
+          <AccordionV2.Content>
+            Pass <code>hideChevron</code> on the trigger.
+          </AccordionV2.Content>
         </AccordionV2.Item>
         <AccordionV2.Item value="y">
           <AccordionV2.Header>

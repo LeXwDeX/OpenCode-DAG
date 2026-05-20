@@ -64,23 +64,23 @@
 
         [data-slot="dialog-title"] {
           margin: 0;
-          font-family: 'Inter', var(--font-family-sans);
+          font-family: "Inter", var(--font-family-sans);
           font-weight: 530;
           font-size: 15px;
           line-height: 100%;
           letter-spacing: -0.13px;
           color: var(--text-text-base);
-          font-variation-settings: 'slnt' 0;
+          font-variation-settings: "slnt" 0;
         }
 
         [data-slot="dialog-description"] {
-          font-family: 'Inter', var(--font-family-sans);
+          font-family: "Inter", var(--font-family-sans);
           font-weight: 440;
           font-size: 13px;
           line-height: 100%;
           letter-spacing: -0.04px;
           color: var(--text-text-muted);
-          font-variation-settings: 'slnt' 0;
+          font-variation-settings: "slnt" 0;
         }
 
         [data-slot="dialog-close-button"] {

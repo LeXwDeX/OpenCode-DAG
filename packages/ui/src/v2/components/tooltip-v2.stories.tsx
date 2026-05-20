@@ -59,7 +59,13 @@ export const WithKeybind = {
 export const Path = {
   render: () => (
     <div style={{ padding: "80px", display: "flex", "justify-content": "center" }}>
-      <TooltipV2 value={<>Components <span style={{ color: "var(--text-text-faint)" }}>/</span> Tooltip</>}>
+      <TooltipV2
+        value={
+          <>
+            Components <span style={{ color: "var(--text-text-faint)" }}>/</span> Tooltip
+          </>
+        }
+      >
         <span>Hover me</span>
       </TooltipV2>
     </div>

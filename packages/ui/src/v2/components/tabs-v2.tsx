@@ -69,11 +69,7 @@ function TabsV2Trigger(props: ParentProps<TabsV2TriggerProps>) {
         }
       }}
     >
-      <Kobalte.Trigger
-        {...rest}
-        data-slot="tabs-v2-trigger"
-        data-value={props.value}
-      >
+      <Kobalte.Trigger {...rest} data-slot="tabs-v2-trigger" data-value={props.value}>
         <span class="inline-flex items-center gap-2" data-slot="tabs-v2-trigger-content">
           {split.children}
           <Show when={split.subtext}>

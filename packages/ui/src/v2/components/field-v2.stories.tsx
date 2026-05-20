@@ -125,12 +125,7 @@ export const Controlled = {
         <Field>
           <Field.Label>Amount</Field.Label>
           <Field.Control>
-            <TextInputV2
-              placeholder="0.00"
-              value={value()}
-              onInput={(e) => setValue(e.currentTarget.value)}
-              numeric
-            />
+            <TextInputV2 placeholder="0.00" value={value()} onInput={(e) => setValue(e.currentTarget.value)} numeric />
           </Field.Control>
           <Field.Suffix>{value() ? `Entered: ${value()}` : "Suffix"}</Field.Suffix>
         </Field>

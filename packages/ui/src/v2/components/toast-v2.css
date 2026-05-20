@@ -55,7 +55,6 @@
     animation: toastV2PopOut 100ms ease-in forwards;
   }
 
-
   [data-slot="toast-v2-header"] {
     display: flex;
     align-items: flex-start;
@@ -177,7 +176,6 @@
       display: block;
     }
   }
-
 }
 
 @keyframes toastV2PopIn {

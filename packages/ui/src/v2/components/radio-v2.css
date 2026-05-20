@@ -91,9 +91,7 @@
     border: none;
     box-shadow: inset 0 0 0 0.5px var(--border-border-strong);
 
-    background:
-      linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%),
-      var(--background-bg-base);
+    background: linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
     transition:
       background 170ms ease-out,
       opacity 170ms ease-out,
@@ -112,8 +110,7 @@
     [data-slot="radio-v2-item-control"] {
     background:
       linear-gradient(0deg, var(--overlay-simple-overlay-hover), var(--overlay-simple-overlay-hover)),
-      linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%),
-      var(--background-bg-base);
+      linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
   }
 
   &:where([data-disabled]) [data-slot="radio-v2-item-control"] {
@@ -122,16 +119,14 @@
 
   &:where([data-checked]) [data-slot="radio-v2-item-control"] {
     background:
-      linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%),
-      var(--background-bg-accent);
+      linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%), var(--background-bg-accent);
   }
 
   &:where([data-checked]):where(:hover):where(:not([data-disabled], [data-readonly]))
     [data-slot="radio-v2-item-control"] {
     background:
       linear-gradient(0deg, var(--overlay-simple-overlay-contrast-hover), var(--overlay-simple-overlay-contrast-hover)),
-      linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%),
-      var(--background-bg-accent);
+      linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%), var(--background-bg-accent);
   }
 
   &:where([data-checked][data-disabled]) [data-slot="radio-v2-item-control"] {

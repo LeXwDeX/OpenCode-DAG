@@ -46,9 +46,7 @@
   border-radius: 6px;
   outline: 1px solid transparent;
   outline-offset: 0;
-  background:
-    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-base);
+  background: linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
   box-shadow: var(--elevation-button-neutral);
   flex: none;
   align-self: stretch;
@@ -63,11 +61,12 @@
   padding: 0 8px 0 0;
 }
 
-[data-component="select-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within):not([data-expanded]) {
+[data-component="select-v2"]:where(:hover):not([data-disabled], [data-invalid]):not(:focus-within):not(
+    [data-expanded]
+  ) {
   background:
     linear-gradient(0deg, var(--overlay-simple-overlay-hover), var(--overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-base);
+    linear-gradient(180deg, var(--alpha-light-2) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
 }
 
 [data-component="select-v2"]:where(:focus-within):not([data-disabled], [data-invalid]),
@@ -189,6 +188,9 @@
   color: var(--menu-v2-accent);
 }
 
-[data-slot="select-v2-listbox"] [data-component="menu-v2-item"]:not([data-selected]) [data-slot="menu-v2-item-indicator"] svg {
+[data-slot="select-v2-listbox"]
+  [data-component="menu-v2-item"]:not([data-selected])
+  [data-slot="menu-v2-item-indicator"]
+  svg {
   visibility: hidden;
 }

@@ -80,10 +80,10 @@ export const Settings = {
         </mod.TabsV2.Trigger>
       </mod.TabsV2.List>
       <mod.TabsV2.Content value="general">
-      <p class="text-[12px] text-[#5c5c5c] mx-4 my-3.5">General settings</p>
+        <p class="text-[12px] text-[#5c5c5c] mx-4 my-3.5">General settings</p>
       </mod.TabsV2.Content>
       <mod.TabsV2.Content value="appearance">
-      <p class="text-[12px] text-[#5c5c5c] mx-4 my-3.5">Appearance settings</p>
+        <p class="text-[12px] text-[#5c5c5c] mx-4 my-3.5">Appearance settings</p>
       </mod.TabsV2.Content>
     </mod.TabsV2>
   ),

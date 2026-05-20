@@ -59,11 +59,7 @@ function ToastV2Actions(props: ComponentProps<"div">) {
 
 function ToastV2CloseButton(props: ToastCloseButtonProps & ComponentProps<"button">) {
   return (
-    <Kobalte.CloseButton
-      data-slot="toast-v2-close-button"
-      aria-label="Dismiss"
-      {...props}
-    >
+    <Kobalte.CloseButton data-slot="toast-v2-close-button" aria-label="Dismiss" {...props}>
       <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         <path d="M4.25 11.75L11.75 4.25" stroke="#FAFAFA" />
         <path d="M11.75 11.75L4.25 4.25" stroke="#FAFAFA" />

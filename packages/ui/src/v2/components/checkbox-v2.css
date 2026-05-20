@@ -62,9 +62,7 @@
     border: none;
     box-shadow: inset 0 0 0 0.5px var(--border-border-strong);
 
-    background:
-      linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%),
-      var(--background-bg-base);
+    background: linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
     transition:
       background 170ms ease-out,
       opacity 170ms ease-out,
@@ -135,8 +133,7 @@
   [data-slot="checkbox-v2-control"] {
   background:
     linear-gradient(0deg, var(--overlay-simple-overlay-hover), var(--overlay-simple-overlay-hover)),
-    linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-base);
+    linear-gradient(180deg, var(--alpha-light-6) 0%, var(--alpha-light-0) 100%), var(--background-bg-base);
 }
 
 [data-slot="checkbox-v2"]:where([data-disabled]) [data-slot="checkbox-v2-control"] {
@@ -144,9 +141,7 @@
 }
 
 [data-slot="checkbox-v2"]:where([data-checked], [data-indeterminate]) [data-slot="checkbox-v2-control"] {
-  background:
-    linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-accent);
+  background: linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%), var(--background-bg-accent);
 }
 
 [data-slot="checkbox-v2"]:where([data-checked], [data-indeterminate]):where(:hover):where(
@@ -155,8 +150,7 @@
   [data-slot="checkbox-v2-control"] {
   background:
     linear-gradient(0deg, var(--overlay-simple-overlay-contrast-hover), var(--overlay-simple-overlay-contrast-hover)),
-    linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%),
-    var(--background-bg-accent);
+    linear-gradient(180deg, var(--alpha-light-20) 0%, var(--alpha-light-0) 100%), var(--background-bg-accent);
 }
 
 [data-slot="checkbox-v2"]:where([data-invalid]):where(:not([data-checked], [data-indeterminate]))

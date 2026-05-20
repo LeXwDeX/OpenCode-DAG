@@ -52,7 +52,16 @@ export const Inactive = {
 
 export const WithOffset = {
   render: () => (
-    <div style={{ display: "flex", "flex-direction": "column", gap: "8px", "font-size": "13px", "font-weight": "440", "font-family": "Inter, system-ui, sans-serif" }}>
+    <div
+      style={{
+        display: "flex",
+        "flex-direction": "column",
+        gap: "8px",
+        "font-size": "13px",
+        "font-weight": "440",
+        "font-family": "Inter, system-ui, sans-serif",
+      }}
+    >
       <TextShimmerV2 text="First line" active={true} offset={0} />
       <TextShimmerV2 text="Second line" active={true} offset={5} />
       <TextShimmerV2 text="Third line" active={true} offset={10} />

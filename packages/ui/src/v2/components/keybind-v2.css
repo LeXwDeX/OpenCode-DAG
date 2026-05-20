@@ -53,14 +53,14 @@
   padding: 0px;
   flex: 1 1 auto;
   align-self: stretch;
-  font-family: 'Inter', var(--font-family-sans), var(--sans), system-ui, sans-serif;
+  font-family: "Inter", var(--font-family-sans), var(--sans), system-ui, sans-serif;
   font-style: normal;
   font-weight: 530;
   font-size: 11px;
   line-height: 100%;
   text-align: center;
   letter-spacing: 0.05px;
-  font-variation-settings: 'slnt' 0;
+  font-variation-settings: "slnt" 0;
   user-select: none;
 }
 

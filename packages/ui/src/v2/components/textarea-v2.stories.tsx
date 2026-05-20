@@ -63,11 +63,7 @@ export const Controlled = {
     const [value, setValue] = createSignal("Controlled value")
     return (
       <div style={{ display: "grid", gap: "12px", width: "280px" }}>
-        <TextareaV2
-          value={value()}
-          onInput={(e) => setValue(e.currentTarget.value)}
-          placeholder="Type here…"
-        />
+        <TextareaV2 value={value()} onInput={(e) => setValue(e.currentTarget.value)} placeholder="Type here…" />
         <div
           style={{
             "font-family": "var(--font-family-sans)",
