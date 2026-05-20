@@ -1,3 +1,4 @@
+import * as process from "node:process"
 import type * as Arr from "effect/Array"
 import { NodeFileSystem, NodeSink, NodeStream } from "@effect/platform-node"
 import * as NodePath from "@effect/platform-node/NodePath"
@@ -105,7 +106,7 @@ export const make = Effect.gen(function* () {
   })
 
   const env = (opts: ChildProcess.CommandOptions) =>
-    opts.extendEnv ? { ...globalThis.process.env, ...opts.env } : opts.env
+    opts.extendEnv ? { ...process.env, ...opts.env } : opts.env
 
   const input = (x: ChildProcess.CommandInput | undefined): NodeChildProcess.IOType | undefined =>
     Stream.isStream(x) ? "pipe" : x
@@ -292,7 +293,7 @@ export const make = Effect.gen(function* () {
     proc: NodeChildProcess.ChildProcess,
     signal: NodeJS.Signals,
   ) => {
-    if (globalThis.process.platform === "win32") {
+    if (process.platform === "win32") {
       return Effect.callback<void, PlatformError.PlatformError>((resume) => {
         NodeChildProcess.exec(`taskkill /pid ${proc.pid} /T /F`, { windowsHide: true }, (err) => {
           if (err) return resume(Effect.fail(toPlatformError("kill", toError(err), command)))
@@ -303,7 +304,7 @@ export const make = Effect.gen(function* () {
 
     return Effect.try({
       try: () => {
-        globalThis.process.kill(-proc.pid!, signal)
+        process.kill(-proc.pid!, signal)
       },
       catch: (err) => toPlatformError("kill", toError(err), command),
     })
