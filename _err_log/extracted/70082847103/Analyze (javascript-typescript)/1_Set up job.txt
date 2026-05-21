@@ -1,0 +1,34 @@
+﻿2026-05-21T08:19:00.4208073Z Current runner version: '2.334.0'
+2026-05-21T08:19:00.4235016Z ##[group]Runner Image Provisioner
+2026-05-21T08:19:00.4235952Z Hosted Compute Agent
+2026-05-21T08:19:00.4236604Z Version: 20260213.493
+2026-05-21T08:19:00.4237197Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+2026-05-21T08:19:00.4237926Z Build Date: 2026-02-13T00:28:41Z
+2026-05-21T08:19:00.4238544Z Worker ID: {94791abb-7056-403d-bb11-8756c24e1c98}
+2026-05-21T08:19:00.4239363Z Azure Region: eastus
+2026-05-21T08:19:00.4239941Z ##[endgroup]
+2026-05-21T08:19:00.4241206Z ##[group]Operating System
+2026-05-21T08:19:00.4241921Z Ubuntu
+2026-05-21T08:19:00.4242374Z 24.04.4
+2026-05-21T08:19:00.4242836Z LTS
+2026-05-21T08:19:00.4243676Z ##[endgroup]
+2026-05-21T08:19:00.4244208Z ##[group]Runner Image
+2026-05-21T08:19:00.4244731Z Image: ubuntu-24.04
+2026-05-21T08:19:00.4245319Z Version: 20260513.135.3
+2026-05-21T08:19:00.4246346Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260513.135/images/ubuntu/Ubuntu2404-Readme.md
+2026-05-21T08:19:00.4248107Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260513.135
+2026-05-21T08:19:00.4249002Z ##[endgroup]
+2026-05-21T08:19:00.4250320Z ##[group]GITHUB_TOKEN Permissions
+2026-05-21T08:19:00.4252519Z Actions: read
+2026-05-21T08:19:00.4253096Z Contents: read
+2026-05-21T08:19:00.4253826Z Metadata: read
+2026-05-21T08:19:00.4254417Z Packages: read
+2026-05-21T08:19:00.4254913Z SecurityEvents: write
+2026-05-21T08:19:00.4255532Z ##[endgroup]
+2026-05-21T08:19:00.4257624Z Secret source: Actions
+2026-05-21T08:19:00.4258562Z Prepare workflow directory
+2026-05-21T08:19:00.4759085Z Prepare all required actions
+2026-05-21T08:19:00.4801380Z Getting action download info
+2026-05-21T08:19:00.8309153Z Download action repository 'actions/checkout@v6' (SHA:de0fac2e4500dabe0009e67214ff5f5447ce83dd)
+2026-05-21T08:19:00.9943811Z Download action repository 'github/codeql-action@v4' (SHA:9e0d7b8d25671d64c341c19c0152d693099fb5ba)
+2026-05-21T08:19:01.3601497Z Complete job name: Analyze (javascript-typescript)

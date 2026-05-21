@@ -58,13 +58,13 @@ export function stream(input: StreamInput): StreamResult {
 
   return {
     ...current,
-    stream: input.llmClient.stream({
-      request: LLMNative.request({
-        model: input.model,
-        apiKey: current.apiKey,
-        baseURL: current.baseURL,
-        system: input.isOpenaiOauth ? input.system : [],
-        messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
+      stream: input.llmClient.stream({
+        request: LLMNative.request({
+          model: input.model,
+          apiKey: current.apiKey,
+          baseURL: current.baseURL,
+          system: input.isOpenaiOauth ? [] : input.system,
+          messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
         toolChoice: input.toolChoice,
         temperature: input.temperature,
         topP: input.topP,

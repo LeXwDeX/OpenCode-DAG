@@ -1,0 +1,52 @@
+﻿2026-05-21T08:19:15.3316641Z ##[group]Run github/codeql-action/analyze@v4
+2026-05-21T08:19:15.3316948Z with:
+2026-05-21T08:19:15.3317137Z   category: /language:rust
+2026-05-21T08:19:15.3317370Z   output: ../results
+2026-05-21T08:19:15.3317560Z   upload: always
+2026-05-21T08:19:15.3317758Z   skip-queries: false
+2026-05-21T08:19:15.3318004Z   checkout_path: /home/runner/work/opencode/opencode
+2026-05-21T08:19:15.3318305Z   upload-database: true
+2026-05-21T08:19:15.3318525Z   wait-for-processing: true
+2026-05-21T08:19:15.3318930Z   token: ***
+2026-05-21T08:19:15.3319347Z   matrix: {
+  "language": "rust",
+  "category": "/language:rust",
+  "build-mode": "none",
+  "runner": "[\"ubuntu-latest\"]"
+}
+2026-05-21T08:19:15.3319823Z   expect-error: false
+2026-05-21T08:19:15.3320029Z env:
+2026-05-21T08:19:15.3320214Z   CODE_SCANNING_REF: refs/heads/stable
+2026-05-21T08:19:15.3320496Z   CODE_SCANNING_BASE_BRANCH: 
+2026-05-21T08:19:15.3320759Z   CODE_SCANNING_IS_ANALYZING_DEFAULT_BRANCH: true
+2026-05-21T08:19:15.3321381Z   CODE_SCANNING_IS_STEADY_STATE_DEFAULT_SETUP: true
+2026-05-21T08:19:15.3326956Z   CODE_SCANNING_WORKFLOW_FILE: H4sIAAAAAAAA/6xW32/bthN/919x8PcLpH2g8zLsQUCBKo6SeDPs1FLQZUVB0NRJZiOTKn84Vbv87wNFOZaWZM6w5ck8fu7Du/vcnSLZFiMYT1WOH+bjkXaSBNP/f/yAUtiNW09wh9JOhKydNROucqSGMymFLKl2kno8PDyMlIwgbyTbCj4aodxFI4Dp8jyh6TReLGaLS7pKLl5NjIXn/CvDWZwm9GwVL6ZXr2VaM4N0rZnkm+cYZymNF/H89nd/OE8u4pt59g9fEIYyyarmuz/kWDBX2b9/Mc2S+PyWplmcJY+Ppkl2cx2B1Q6f+Hxcrn69mC8/0ovZPHltXPdK3xWVuqeFqFqFRl/U2nhZQrjofwIEveNggjeee8usFt8mFZOlY6X3fdtCtZOGeJ09qNBq+0u6XLzp0NpJifptSBmgRr0VxgglTXgHgHHbHkEjyzsbV9KitENjzfgdK3FoNMidFrYhbcomgnstLHaXIidW3aHsWz21kA6JkgS1VjqCglUmXBqrmcWy2cdWMFGRghnbB0FXiT0IQEheuRwPBgAC+zpF+wx7twDcv6N0E8HpI/A53NqJKidblWMEUkkcXIbiRnDyaezWTlpHKmbR2PHnkxdC+cJ2zHAtaktsU2P4eTSw417/cZjameNRPQH9qyCMxbrrSdJ1/3SD/E45CxprZYRVuukonfFt2Ol1yjvc+93PowHBTAorWCW+I4RdOnAPs3rqx/NrRQLZqZDCvt/91AHvhd0cuqodUCMMuRMyNxF4T7If7EfUvj4mDOTTqR09V68e9GDug3OsUeYoeUM44xshy+AU6jpBuRNayS1KC+/ewUlIjmyUsZif9Im+OtTCRzcew//gPGzG1tqAcYfhbUe1EGUEf/SE7DYpMWhdHQ0UVrocGgB8EhXxi8NE8OmVGzIIQlsveHiAzz1Su9HIbFucqqXsbveKpz4sqLX61kChNGgshbE+38eVFIXr461gLNOWtOCXOuJAT7nGHKVvt054g1yjNZPLWXZ1c0ZXyeUszVazJKXXq+Vvt31JDoP3QscM2/oadaH0tuvp8JEwwhzPqPvCHLLp/iEIf/7j9mEeoqNXyzTr8vCDOWnLMFHOtoK1J+qbq5/GgOB6uTpKUCv9MsE0ptNklc0uZtM4S45RcUY5aisK4VfVi6Q3q3l6jMrpyhwIhoIf9mBPqb3RO/0ZAAD//zBcBve7CQAA
+2026-05-21T08:19:15.3332873Z   CODEQL_ACTION_FEATURE_MULTI_LANGUAGE: false
+2026-05-21T08:19:15.3333171Z   CODEQL_ACTION_FEATURE_SANDWICH: false
+2026-05-21T08:19:15.3333437Z   CODEQL_ACTION_FEATURE_SARIF_COMBINE: true
+2026-05-21T08:19:15.3333721Z   CODEQL_ACTION_FEATURE_WILL_UPLOAD: true
+2026-05-21T08:19:15.3333984Z   CODEQL_ACTION_VERSION: 4.35.5
+2026-05-21T08:19:15.3334266Z   JOB_RUN_UUID: 7048135d-8d05-42d7-9da4-3ebb69bf48f2
+2026-05-21T08:19:15.3334697Z   CODEQL_ACTION_INIT_HAS_RUN: true
+2026-05-21T08:19:15.3335162Z   CODEQL_ACTION_ANALYSIS_KEY: dynamic/github-code-scanning/codeql:analyze
+2026-05-21T08:19:15.3335773Z   CODEQL_WORKFLOW_STARTED_AT: 2026-05-21T08:19:04.336Z
+2026-05-21T08:19:15.3336161Z   CODEQL_RAM: 14575
+2026-05-21T08:19:15.3336392Z   CODEQL_THREADS: 4
+2026-05-21T08:19:15.3336583Z   CODEQL_PROXY_HOST: 
+2026-05-21T08:19:15.3336797Z   CODEQL_PROXY_PORT: 
+2026-05-21T08:19:15.3337015Z   CODEQL_PROXY_CA_CERTIFICATE: 
+2026-05-21T08:19:15.3337243Z   CODEQL_PROXY_URLS: 
+2026-05-21T08:19:15.3337433Z ##[endgroup]
+2026-05-21T08:19:16.4028019Z While resolving threads, found a cgroup CPUs file with 4 CPUs in /sys/fs/cgroup/cpuset.cpus.effective.
+2026-05-21T08:19:16.4059150Z ##[group]Generating diff range extension pack
+2026-05-21T08:19:16.4061387Z No precomputed diff ranges found; skipping diff-informed analysis stage.
+2026-05-21T08:19:16.4062276Z ##[endgroup]
+2026-05-21T08:19:16.4101260Z ##[group]Extracting rust
+2026-05-21T08:19:16.4104856Z [command]/opt/hostedtoolcache/CodeQL/2.25.4/x64/codeql/codeql database trace-command --use-build-mode --working-dir /home/runner/work/opencode/opencode /home/runner/work/_temp/codeql_databases/rust
+2026-05-21T08:19:17.2301288Z Running command in /home/runner/work/opencode/opencode: [/opt/hostedtoolcache/CodeQL/2.25.4/x64/codeql/rust/tools/autobuild.sh]
+2026-05-21T08:19:18.2381830Z [2026-05-21 08:19:18] [build-stderr] Scanning for files in /home/runner/work/opencode/opencode...
+2026-05-21T08:19:18.5070810Z ##[endgroup]
+2026-05-21T08:19:18.5075361Z ##[group]Finalizing rust
+2026-05-21T08:19:18.5077815Z [command]/opt/hostedtoolcache/CodeQL/2.25.4/x64/codeql/codeql database finalize --finalize-dataset --threads=4 --ram=14575 /home/runner/work/_temp/codeql_databases/rust
+2026-05-21T08:19:19.5704261Z CodeQL detected code written in JavaScript/TypeScript and GitHub Actions, but not any written in Rust. Confirm that there is some source code for Rust in the project. For more information, review our troubleshooting guide at https://gh.io/troubleshooting-code-scanning/no-source-code-seen-during-build .
+2026-05-21T08:19:19.6138036Z ##[error]Encountered a fatal error while running "/opt/hostedtoolcache/CodeQL/2.25.4/x64/codeql/codeql database finalize --finalize-dataset --threads=4 --ram=14575 /home/runner/work/_temp/codeql_databases/rust". Exit code was 32 and last log line was: CodeQL detected code written in JavaScript/TypeScript and GitHub Actions, but not any written in Rust. Confirm that there is some source code for Rust in the project. For more information, review our troubleshooting guide at https://gh.io/troubleshooting-code-scanning/no-source-code-seen-during-build . See the logs for more details.

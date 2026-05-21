@@ -1273,7 +1273,7 @@ describe("session.llm.stream", () => {
         expect(capture.body.stream).toBe(true)
         expect((capture.body.reasoning as { effort?: string } | undefined)?.effort).toBe("high")
         expect(JSON.stringify(capture.body.input)).toContain("You are a helpful assistant.")
-        expect(capture.body.input).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
+        expect(capture.body.input as Array<{ role: string; content: any }>).toContainEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
       },
     })
   })

@@ -1,0 +1,32 @@
+﻿2026-05-21T08:23:21.4855115Z Post job cleanup.
+2026-05-21T08:23:21.5737160Z [command]/usr/bin/git version
+2026-05-21T08:23:21.5775785Z git version 2.54.0
+2026-05-21T08:23:21.5814402Z Temporarily overriding HOME='/home/runner/work/_temp/c52b2f26-4a87-435b-9f96-4c8afb878bbf' before making global git config changes
+2026-05-21T08:23:21.5815583Z Adding repository directory to the temporary git global config as a safe directory
+2026-05-21T08:23:21.5820470Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/opencode/opencode
+2026-05-21T08:23:21.5851846Z Removing SSH command configuration
+2026-05-21T08:23:21.5858610Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-05-21T08:23:21.5894713Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-05-21T08:23:21.6140656Z Removing HTTP extra header
+2026-05-21T08:23:21.6146580Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-05-21T08:23:21.6183127Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-05-21T08:23:21.6420633Z Removing includeIf entries pointing to credentials config files
+2026-05-21T08:23:21.6428106Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-05-21T08:23:21.6453803Z includeif.gitdir:/home/runner/work/opencode/opencode/.git.path
+2026-05-21T08:23:21.6454382Z includeif.gitdir:/home/runner/work/opencode/opencode/.git/worktrees/*.path
+2026-05-21T08:23:21.6454826Z includeif.gitdir:/github/workspace/.git.path
+2026-05-21T08:23:21.6455198Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-05-21T08:23:21.6462730Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/opencode/opencode/.git.path
+2026-05-21T08:23:21.6486883Z /home/runner/work/_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6497981Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/opencode/opencode/.git.path /home/runner/work/_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6534811Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/home/runner/work/opencode/opencode/.git/worktrees/*.path
+2026-05-21T08:23:21.6557691Z /home/runner/work/_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6567862Z [command]/usr/bin/git config --local --unset includeif.gitdir:/home/runner/work/opencode/opencode/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6600840Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-05-21T08:23:21.6623856Z /github/runner_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6632894Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6667485Z [command]/usr/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-05-21T08:23:21.6689834Z /github/runner_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6699580Z [command]/usr/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config
+2026-05-21T08:23:21.6740978Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-05-21T08:23:21.6983622Z Removing credentials config '/home/runner/work/_temp/git-credentials-dbf7afde-1b01-4959-bbe8-5a684850ca27.config'

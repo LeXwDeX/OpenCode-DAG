@@ -1,0 +1,34 @@
+﻿2026-05-21T08:19:00.3198218Z Current runner version: '2.334.0'
+2026-05-21T08:19:00.3230999Z ##[group]Runner Image Provisioner
+2026-05-21T08:19:00.3232233Z Hosted Compute Agent
+2026-05-21T08:19:00.3233152Z Version: 20260213.493
+2026-05-21T08:19:00.3234423Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+2026-05-21T08:19:00.3235544Z Build Date: 2026-02-13T00:28:41Z
+2026-05-21T08:19:00.3236713Z Worker ID: {3665831e-204d-47a9-aefa-a4c5b962a90d}
+2026-05-21T08:19:00.3237916Z Azure Region: eastus
+2026-05-21T08:19:00.3238701Z ##[endgroup]
+2026-05-21T08:19:00.3241335Z ##[group]Operating System
+2026-05-21T08:19:00.3242363Z Ubuntu
+2026-05-21T08:19:00.3243164Z 24.04.4
+2026-05-21T08:19:00.3243926Z LTS
+2026-05-21T08:19:00.3244998Z ##[endgroup]
+2026-05-21T08:19:00.3245761Z ##[group]Runner Image
+2026-05-21T08:19:00.3246742Z Image: ubuntu-24.04
+2026-05-21T08:19:00.3247611Z Version: 20260513.135.3
+2026-05-21T08:19:00.3249256Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260513.135/images/ubuntu/Ubuntu2404-Readme.md
+2026-05-21T08:19:00.3252136Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260513.135
+2026-05-21T08:19:00.3253673Z ##[endgroup]
+2026-05-21T08:19:00.3256504Z ##[group]GITHUB_TOKEN Permissions
+2026-05-21T08:19:00.3259005Z Actions: read
+2026-05-21T08:19:00.3259943Z Contents: read
+2026-05-21T08:19:00.3260810Z Metadata: read
+2026-05-21T08:19:00.3261545Z Packages: read
+2026-05-21T08:19:00.3262492Z SecurityEvents: write
+2026-05-21T08:19:00.3263327Z ##[endgroup]
+2026-05-21T08:19:00.3266439Z Secret source: Actions
+2026-05-21T08:19:00.3267674Z Prepare workflow directory
+2026-05-21T08:19:00.4007168Z Prepare all required actions
+2026-05-21T08:19:00.4047084Z Getting action download info
+2026-05-21T08:19:00.7125636Z Download action repository 'actions/checkout@v6' (SHA:de0fac2e4500dabe0009e67214ff5f5447ce83dd)
+2026-05-21T08:19:01.1472557Z Download action repository 'github/codeql-action@v4' (SHA:9e0d7b8d25671d64c341c19c0152d693099fb5ba)
+2026-05-21T08:19:01.5499554Z Complete job name: Analyze (actions)

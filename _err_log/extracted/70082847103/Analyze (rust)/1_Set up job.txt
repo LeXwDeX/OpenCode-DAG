@@ -1,0 +1,34 @@
+﻿2026-05-21T08:19:00.4175633Z Current runner version: '2.334.0'
+2026-05-21T08:19:00.4202693Z ##[group]Runner Image Provisioner
+2026-05-21T08:19:00.4203502Z Hosted Compute Agent
+2026-05-21T08:19:00.4204127Z Version: 20260213.493
+2026-05-21T08:19:00.4204712Z Commit: 5c115507f6dd24b8de37d8bbe0bb4509d0cc0fa3
+2026-05-21T08:19:00.4205431Z Build Date: 2026-02-13T00:28:41Z
+2026-05-21T08:19:00.4206042Z Worker ID: {e37788ed-003b-4054-9b7e-9abaedb00205}
+2026-05-21T08:19:00.4206819Z Azure Region: eastus
+2026-05-21T08:19:00.4207372Z ##[endgroup]
+2026-05-21T08:19:00.4208648Z ##[group]Operating System
+2026-05-21T08:19:00.4209330Z Ubuntu
+2026-05-21T08:19:00.4209777Z 24.04.4
+2026-05-21T08:19:00.4210231Z LTS
+2026-05-21T08:19:00.4210733Z ##[endgroup]
+2026-05-21T08:19:00.4211453Z ##[group]Runner Image
+2026-05-21T08:19:00.4211974Z Image: ubuntu-24.04
+2026-05-21T08:19:00.4212544Z Version: 20260513.135.3
+2026-05-21T08:19:00.4213544Z Included Software: https://github.com/actions/runner-images/blob/ubuntu24/20260513.135/images/ubuntu/Ubuntu2404-Readme.md
+2026-05-21T08:19:00.4215354Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu24%2F20260513.135
+2026-05-21T08:19:00.4216221Z ##[endgroup]
+2026-05-21T08:19:00.4217522Z ##[group]GITHUB_TOKEN Permissions
+2026-05-21T08:19:00.4219701Z Actions: read
+2026-05-21T08:19:00.4220285Z Contents: read
+2026-05-21T08:19:00.4220836Z Metadata: read
+2026-05-21T08:19:00.4221627Z Packages: read
+2026-05-21T08:19:00.4222125Z SecurityEvents: write
+2026-05-21T08:19:00.4222713Z ##[endgroup]
+2026-05-21T08:19:00.4224725Z Secret source: Actions
+2026-05-21T08:19:00.4225667Z Prepare workflow directory
+2026-05-21T08:19:00.4728761Z Prepare all required actions
+2026-05-21T08:19:00.4766765Z Getting action download info
+2026-05-21T08:19:00.8123354Z Download action repository 'actions/checkout@v6' (SHA:de0fac2e4500dabe0009e67214ff5f5447ce83dd)
+2026-05-21T08:19:00.9718750Z Download action repository 'github/codeql-action@v4' (SHA:9e0d7b8d25671d64c341c19c0152d693099fb5ba)
+2026-05-21T08:19:01.3769821Z Complete job name: Analyze (rust)

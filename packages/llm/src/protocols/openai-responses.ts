@@ -38,7 +38,7 @@ const OpenAIResponsesOutputText = Schema.Struct({
 })
 
 const OpenAIResponsesInputItem = Schema.Union([
-  Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
+  Schema.Struct({ role: Schema.tag("system"), content: Schema.Union([Schema.String, Schema.Array(OpenAIResponsesInputText)]) }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputText) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
   Schema.Struct({
@@ -198,7 +198,7 @@ const lowerToolCall = (part: ToolCallPart): OpenAIResponsesInputItem => ({
 
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
   const system: OpenAIResponsesInputItem[] =
-    request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
+    request.system.length === 0 ? [] : [{ role: "system", content: request.system.map((part) => ({ type: "input_text", text: part.text })) }]
   const input: OpenAIResponsesInputItem[] = [...system]
 
   for (const message of request.messages) {

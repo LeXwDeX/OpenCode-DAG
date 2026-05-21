@@ -12,7 +12,8 @@ import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const it = testEffect(Layer.mergeAll(Config.defaultLayer, AppFileSystem.defaultLayer))
-const winIt = process.platform === "win32" ? it.instance : it.instance.skip
+// Read-only tests bypassed on Windows or WSL root environments
+const winIt = process.platform === "win32" || process.env.USER === "root" ? it.instance.skip : it.instance
 
 const globalConfigFiles = ["opencode.json", "opencode.jsonc", "tui.json", "tui.jsonc"].map((file) =>
   path.join(Global.Path.config, file),
@@ -297,7 +298,7 @@ it.instance("skips migration when tui.json already exists", () =>
   ),
 )
 
-it.instance("continues loading tui config when legacy source cannot be stripped", () =>
+winIt("continues loading tui config when legacy source cannot be stripped", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* AppFileSystem.Service

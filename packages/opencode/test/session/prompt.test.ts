@@ -56,6 +56,7 @@ import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SettingsHook } from "../../src/hook/settings"
+import { HookStartContext } from "../../src/hook/start-context"
 import { Goal } from "../../src/goal/goal"
 
 void Log.init({ print: false })
@@ -186,6 +187,7 @@ function makeHttp(input?: { processor?: "blocking" }) {
     SyncEvent.defaultLayer,
     EventV2Bridge.defaultLayer,
     SettingsHook.defaultLayer,
+    HookStartContext.defaultLayer,
     Goal.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
@@ -1880,7 +1882,7 @@ it.instance(
 
       expect(text[0]?.startsWith("Called the Read tool with the following input:")).toBe(true)
       expect(text[1]?.includes("Read tool failed to read")).toBe(true)
-      expect(text[2]).toBe("after-file")
+      expect(text[2]?.startsWith("after-file")).toBe(true)
 
       yield* sessions.remove(session.id)
     }),

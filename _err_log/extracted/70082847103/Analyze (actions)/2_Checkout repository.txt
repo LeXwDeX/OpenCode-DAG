@@ -1,0 +1,89 @@
+﻿2026-05-21T08:19:01.6217552Z ##[group]Run actions/checkout@v6
+2026-05-21T08:19:01.6218634Z with:
+2026-05-21T08:19:01.6219129Z   repository: LeXwDeX/opencode
+2026-05-21T08:19:01.6220017Z   token: ***
+2026-05-21T08:19:01.6220514Z   ssh-strict: true
+2026-05-21T08:19:01.6221014Z   ssh-user: git
+2026-05-21T08:19:01.6221535Z   persist-credentials: true
+2026-05-21T08:19:01.6222136Z   clean: true
+2026-05-21T08:19:01.6222646Z   sparse-checkout-cone-mode: true
+2026-05-21T08:19:01.6223318Z   fetch-depth: 1
+2026-05-21T08:19:01.6223823Z   fetch-tags: false
+2026-05-21T08:19:01.6224612Z   show-progress: true
+2026-05-21T08:19:01.6225171Z   lfs: false
+2026-05-21T08:19:01.6225636Z   submodules: false
+2026-05-21T08:19:01.6226165Z   set-safe-directory: true
+2026-05-21T08:19:01.6227142Z env:
+2026-05-21T08:19:01.6227668Z   CODE_SCANNING_REF: refs/heads/stable
+2026-05-21T08:19:01.6228402Z   CODE_SCANNING_BASE_BRANCH: 
+2026-05-21T08:19:01.6229138Z   CODE_SCANNING_IS_ANALYZING_DEFAULT_BRANCH: true
+2026-05-21T08:19:01.6230074Z   CODE_SCANNING_IS_STEADY_STATE_DEFAULT_SETUP: true
+2026-05-21T08:19:01.6249511Z   CODE_SCANNING_WORKFLOW_FILE: H4sIAAAAAAAA/6xW32/bthN/919x8PcLpH2g8zLsQUCBKo6SeDPs1FLQZUVB0NRJZiOTKn84Vbv87wNFOZaWZM6w5ck8fu7Du/vcnSLZFiMYT1WOH+bjkXaSBNP/f/yAUtiNW09wh9JOhKydNROucqSGMymFLKl2kno8PDyMlIwgbyTbCj4aodxFI4Dp8jyh6TReLGaLS7pKLl5NjIXn/CvDWZwm9GwVL6ZXr2VaM4N0rZnkm+cYZymNF/H89nd/OE8u4pt59g9fEIYyyarmuz/kWDBX2b9/Mc2S+PyWplmcJY+Ppkl2cx2B1Q6f+Hxcrn69mC8/0ovZPHltXPdK3xWVuqeFqFqFRl/U2nhZQrjofwIEveNggjeee8usFt8mFZOlY6X3fdtCtZOGeJ09qNBq+0u6XLzp0NpJifptSBmgRr0VxgglTXgHgHHbHkEjyzsbV9KitENjzfgdK3FoNMidFrYhbcomgnstLHaXIidW3aHsWz21kA6JkgS1VjqCglUmXBqrmcWy2cdWMFGRghnbB0FXiT0IQEheuRwPBgAC+zpF+wx7twDcv6N0E8HpI/A53NqJKidblWMEUkkcXIbiRnDyaezWTlpHKmbR2PHnkxdC+cJ2zHAtaktsU2P4eTSw417/cZjameNRPQH9qyCMxbrrSdJ1/3SD/E45CxprZYRVuukonfFt2Ol1yjvc+93PowHBTAorWCW+I4RdOnAPs3rqx/NrRQLZqZDCvt/91AHvhd0cuqodUCMMuRMyNxF4T7If7EfUvj4mDOTTqR09V68e9GDug3OsUeYoeUM44xshy+AU6jpBuRNayS1KC+/ewUlIjmyUsZif9Im+OtTCRzcew//gPGzG1tqAcYfhbUe1EGUEf/SE7DYpMWhdHQ0UVrocGgB8EhXxi8NE8OmVGzIIQlsveHiAzz1Su9HIbFucqqXsbveKpz4sqLX61kChNGgshbE+38eVFIXr461gLNOWtOCXOuJAT7nGHKVvt054g1yjNZPLWXZ1c0ZXyeUszVazJKXXq+Vvt31JDoP3QscM2/oadaH0tuvp8JEwwhzPqPvCHLLp/iEIf/7j9mEeoqNXyzTr8vCDOWnLMFHOtoK1J+qbq5/GgOB6uTpKUCv9MsE0ptNklc0uZtM4S45RcUY5aisK4VfVi6Q3q3l6jMrpyhwIhoIf9mBPqb3RO/0ZAAD//zBcBve7CQAA
+2026-05-21T08:19:01.6269407Z ##[endgroup]
+2026-05-21T08:19:01.7236935Z Syncing repository: LeXwDeX/opencode
+2026-05-21T08:19:01.7239230Z ##[group]Getting Git version info
+2026-05-21T08:19:01.7240325Z Working directory is '/home/runner/work/opencode/opencode'
+2026-05-21T08:19:01.7241761Z [command]/usr/bin/git version
+2026-05-21T08:19:01.7304711Z git version 2.54.0
+2026-05-21T08:19:01.7328190Z ##[endgroup]
+2026-05-21T08:19:01.7342534Z Temporarily overriding HOME='/home/runner/work/_temp/273c74ee-350a-466d-9d85-8f59a73478da' before making global git config changes
+2026-05-21T08:19:01.7347242Z Adding repository directory to the temporary git global config as a safe directory
+2026-05-21T08:19:01.7349804Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/opencode/opencode
+2026-05-21T08:19:01.7395350Z Deleting the contents of '/home/runner/work/opencode/opencode'
+2026-05-21T08:19:01.7398910Z ##[group]Initializing the repository
+2026-05-21T08:19:01.7402604Z [command]/usr/bin/git init /home/runner/work/opencode/opencode
+2026-05-21T08:19:01.7504738Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-05-21T08:19:01.7507410Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-05-21T08:19:01.7509369Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-05-21T08:19:01.7511250Z hint: call:
+2026-05-21T08:19:01.7512062Z hint:
+2026-05-21T08:19:01.7513089Z hint: 	git config --global init.defaultBranch <name>
+2026-05-21T08:19:01.7514683Z hint:
+2026-05-21T08:19:01.7515985Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-05-21T08:19:01.7518362Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-05-21T08:19:01.7520472Z hint:
+2026-05-21T08:19:01.7521231Z hint: 	git branch -m <name>
+2026-05-21T08:19:01.7522153Z hint:
+2026-05-21T08:19:01.7523536Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-05-21T08:19:01.7525417Z Initialized empty Git repository in /home/runner/work/opencode/opencode/.git/
+2026-05-21T08:19:01.7528131Z [command]/usr/bin/git remote add origin https://github.com/LeXwDeX/opencode
+2026-05-21T08:19:01.7565022Z ##[endgroup]
+2026-05-21T08:19:01.7565987Z ##[group]Disabling automatic garbage collection
+2026-05-21T08:19:01.7568621Z [command]/usr/bin/git config --local gc.auto 0
+2026-05-21T08:19:01.7598751Z ##[endgroup]
+2026-05-21T08:19:01.7599638Z ##[group]Setting up auth
+2026-05-21T08:19:01.7600280Z Removing SSH command configuration
+2026-05-21T08:19:01.7604831Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-05-21T08:19:01.7637868Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-05-21T08:19:01.7978393Z Removing HTTP extra header
+2026-05-21T08:19:01.7984753Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-05-21T08:19:01.8018881Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-05-21T08:19:01.8228363Z Removing includeIf entries pointing to credentials config files
+2026-05-21T08:19:01.8235375Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-05-21T08:19:01.8268361Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-05-21T08:19:01.8484901Z [command]/usr/bin/git config --file /home/runner/work/_temp/git-credentials-74656984-d542-4586-b233-03e56368a11a.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-05-21T08:19:01.8520719Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/opencode/opencode/.git.path /home/runner/work/_temp/git-credentials-74656984-d542-4586-b233-03e56368a11a.config
+2026-05-21T08:19:01.8551302Z [command]/usr/bin/git config --local includeIf.gitdir:/home/runner/work/opencode/opencode/.git/worktrees/*.path /home/runner/work/_temp/git-credentials-74656984-d542-4586-b233-03e56368a11a.config
+2026-05-21T08:19:01.8583460Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-74656984-d542-4586-b233-03e56368a11a.config
+2026-05-21T08:19:01.8617021Z [command]/usr/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-74656984-d542-4586-b233-03e56368a11a.config
+2026-05-21T08:19:01.8641930Z ##[endgroup]
+2026-05-21T08:19:01.8642851Z ##[group]Fetching the repository
+2026-05-21T08:19:01.8651955Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +d90744b30f01abb80e59006cf19b43d43015cd04:refs/remotes/origin/stable
+2026-05-21T08:19:03.6953145Z From https://github.com/LeXwDeX/opencode
+2026-05-21T08:19:03.6955089Z  * [new ref]         d90744b30f01abb80e59006cf19b43d43015cd04 -> origin/stable
+2026-05-21T08:19:03.6995251Z [command]/usr/bin/git branch --list --remote origin/stable
+2026-05-21T08:19:03.7022381Z   origin/stable
+2026-05-21T08:19:03.7030893Z [command]/usr/bin/git rev-parse refs/remotes/origin/stable
+2026-05-21T08:19:03.7052279Z d90744b30f01abb80e59006cf19b43d43015cd04
+2026-05-21T08:19:03.7057041Z ##[endgroup]
+2026-05-21T08:19:03.7057493Z ##[group]Determining the checkout info
+2026-05-21T08:19:03.7058248Z ##[endgroup]
+2026-05-21T08:19:03.7062191Z [command]/usr/bin/git sparse-checkout disable
+2026-05-21T08:19:03.7107829Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
+2026-05-21T08:19:03.7132924Z ##[group]Checking out the ref
+2026-05-21T08:19:03.7137223Z [command]/usr/bin/git checkout --progress --force -B stable refs/remotes/origin/stable
+2026-05-21T08:19:04.1227173Z Switched to a new branch 'stable'
+2026-05-21T08:19:04.1227939Z branch 'stable' set up to track 'origin/stable'.
+2026-05-21T08:19:04.1256697Z ##[endgroup]
+2026-05-21T08:19:04.1309442Z [command]/usr/bin/git log -1 --format=%H
+2026-05-21T08:19:04.1333258Z d90744b30f01abb80e59006cf19b43d43015cd04

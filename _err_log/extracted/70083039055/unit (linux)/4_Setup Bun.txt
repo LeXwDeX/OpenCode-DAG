@@ -1,0 +1,117 @@
+﻿2026-05-21T08:20:26.9529535Z Prepare all required actions
+2026-05-21T08:20:26.9530022Z Getting action download info
+2026-05-21T08:20:27.1647347Z Download action repository 'oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6' (SHA:0c5077e51419868618aeaa5fe8019c62421857d6)
+2026-05-21T08:20:27.7671172Z Download action repository 'actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830' (SHA:0057852bfaa89a56745cba8c7296529d2fc39830)
+2026-05-21T08:20:27.8714689Z ##[group]Run ./.github/actions/setup-bun
+2026-05-21T08:20:27.8714976Z with:
+2026-05-21T08:20:27.8715156Z env:
+2026-05-21T08:20:27.8715359Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:27.8715617Z ##[endgroup]
+2026-05-21T08:20:27.8805480Z ##[group]Run if [ "$RUNNER_ARCH" = "X64" ]; then
+2026-05-21T08:20:27.8805865Z [36;1mif [ "$RUNNER_ARCH" = "X64" ]; then[0m
+2026-05-21T08:20:27.8806288Z [36;1m  V=$(node -p "require('./package.json').packageManager.split('@')[1]")[0m
+2026-05-21T08:20:27.8806674Z [36;1m  case "$RUNNER_OS" in[0m
+2026-05-21T08:20:27.8806909Z [36;1m    macOS)   OS=darwin ;;[0m
+2026-05-21T08:20:27.8807202Z [36;1m    Linux)   OS=linux ;;[0m
+2026-05-21T08:20:27.8807443Z [36;1m    Windows) OS=windows ;;[0m
+2026-05-21T08:20:27.8807684Z [36;1m  esac[0m
+2026-05-21T08:20:27.8808167Z [36;1m  echo "url=https://github.com/oven-sh/bun/releases/download/bun-v${V}/bun-${OS}-x64-baseline.zip" >> "$GITHUB_OUTPUT"[0m
+2026-05-21T08:20:27.8808683Z [36;1mfi[0m
+2026-05-21T08:20:27.8890576Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-05-21T08:20:27.8890922Z env:
+2026-05-21T08:20:27.8891132Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:27.8891396Z ##[endgroup]
+2026-05-21T08:20:27.9402198Z ##[group]Run oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+2026-05-21T08:20:27.9402571Z with:
+2026-05-21T08:20:27.9402992Z   bun-download-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64-baseline.zip
+2026-05-21T08:20:27.9403469Z   no-cache: false
+2026-05-21T08:20:27.9403805Z   token: ***
+2026-05-21T08:20:27.9404001Z env:
+2026-05-21T08:20:27.9404192Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:27.9404450Z ##[endgroup]
+2026-05-21T08:20:28.1069421Z Obtained version 1.3.13 from package.json
+2026-05-21T08:20:28.1073847Z Downloading a new version of Bun: https://github.com/oven-sh/bun/releases/download/bun-v1.3.13/bun-linux-x64-baseline.zip
+2026-05-21T08:20:28.7995822Z [command]/usr/bin/unzip -o -q /home/runner/work/_temp/0cf5d842-e193-4be4-93aa-71163835a28c.zip
+2026-05-21T08:20:29.5252000Z [command]/home/runner/.bun/bin/bun --revision
+2026-05-21T08:20:29.5291216Z 1.3.13+bf2e2cecf
+2026-05-21T08:20:29.5402032Z ##[group]Run echo "dir=$(bun pm cache)" >> "$GITHUB_OUTPUT"
+2026-05-21T08:20:29.5402445Z [36;1mecho "dir=$(bun pm cache)" >> "$GITHUB_OUTPUT"[0m
+2026-05-21T08:20:29.5435834Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-05-21T08:20:29.5436159Z env:
+2026-05-21T08:20:29.5436355Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:29.5436619Z ##[endgroup]
+2026-05-21T08:20:30.0662659Z ##[group]Run actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+2026-05-21T08:20:30.0663032Z with:
+2026-05-21T08:20:30.0663253Z   path: /home/runner/.bun/install/cache
+2026-05-21T08:20:30.0663652Z   key: Linux-bun-360398805db954ab0c0df3a6f45dc74da94dd0ce5132a6d09278cbee516db540
+2026-05-21T08:20:30.0664062Z   restore-keys: Linux-bun-
+
+2026-05-21T08:20:30.0664286Z   enableCrossOsArchive: false
+2026-05-21T08:20:30.0664514Z   fail-on-cache-miss: false
+2026-05-21T08:20:30.0664723Z   lookup-only: false
+2026-05-21T08:20:30.0664907Z env:
+2026-05-21T08:20:30.0665084Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:30.0665333Z ##[endgroup]
+2026-05-21T08:20:30.1724027Z (node:2361) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-05-21T08:20:30.1725437Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-05-21T08:20:30.5098685Z Cache hit for restore-key: Linux-bun-4131fed92960e4f3bce794610474692335ab3182b376c7e7036b58d1f2ff5632
+2026-05-21T08:20:30.5207377Z (node:2361) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-05-21T08:20:31.7236127Z Received 29360128 of 895173744 (3.3%), 28.0 MBs/sec
+2026-05-21T08:20:32.7240690Z Received 142606336 of 895173744 (15.9%), 68.0 MBs/sec
+2026-05-21T08:20:33.7242992Z Received 251658240 of 895173744 (28.1%), 79.9 MBs/sec
+2026-05-21T08:20:34.7244679Z Received 348127232 of 895173744 (38.9%), 83.0 MBs/sec
+2026-05-21T08:20:35.7247147Z Received 499122176 of 895173744 (55.8%), 95.2 MBs/sec
+2026-05-21T08:20:36.7256452Z Received 637534208 of 895173744 (71.2%), 101.3 MBs/sec
+2026-05-21T08:20:37.7317577Z Received 796917760 of 895173744 (89.0%), 108.5 MBs/sec
+2026-05-21T08:20:38.4617256Z Received 895173744 of 895173744 (100.0%), 110.3 MBs/sec
+2026-05-21T08:20:38.4620695Z Cache Size: ~854 MB (895173744 B)
+2026-05-21T08:20:38.4688003Z [command]/usr/bin/tar -xf /home/runner/work/_temp/9b37a0a1-44f5-432c-9230-0fb4e3ae85a7/cache.tzst -P -C /home/runner/work/opencode/opencode --use-compress-program unzstd
+2026-05-21T08:20:48.7050073Z Cache restored successfully
+2026-05-21T08:20:48.7506847Z Cache restored from key: Linux-bun-4131fed92960e4f3bce794610474692335ab3182b376c7e7036b58d1f2ff5632
+2026-05-21T08:20:48.7663404Z ##[group]Run python3 -m pip install setuptools || pip install setuptools || true
+2026-05-21T08:20:48.7663952Z [36;1mpython3 -m pip install setuptools || pip install setuptools || true[0m
+2026-05-21T08:20:48.7698669Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-05-21T08:20:48.7699248Z env:
+2026-05-21T08:20:48.7699459Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:48.7699730Z ##[endgroup]
+2026-05-21T08:20:49.1761636Z Defaulting to user installation because normal site-packages is not writeable
+2026-05-21T08:20:49.8087589Z Requirement already satisfied: setuptools in /usr/lib/python3/dist-packages (68.1.2)
+2026-05-21T08:20:50.0930369Z ##[group]Run # Workaround for patched peer variants
+2026-05-21T08:20:50.0930958Z [36;1m# Workaround for patched peer variants[0m
+2026-05-21T08:20:50.0931279Z [36;1m# e.g. ./patches/ for standard-openapi[0m
+2026-05-21T08:20:50.0931620Z [36;1m# https://github.com/oven-sh/bun/issues/28147[0m
+2026-05-21T08:20:50.0931950Z [36;1mif [ "$RUNNER_OS" = "Windows" ]; then[0m
+2026-05-21T08:20:50.0932234Z [36;1m  bun install --linker hoisted [0m
+2026-05-21T08:20:50.0932482Z [36;1melse[0m
+2026-05-21T08:20:50.0932670Z [36;1m  bun install [0m
+2026-05-21T08:20:50.0932876Z [36;1mfi[0m
+2026-05-21T08:20:50.0966331Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2026-05-21T08:20:50.0966657Z env:
+2026-05-21T08:20:50.0966856Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+2026-05-21T08:20:50.0967127Z ##[endgroup]
+2026-05-21T08:20:50.1047770Z bun install v1.3.13 (bf2e2cec)
+2026-05-21T08:20:50.1523463Z Resolving dependencies
+2026-05-21T08:20:50.9369124Z Resolved, downloaded and extracted [74]
+2026-05-21T08:21:02.6821302Z Saved lockfile
+2026-05-21T08:21:02.6821614Z 
+2026-05-21T08:21:02.6822003Z $ bun run --cwd packages/opencode fix-node-pty
+2026-05-21T08:21:02.6855843Z $ bun run script/fix-node-pty.ts
+2026-05-21T08:21:02.9751496Z $ husky
+2026-05-21T08:21:03.0141516Z 
+2026-05-21T08:21:03.0142161Z + @actions/artifact@5.0.1
+2026-05-21T08:21:03.0144120Z + @tsconfig/bun@1.0.10
+2026-05-21T08:21:03.0144564Z + @types/mime-types@3.0.1
+2026-05-21T08:21:03.0145118Z + @typescript/native-preview@7.0.0-dev.20251207.1
+2026-05-21T08:21:03.0145619Z + glob@13.0.6
+2026-05-21T08:21:03.0145912Z + husky@9.1.7
+2026-05-21T08:21:03.0146183Z + oxlint@1.63.0
+2026-05-21T08:21:03.0146503Z + oxlint-tsgolint@0.22.1
+2026-05-21T08:21:03.0146863Z + prettier@3.8.3
+2026-05-21T08:21:03.0147196Z + semver@7.8.0
+2026-05-21T08:21:03.0147484Z + sst@3.18.10
+2026-05-21T08:21:03.0147796Z + turbo@2.9.14
+2026-05-21T08:21:03.0148149Z + @aws-sdk/client-s3@3.1044.0
+2026-05-21T08:21:03.0148577Z + heap-snapshot-toolkit@1.1.3
+2026-05-21T08:21:03.0149806Z + typescript@5.8.2 (v6.0.3 available)
+2026-05-21T08:21:03.0150123Z 
+2026-05-21T08:21:03.0150372Z 4774 packages installed [12.91s]
