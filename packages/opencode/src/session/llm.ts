@@ -359,8 +359,6 @@ const live: Layer.Layer<
           provider: item,
           auth: info,
           llmClient,
-          isOpenaiOauth,
-          system,
           messages,
           tools: sortedTools,
           toolChoice: input.toolChoice,
