@@ -45,8 +45,8 @@ export const layer = Layer.effect(
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
       // SessionStart hook (Claude Code compatible) — fires for top-level
-      // sessions only. Sub-agent sessions (parentID set) are excluded; CC has
-      // no SubagentStart event. Failures never abort session creation.
+      // sessions only. Sub-agent sessions (parentID set) emit SubagentStart
+      // instead, dispatched from tool/task.ts. Failures never abort session creation.
       if (!result.parentID) {
         const exit = yield* settingsHook
           .trigger(

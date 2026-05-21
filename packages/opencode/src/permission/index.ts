@@ -159,6 +159,8 @@ export const layer = Layer.effect(
       }),
     )
 
+    const settingsHook = yield* SettingsHook.Service
+
     const ask = Effect.fn("Permission.ask")(function* (input: AskInput) {
       const { approved, pending } = yield* InstanceState.get(state)
       const { ruleset, ...request } = input
@@ -168,6 +170,19 @@ export const layer = Layer.effect(
         const rule = evaluate(request.permission, pattern, ruleset, approved)
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
+          // CC contract: PermissionDenied fires when a rule denies the tool call.
+          // Best-effort — never let hook failure mask the denial.
+          yield* settingsHook
+            .trigger(
+              {
+                event: "PermissionDenied",
+                toolName: request.permission,
+                toolInput: request.metadata,
+                reason: `Rule denied: permission=${request.permission} pattern=${pattern}`,
+              },
+              { sessionID: request.sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.catch(() => Effect.void))
           return yield* new DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
@@ -177,6 +192,27 @@ export const layer = Layer.effect(
       }
 
       if (!needsAsk) return
+
+      // CC contract: PermissionRequest fires when a tool needs user permission.
+      // Hook can short-circuit with permissionDecision: "allow" → skip ask,
+      // "deny" → throw DeniedError, "ask" or missing → fall through to user prompt.
+      // Failures propagate (PermissionRequest is security-sensitive; silent allow on
+      // hook crash would be unsafe — callers will treat it as a tool error).
+      const permHook = yield* settingsHook.trigger(
+        {
+          event: "PermissionRequest",
+          toolName: request.permission,
+          toolInput: request.metadata,
+          permissionSuggestions: [...request.always],
+        },
+        { sessionID: request.sessionID, transcriptPath: "" },
+      )
+      if (permHook.permissionDecision === "allow") return
+      if (permHook.permissionDecision === "deny") {
+        return yield* new DeniedError({
+          ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
+        })
+      }
 
       const id = request.id ?? PermissionID.ascending()
       const info = Schema.decodeUnknownSync(Request)({
@@ -209,6 +245,21 @@ export const layer = Layer.effect(
       })
 
       if (input.reply === "reject") {
+        // CC contract: PermissionDenied fires when user rejects a permission request.
+        // Best-effort — never let hook failure mask the rejection. Only emitted for
+        // the directly-rejected request; cascaded rejects below are not re-announced.
+        yield* settingsHook
+          .trigger(
+            {
+              event: "PermissionDenied",
+              toolName: existing.info.permission,
+              toolInput: existing.info.metadata,
+              reason: input.message ?? "User rejected permission",
+            },
+            { sessionID: existing.info.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.void))
+
         yield* Deferred.fail(
           existing.deferred,
           input.message ? new CorrectedError({ feedback: input.message }) : new RejectedError(),

@@ -12,6 +12,7 @@ import { errorMessage } from "../util/error"
 import { BusEvent } from "@/bus/bus-event"
 import { GlobalBus } from "@/bus/global"
 import { Git } from "@/git"
+import { SettingsHook } from "@/hook/settings"
 import { Effect, Layer, Path, Schema, Scope, Context } from "effect"
 import { ChildProcess } from "effect/unstable/process"
 import { NodePath } from "@effect/platform-node"
@@ -150,7 +151,7 @@ type GitResult = { code: number; text: string; stderr: string }
 export const layer: Layer.Layer<
   Service,
   never,
-  AppFileSystem.Service | Path.Path | AppProcess.Service | Git.Service | Project.Service | InstanceStore.Service
+  AppFileSystem.Service | Path.Path | AppProcess.Service | Git.Service | Project.Service | InstanceStore.Service | SettingsHook.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -161,6 +162,7 @@ export const layer: Layer.Layer<
     const gitSvc = yield* Git.Service
     const project = yield* Project.Service
     const store = yield* InstanceStore.Service
+    const settingsHook = yield* SettingsHook.Service
 
     const git = Effect.fnUntraced(
       function* (args: string[], opts?: { cwd?: string }) {
@@ -286,6 +288,20 @@ export const layer: Layer.Layer<
         },
       })
 
+      yield* settingsHook
+        .trigger(
+          {
+            event: "WorktreeCreate",
+            path: info.directory,
+            ...(info.branch ? { branch: info.branch } : {}),
+          },
+          {
+            sessionID: "",
+            transcriptPath: "",
+          },
+        )
+        .pipe(Effect.ignore)
+
       yield* runStartScripts(info.directory, { projectID, extra })
     })
 
@@ -409,6 +425,9 @@ export const layer: Layer.Layer<
           yield* stopFsmonitor(directory)
           yield* cleanDirectory(directory)
         }
+        yield* settingsHook
+          .trigger({ event: "WorktreeRemove", path: directory }, { sessionID: "", transcriptPath: "" })
+          .pipe(Effect.ignore)
         return true
       }
 
@@ -442,6 +461,12 @@ export const layer: Layer.Layer<
         }
       }
 
+      yield* settingsHook
+        .trigger(
+          { event: "WorktreeRemove", path: directory, ...(branch ? { branch } : {}) },
+          { sessionID: "", transcriptPath: "" },
+        )
+        .pipe(Effect.ignore)
       return true
     })
 
@@ -614,6 +639,7 @@ export const appLayer = layer.pipe(
   Layer.provide(Project.defaultLayer),
   Layer.provide(AppFileSystem.defaultLayer),
   Layer.provide(NodePath.layer),
+  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export const defaultLayer = appLayer.pipe(Layer.provide(InstanceLayer.layer))

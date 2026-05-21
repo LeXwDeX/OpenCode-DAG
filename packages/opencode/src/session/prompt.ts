@@ -640,6 +640,19 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     },
                     { sessionID: ctx.sessionID, transcriptPath: "" },
                   )
+                  // FileChanged hook — tool-coupled emit for file mutations.
+                  // Best-effort: hook failure must not pollute tool result.
+                  if (item.id === "edit" || item.id === "write") {
+                    const filePath = (effectiveArgs as { filePath?: unknown }).filePath
+                    if (typeof filePath === "string") {
+                      yield* settingsHook
+                        .trigger(
+                          { event: "FileChanged", path: filePath, changeType: item.id },
+                          { sessionID: ctx.sessionID, transcriptPath: "" },
+                        )
+                        .pipe(Effect.ignore)
+                    }
+                  }
                   // CC contract: continue=false on PostToolUse skips post-aggregation
                   // (additionalContext / systemMessage injection). Tool result still returns.
                   const postContexts = postHook.preventContinuation ? [] : postHook.additionalContexts
@@ -678,7 +691,27 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                     yield* input.processor.completeToolCall(options.toolCallId, output)
                   }
                   return output
-                }),
+                }).pipe(
+                  // CC contract: PostToolUseFailure fires when native tool execution itself fails.
+                  // Best-effort — never let hook failure mask the original tool error.
+                  Effect.tapCause((cause: Cause.Cause<unknown>) =>
+                    Effect.gen(function* () {
+                      const err = cause.reasons.find(Cause.isFailReason)?.error
+                      if (err === undefined) return
+                      // Permission/Question rejections are control-flow, not tool failures.
+                      if (err instanceof Permission.RejectedError || err instanceof Question.RejectedError) return
+                      yield* settingsHook.trigger(
+                        {
+                          event: "PostToolUseFailure",
+                          toolName: item.id,
+                          toolInput: args,
+                          error: err instanceof Error ? err.message : String(err),
+                        },
+                        { sessionID: input.session.id, transcriptPath: "" },
+                      )
+                    }).pipe(Effect.ignore),
+                  ),
+                ),
               )
               .catch((e) => {
                 // Permission/Question rejections must propagate to trigger ctx.blocked in failToolCall
@@ -821,6 +854,23 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               }
               return output
             }).pipe(
+              // CC contract: PostToolUseFailure fires when MCP tool execution itself fails.
+              // Best-effort — never let hook failure mask the original tool error.
+              Effect.tapCause((cause: Cause.Cause<unknown>) =>
+                Effect.gen(function* () {
+                  const err = cause.reasons.find(Cause.isFailReason)?.error
+                  if (err === undefined) return
+                  yield* settingsHook.trigger(
+                    {
+                      event: "PostToolUseFailure",
+                      toolName: key,
+                      toolInput: args,
+                      error: err instanceof Error ? err.message : String(err),
+                    },
+                    { sessionID: input.session.id, transcriptPath: "" },
+                  )
+                }).pipe(Effect.ignore),
+              ),
               Effect.catch((e: unknown) =>
                 Effect.succeed({
                   title: "",
@@ -1838,7 +1888,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         }
 
         if (input.noReply === true) return message
-        const final = yield* loop({ sessionID: input.sessionID })
+        const final = yield* loop({ sessionID: input.sessionID }).pipe(
+          Effect.tapCause((cause) =>
+            settingsHook
+              .trigger(
+                {
+                  event: "StopFailure",
+                  stopHookActive: false,
+                  error: Cause.pretty(cause),
+                },
+                { sessionID: input.sessionID, transcriptPath: "" },
+              )
+              .pipe(Effect.ignore),
+          ),
+        )
         const lastAssistantMessage = final.parts
           .filter((part): part is MessageV2.TextPart => part.type === "text")
           .map((part) => part.text.trim())
@@ -2057,6 +2120,20 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               instruction.system().pipe(Effect.orDie),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
+            if (step === 1) {
+              const HEADER = "Instructions from: "
+              for (const item of instructions) {
+                const idx = item.indexOf("\n")
+                if (idx < 0) continue
+                const header = item.slice(0, idx)
+                if (!header.startsWith(HEADER)) continue
+                const path = header.slice(HEADER.length)
+                const content = item.slice(idx + 1)
+                yield* settingsHook
+                  .trigger({ event: "InstructionsLoaded", path, content }, { sessionID, transcriptPath: "" })
+                  .pipe(Effect.ignore)
+              }
+            }
             const system = [...env, ...instructions, ...(skills ? [skills] : [])]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)

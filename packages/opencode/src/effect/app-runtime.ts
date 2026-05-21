@@ -1,4 +1,4 @@
-import { Layer, ManagedRuntime } from "effect"
+import { Effect, Layer, ManagedRuntime } from "effect"
 import { attach } from "./run-service"
 import * as Observability from "@opencode-ai/core/effect/observability"
 
@@ -62,7 +62,7 @@ import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
-export const AppLayer = Layer.mergeAll(
+const CoreLayer = Layer.mergeAll(
   Npm.defaultLayer,
   AppFileSystem.defaultLayer,
   Bus.defaultLayer,
@@ -120,7 +120,27 @@ export const AppLayer = Layer.mergeAll(
   SyncEvent.defaultLayer,
   EventV2Bridge.defaultLayer,
   DataMigration.defaultLayer,
-).pipe(Layer.provideMerge(InstanceLayer.layer), Layer.provideMerge(Observability.layer))
+).pipe(
+  Layer.provideMerge(InstanceLayer.layer),
+  Layer.provideMerge(Observability.layer),
+)
+
+// ConfigWatcher needs SettingsHook.Service + InstanceStore.Service in scope, so
+// it wraps the resolved core layer (post-provideMerge) rather than sitting as a
+// mergeAll sibling — Layer.mergeAll does not auto-wire siblings.
+//
+// Loaded via dynamic import + Layer.unwrapEffect to break a static module-graph
+// edge: a top-level `import "@/config/config-watcher"` here pulls in
+// hook/settings + project/instance-store before the permission ↔ hook/settings
+// import cycle finishes, producing a TDZ ReferenceError on
+// `SettingsHook.defaultLayer` at permission/index.ts module init in subprocess
+// CLI startup paths. Deferring resolution to layer build time lets the cycle
+// complete before this module is evaluated.
+const configWatcherLayer = Layer.unwrap(
+  Effect.promise(() => import("@/config/config-watcher").then((m) => m.ConfigWatcher.defaultLayer)),
+)
+
+export const AppLayer = configWatcherLayer.pipe(Layer.provideMerge(CoreLayer))
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
 type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">

@@ -170,6 +170,38 @@ export const TaskTool = Tool.define(
           ],
         }))
 
+      // TaskCreated hook: fires only for newly-allocated task sessions (skip on resume).
+      if (!session) {
+        yield* settingsHook
+          .trigger(
+            {
+              event: "TaskCreated",
+              taskID: nextSession.id,
+              taskTitle: params.description,
+              taskDescription: params.prompt,
+            },
+            { sessionID: nextSession.id, transcriptPath: "" },
+          )
+          .pipe(Effect.ignore)
+      }
+
+      // SubagentStart hook (Claude Code compatible) — fires once when a sub-agent task spawns. Failure never aborts spawn.
+      yield* settingsHook
+        .trigger(
+          {
+            event: "SubagentStart",
+            agentID: nextSession.id,
+            agentType: next.name,
+          },
+          {
+            sessionID: nextSession.id,
+            transcriptPath: "",
+            agentID: nextSession.id,
+            agentType: next.name,
+          },
+        )
+        .pipe(Effect.ignore)
+
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(Effect.orDie)
       if (msg.info.role !== "assistant") return yield* Effect.fail(new Error("Not an assistant message"))
 
@@ -303,6 +335,32 @@ export const TaskTool = Tool.define(
                 )
                 .pipe(Effect.ignore),
             ),
+            // TaskCompleted hook: fires on successful background task completion.
+            Effect.tap((text) =>
+              settingsHook
+                .trigger(
+                  {
+                    event: "TaskCompleted",
+                    taskID: nextSession.id,
+                    taskTitle: params.description,
+                    result: text,
+                  },
+                  { sessionID: nextSession.id, transcriptPath: "" },
+                )
+                .pipe(Effect.ignore),
+            ),
+            Effect.tap((text) =>
+              settingsHook
+                .trigger(
+                  {
+                    event: "TeammateIdle",
+                    teammateID: nextSession.id,
+                    teammateName: next.name,
+                  },
+                  { sessionID: nextSession.id, transcriptPath: "" },
+                )
+                .pipe(Effect.ignore),
+            ),
             Effect.tap((text) => inject("completed", text).pipe(Effect.ignore)),
             Effect.catchCause((cause) =>
               (Cause.hasInterruptsOnly(cause)
@@ -343,6 +401,19 @@ export const TaskTool = Tool.define(
             yield* settingsHook
               .trigger(
                 { event: "SubagentStop", stopHookActive: false },
+                { sessionID: nextSession.id, transcriptPath: "" },
+              )
+              .pipe(Effect.ignore)
+
+            // TaskCompleted hook: fires on successful synchronous task completion.
+            yield* settingsHook
+              .trigger(
+                {
+                  event: "TaskCompleted",
+                  taskID: nextSession.id,
+                  taskTitle: params.description,
+                  result: text,
+                },
                 { sessionID: nextSession.id, transcriptPath: "" },
               )
               .pipe(Effect.ignore)
