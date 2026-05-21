@@ -308,7 +308,9 @@ it.instance("getModel throws ModelNotFoundError for invalid model", () =>
 
 it.instance("getModel throws ModelNotFoundError for invalid provider", () =>
   Effect.gen(function* () {
-    const exit = yield* Provider.use.getModel(ProviderID.make("nonexistent-provider"), ModelID.make("some-model")).pipe(Effect.exit)
+    const exit = yield* Provider.use
+      .getModel(ProviderID.make("nonexistent-provider"), ModelID.make("some-model"))
+      .pipe(Effect.exit)
     expect(exit._tag).toBe("Failure")
   }),
 )
@@ -1001,7 +1003,9 @@ it.instance("ModelNotFoundError includes suggestions for typos", () =>
 it.instance("ModelNotFoundError for provider includes suggestions", () =>
   Effect.gen(function* () {
     yield* set("ANTHROPIC_API_KEY", "test-api-key")
-    const error = yield* Provider.use.getModel(ProviderID.make("antropic"), ModelID.make("claude-sonnet-4")).pipe(Effect.flip)
+    const error = yield* Provider.use
+      .getModel(ProviderID.make("antropic"), ModelID.make("claude-sonnet-4"))
+      .pipe(Effect.flip)
     expect(error.suggestions).toBeDefined()
     expect(error.suggestions).toContain("anthropic")
   }),
@@ -1010,7 +1014,9 @@ it.instance("ModelNotFoundError for provider includes suggestions", () =>
 it.instance("ModelNotFoundError suggests catalog models for unloaded providers", () =>
   Effect.gen(function* () {
     yield* remove("OPENCODE_API_KEY")
-    const error = yield* Provider.use.getModel(ProviderID.opencode, ModelID.make("claude-haiku-fake-model")).pipe(Effect.flip)
+    const error = yield* Provider.use
+      .getModel(ProviderID.opencode, ModelID.make("claude-haiku-fake-model"))
+      .pipe(Effect.flip)
     if (!Provider.ModelNotFoundError.isInstance(error)) throw error
     expect(error.suggestions ?? []).toContain("claude-haiku-4-5")
   }),
@@ -1673,7 +1679,10 @@ it.effect("opencode loader keeps paid models when config apiKey is present", () 
       config: { provider: { opencode: { options: { apiKey: "test-key" } } } },
     })
 
-    const listIn = (directory: string) => Provider.Service.use((svc) => svc.list()).pipe(provideInstanceEffect(directory)).pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
+    const listIn = (directory: string) =>
+      Provider.Service.use((svc) => svc.list())
+        .pipe(provideInstanceEffect(directory))
+        .pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
 
     const none = paid(yield* listIn(noneDir))
     const keyedCount = paid(yield* listIn(keyedDir))
@@ -1688,7 +1697,10 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     const noneDir = yield* tmpdirScoped()
     const keyedDir = yield* tmpdirScoped()
 
-    const listIn = (directory: string) => Provider.Service.use((svc) => svc.list()).pipe(provideInstanceEffect(directory)).pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
+    const listIn = (directory: string) =>
+      Provider.Service.use((svc) => svc.list())
+        .pipe(provideInstanceEffect(directory))
+        .pipe(Effect.provide(InstanceLayer.layer), Effect.provide(CrossSpawnSpawner.defaultLayer))
 
     const none = paid(yield* listIn(noneDir))
 
@@ -1696,9 +1708,7 @@ it.effect("opencode loader keeps paid models when auth exists", () =>
     const original = yield* Effect.promise(() => Filesystem.readText(authPath).catch(() => undefined))
 
     yield* Effect.acquireRelease(
-      Effect.promise(() =>
-        Filesystem.write(authPath, JSON.stringify({ opencode: { type: "api", key: "test-key" } })),
-      ),
+      Effect.promise(() => Filesystem.write(authPath, JSON.stringify({ opencode: { type: "api", key: "test-key" } }))),
       () =>
         Effect.promise(async () => {
           if (original !== undefined) await Filesystem.write(authPath, original)
