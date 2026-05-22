@@ -34,9 +34,9 @@
       "@types/cross-spawn": "6.0.6",
       "@octokit/rest": "22.0.1",
       "@hono/zod-validator": "0.4.2",
-      "@opentui/core": "0.1.105",
+      "@opentui/core": "0.2.14",
       "@opentui/keymap": "0.2.14",
-      "@opentui/solid": "0.1.105",
+      "@opentui/solid": "0.2.14",
       "@sentry/solid": "10.36.0",
       "@sentry/vite-plugin": "4.6.0",
       "ulid": "3.0.2",
@@ -128,7 +128,9 @@
   ],
   "overrides": {
     "@types/bun": "catalog:",
-    "@types/node": "catalog:"
+    "@types/node": "catalog:",
+    "@opentui/core": "0.2.14",
+    "@opentui/solid": "0.2.14"
   },
   "patchedDependencies": {
     "@npmcli/agent@4.0.0": "patches/@npmcli%2Fagent@4.0.0.patch",

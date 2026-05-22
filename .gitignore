@@ -40,3 +40,6 @@ entities.json
 
 # Goal-driven planning audit state (per-task scratchpad, never commit)
 .task_state/
+
+# CI debug logs (never commit)
+_err_log/

@@ -1,7 +1,0 @@
-﻿2026-05-21T08:21:03.0554045Z ##[group]Run git config --global user.email "bot@opencode.ai"
-2026-05-21T08:21:03.0554513Z [36;1mgit config --global user.email "bot@opencode.ai"[0m
-2026-05-21T08:21:03.0554859Z [36;1mgit config --global user.name "opencode"[0m
-2026-05-21T08:21:03.0589696Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-2026-05-21T08:21:03.0590024Z env:
-2026-05-21T08:21:03.0590226Z   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-2026-05-21T08:21:03.0590489Z ##[endgroup]

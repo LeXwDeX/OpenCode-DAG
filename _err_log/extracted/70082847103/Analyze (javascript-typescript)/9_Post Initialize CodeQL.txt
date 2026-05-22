@@ -1,4 +1,0 @@
-﻿2026-05-21T08:23:20.2847764Z Post job cleanup.
-2026-05-21T08:23:21.3424188Z CodeQL job status was success.
-2026-05-21T08:23:21.3433969Z Sending status report for init-post step.
-2026-05-21T08:23:21.4658623Z Status report sent for init-post step.
