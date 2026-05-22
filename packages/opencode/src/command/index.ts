@@ -55,7 +55,6 @@ export const Default = {
   REVIEW: "review",
   GOAL: "goal",
   SUBGOAL: "subgoal",
-  CACHE: "cache",
 } as const
 
 export interface Interface {
@@ -106,13 +105,6 @@ export const layer = Layer.effect(
       commands[Default.SUBGOAL] = {
         name: Default.SUBGOAL,
         description: "管理子目标 [list|<text>|remove <n>|clear]",
-        source: "command",
-        template: "",
-        hints: ["$ARGUMENTS"],
-      }
-      commands[Default.CACHE] = {
-        name: Default.CACHE,
-        description: "切换显式上下文缓存 (prompt cache) 开关 [on|off|toggle]",
         source: "command",
         template: "",
         hints: ["$ARGUMENTS"],

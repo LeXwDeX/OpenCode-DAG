@@ -499,9 +499,14 @@ export function message(
 ) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
+  // Bailian (百炼) providers always cache — bypass toggle entirely.
+  // Bailian supports both OpenAI-compatible and Anthropic-compatible
+  // endpoints; cache markers for both are emitted by applyCaching().
+  const isBailian = model.providerID.includes("bailian")
   if (
-    CacheToggle.resolve(agent, msgs.length) &&
-    (model.providerID === "anthropic" ||
+    (isBailian || CacheToggle.resolve(agent, msgs.length)) &&
+    (isBailian ||
+      model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||
       model.providerID === "alibaba-cn" ||
       model.api.id.includes("anthropic") ||
