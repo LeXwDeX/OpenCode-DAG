@@ -19,7 +19,7 @@ import { Installation } from "../installation"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { withTimeout } from "@/util/timeout"
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
-import { McpOAuthProvider } from "./oauth-provider"
+import { McpOAuthProvider, OAUTH_CALLBACK_PATH } from "./oauth-provider"
 import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { BusEvent } from "../bus/bus-event"
@@ -316,6 +316,7 @@ export const layer = Layer.effect(
             clientId: oauthConfig?.clientId,
             clientSecret: oauthConfig?.clientSecret,
             scope: oauthConfig?.scope,
+            callbackPort: oauthConfig?.callbackPort,
             redirectUri: oauthConfig?.redirectUri,
           },
           {
@@ -767,8 +768,15 @@ export const layer = Layer.effect(
       // OAuth config is optional - if not provided, we'll use auto-discovery
       const oauthConfig = typeof mcpConfig.oauth === "object" ? mcpConfig.oauth : undefined
 
+      // Resolve effective redirect URI: explicit redirectUri > callbackPort shorthand > default
+      const effectiveRedirectUri =
+        oauthConfig?.redirectUri ??
+        (oauthConfig?.callbackPort
+          ? `http://127.0.0.1:${oauthConfig.callbackPort}${OAUTH_CALLBACK_PATH}`
+          : undefined)
+
       // Start the callback server with custom redirectUri if configured
-      yield* Effect.promise(() => McpOAuthCallback.ensureRunning(oauthConfig?.redirectUri))
+      yield* Effect.promise(() => McpOAuthCallback.ensureRunning(effectiveRedirectUri))
 
       const oauthState = Array.from(crypto.getRandomValues(new Uint8Array(32)))
         .map((b) => b.toString(16).padStart(2, "0"))
@@ -782,7 +790,7 @@ export const layer = Layer.effect(
           clientId: oauthConfig?.clientId,
           clientSecret: oauthConfig?.clientSecret,
           scope: oauthConfig?.scope,
-          redirectUri: oauthConfig?.redirectUri,
+          redirectUri: effectiveRedirectUri,
         },
         {
           onRedirect: async (url) => {
