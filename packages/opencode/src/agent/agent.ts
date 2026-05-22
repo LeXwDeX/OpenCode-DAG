@@ -46,6 +46,7 @@ export const Info = Schema.Struct({
   options: Schema.Record(Schema.String, Schema.Unknown),
   steps: Schema.optional(Schema.Finite),
   todo_reminder: Schema.optional(Schema.Boolean),
+  cache: Schema.optional(Schema.Union([Schema.Boolean, Schema.Literals(["auto"])])),
 }).annotate({ identifier: "Agent" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
@@ -304,6 +305,7 @@ export const layer = Layer.effect(
           item.name = value.name ?? item.name
           item.steps = value.steps ?? item.steps
           item.todo_reminder = value.todo_reminder ?? item.todo_reminder
+          item.cache = value.cache ?? item.cache
           item.options = mergeDeep(item.options, value.options ?? {})
           item.permission = Permission.merge(item.permission, Permission.fromConfig(value.permission ?? {}))
         }

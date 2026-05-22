@@ -5,6 +5,7 @@ import type * as Provider from "./provider"
 import type * as ModelsDev from "@opencode-ai/core/models-dev"
 import { iife } from "@/util/iife"
 import { CacheToggle } from "./cache-toggle"
+import type { Agent } from "@/agent/agent"
 
 type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
 
@@ -462,11 +463,16 @@ function unsupportedParts(msgs: ModelMessage[], model: Provider.Model): ModelMes
   })
 }
 
-export function message(msgs: ModelMessage[], model: Provider.Model, options: Record<string, unknown>) {
+export function message(
+  msgs: ModelMessage[],
+  model: Provider.Model,
+  options: Record<string, unknown>,
+  agent?: Agent.Info,
+) {
   msgs = unsupportedParts(msgs, model)
   msgs = normalizeMessages(msgs, model, options)
   if (
-    CacheToggle.enabled &&
+    CacheToggle.resolve(agent, msgs.length) &&
     (model.providerID === "anthropic" ||
       model.providerID === "google-vertex-anthropic" ||
       model.providerID === "alibaba-cn" ||

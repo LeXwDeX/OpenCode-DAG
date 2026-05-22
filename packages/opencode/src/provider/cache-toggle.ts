@@ -1,32 +1,74 @@
 /**
  * Runtime toggle for explicit prompt caching (cache_control markers).
  *
- * Default: enabled. When enabled, `applyCaching` in transform.ts adds
- * `cache_control: { type: "ephemeral" }` to system / trailing messages
- * so that providers supporting explicit context caching (Anthropic,
- * DashScope / alibaba-cn, OpenRouter, Bedrock, Copilot …) can reuse
- * prefix tokens across turns.
+ * Two-level control:
+ *   1. Global toggle (master switch) — controlled via `/cache` command.
+ *      When disabled, caching is off for ALL agents regardless of per-agent config.
+ *   2. Per-agent config (`cache` field in agent definition):
+ *      - `true`  → always cache (if global is enabled)
+ *      - `false` → never cache
+ *      - `"auto"` or undefined → heuristic decision
  *
- * Toggle at runtime with the `/cache` command.
+ * Auto heuristics:
+ *   - Subagent with steps ≤ 3: skip (short-lived, cache won't be reused)
+ *   - Subagent with steps > 3: cache (multi-turn iteration)
+ *   - Primary agent with < 4 messages: skip (prefix too short)
+ *   - Primary agent with ≥ 4 messages: cache (long conversation, prefix reuse)
  */
 
-let _enabled = true
+import type { Agent } from "@/agent/agent"
+
+let _globalEnabled = true
 
 export const CacheToggle = {
+  /** Global master switch */
   get enabled() {
-    return _enabled
+    return _globalEnabled
   },
 
   enable() {
-    _enabled = true
+    _globalEnabled = true
   },
 
   disable() {
-    _enabled = false
+    _globalEnabled = false
   },
 
   toggle(): boolean {
-    _enabled = !_enabled
-    return _enabled
+    _globalEnabled = !_globalEnabled
+    return _globalEnabled
+  },
+
+  /**
+   * Resolve whether to apply caching for a specific agent call.
+   *
+   * @param agent - The agent info (mode, steps, cache config)
+   * @param messageCount - Number of messages in the conversation
+   * @returns true if cache_control markers should be added
+   */
+  resolve(agent: Agent.Info | undefined, messageCount: number): boolean {
+    // Global master switch
+    if (!_globalEnabled) return false
+
+    // No agent info → default to enabled
+    if (!agent) return true
+
+    // Per-agent explicit config
+    const agentCache = agent.cache
+    if (agentCache === true) return true
+    if (agentCache === false) return false
+
+    // Auto heuristics (agentCache === "auto" or undefined)
+    const isSubagent = agent.mode === "subagent"
+    const steps = agent.steps ?? 0
+
+    if (isSubagent) {
+      // Short-lived subagents: skip caching (won't be reused)
+      // Long-running subagents: cache (multi-turn iteration)
+      return steps > 3
+    }
+
+    // Primary/all agents: cache if conversation is long enough
+    return messageCount >= 4
   },
 }

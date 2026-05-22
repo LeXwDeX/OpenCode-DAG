@@ -371,6 +371,7 @@ const live: Layer.Layer<
           providerOptions: params.options,
           headers: requestHeaders,
           abort: input.abort,
+          agent: input.agent,
         })
         if (native.type === "supported") {
           yield* Effect.logInfo("llm runtime selected").pipe(
@@ -452,7 +453,7 @@ const live: Layer.Layer<
                 async transformParams(args) {
                   if (args.type === "stream") {
                     // @ts-expect-error
-                    args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options)
+                    args.params.prompt = ProviderTransform.message(args.params.prompt, input.model, options, input.agent)
                   }
                   return args.params
                 },

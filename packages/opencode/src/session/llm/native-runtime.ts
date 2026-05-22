@@ -9,6 +9,7 @@ import * as Stream from "effect/Stream"
 import { tool as nativeTool, ToolFailure, type JsonSchema, type LLMEvent } from "@opencode-ai/llm"
 import type { LLMClientShape } from "@opencode-ai/llm/route"
 import { LLMNative } from "./native-request"
+import type { Agent } from "@/agent/agent"
 
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
@@ -34,6 +35,7 @@ type StreamInput = {
   readonly providerOptions?: Record<string, any>
   readonly headers: Record<string, string>
   readonly abort: AbortSignal
+  readonly agent?: Agent.Info
 }
 
 export function status(input: Pick<StreamInput, "model" | "provider" | "auth">): RuntimeStatus {
@@ -64,7 +66,7 @@ export function stream(input: StreamInput): StreamResult {
         apiKey: current.apiKey,
         baseURL: current.baseURL,
         system: input.isOpenaiOauth ? [] : input.system,
-        messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}),
+        messages: ProviderTransform.message(input.messages, input.model, input.providerOptions ?? {}, input.agent),
         toolChoice: input.toolChoice,
         temperature: input.temperature,
         topP: input.topP,

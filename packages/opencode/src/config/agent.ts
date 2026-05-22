@@ -48,6 +48,10 @@ const AgentSchema = Schema.StructWithRest(
       description:
         "Inject the current TODO list as an ephemeral system-reminder before each LLM call so long sessions don't drift away from the plan (default: true). Set to false to opt out per-agent.",
     }),
+    cache: Schema.optional(Schema.Union([Schema.Boolean, Schema.Literals(["auto"])])).annotate({
+      description:
+        "Control explicit prompt caching (cache_control markers) for this agent. true = always cache, false = never cache, 'auto' = heuristic decision based on conversation length and agent type (default: 'auto').",
+    }),
   }),
   [Schema.Record(Schema.String, Schema.Any)],
 )
@@ -70,6 +74,7 @@ const KNOWN_KEYS = new Set([
   "disable",
   "tools",
   "todo_reminder",
+  "cache",
 ])
 
 // Post-parse normalisation:
