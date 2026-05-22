@@ -41,7 +41,9 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
         .finishAuth(ctx.params.name, ctx.payload.code)
         .pipe(
           Effect.catchTag("MCP.NotFoundError", (error) =>
-            Effect.fail(new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` })),
+            Effect.fail(
+              new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` }),
+            ),
           ),
         )
     })
@@ -75,7 +77,9 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
         .connect(ctx.params.name)
         .pipe(
           Effect.catchTag("MCP.NotFoundError", (error) =>
-            Effect.fail(new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` })),
+            Effect.fail(
+              new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` }),
+            ),
           ),
         )
       return true
@@ -86,7 +90,9 @@ export const mcpHandlers = HttpApiBuilder.group(InstanceHttpApi, "mcp", (handler
         .disconnect(ctx.params.name)
         .pipe(
           Effect.catchTag("MCP.NotFoundError", (error) =>
-            Effect.fail(new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` })),
+            Effect.fail(
+              new McpServerNotFoundError({ name: error.name, message: `MCP server not found: ${error.name}` }),
+            ),
           ),
         )
       return true

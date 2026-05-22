@@ -257,7 +257,9 @@ export interface Interface {
     clientName: string,
     resourceUri: string,
   ) => Effect.Effect<Awaited<ReturnType<MCPClient["readResource"]>> | undefined>
-  readonly startAuth: (mcpName: string) => Effect.Effect<{ authorizationUrl: string; oauthState: string }, NotFoundError>
+  readonly startAuth: (
+    mcpName: string,
+  ) => Effect.Effect<{ authorizationUrl: string; oauthState: string }, NotFoundError>
   readonly authenticate: (mcpName: string) => Effect.Effect<Status, NotFoundError>
   readonly finishAuth: (mcpName: string, authorizationCode: string) => Effect.Effect<Status, NotFoundError>
   readonly removeAuth: (mcpName: string) => Effect.Effect<void>
