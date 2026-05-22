@@ -206,7 +206,13 @@ const AnthropicEvent = Schema.Struct({
   content_block: Schema.optional(AnthropicStreamBlock),
   delta: Schema.optional(AnthropicStreamDelta),
   usage: Schema.optional(AnthropicUsage),
-  error: Schema.optional(Schema.Struct({ type: Schema.String, message: Schema.String })),
+  // `type` and `message` are both required per Anthropic's spec, but
+  // OpenAI-compatible proxies and gateway translations occasionally drop one
+  // or the other; mark them optional so a partial payload still parses and
+  // the parser can fall back to whichever field is populated.
+  error: Schema.optional(
+    Schema.Struct({ type: Schema.optional(Schema.String), message: Schema.optional(Schema.String) }),
+  ),
 })
 type AnthropicEvent = Schema.Schema.Type<typeof AnthropicEvent>
 
@@ -701,9 +707,18 @@ const onMessageDelta = (state: ParserState, event: AnthropicEvent): StepResult =
   return [{ ...state, lifecycle, usage }, events]
 }
 
+// Prefix `error.type` so overloads, rate limits, and quota errors are visible
+// even when the provider message is generic or empty.
+const providerErrorMessage = (event: AnthropicEvent): string => {
+  const type = event.error?.type
+  const message = event.error?.message
+  if (type && message) return `${type}: ${message}`
+  return message || type || "Anthropic Messages stream error"
+}
+
 const onError = (state: ParserState, event: AnthropicEvent): StepResult => [
   state,
-  [LLMEvent.providerError({ message: event.error?.message ?? "Anthropic Messages stream error" })],
+  [LLMEvent.providerError({ message: providerErrorMessage(event) })],
 ]
 
 const step = (state: ParserState, event: AnthropicEvent) => {

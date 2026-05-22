@@ -176,21 +176,37 @@ const OpenAIResponsesStreamItem = Schema.Struct({
 })
 type OpenAIResponsesStreamItem = Schema.Schema.Type<typeof OpenAIResponsesStreamItem>
 
+// OpenAI Responses surfaces provider failures in two related shapes. The
+// streaming `error` event carries the details at the top level
+// (`{ type: "error", code, message, param, sequence_number }`), while
+// `response.failed` carries them under `response.error`. We capture both so
+// the parser can surface a useful provider-error message in either path.
+const OpenAIResponsesErrorPayload = Schema.Struct({
+  code: optionalNull(Schema.String),
+  message: optionalNull(Schema.String),
+  param: optionalNull(Schema.String),
+})
+
 const OpenAIResponsesEvent = Schema.Struct({
   type: Schema.String,
   delta: Schema.optional(Schema.String),
   item_id: Schema.optional(Schema.String),
   item: Schema.optional(OpenAIResponsesStreamItem),
   response: Schema.optional(
-    Schema.Struct({
-      id: Schema.optional(Schema.String),
-      service_tier: Schema.optional(Schema.String),
-      incomplete_details: optionalNull(Schema.Struct({ reason: Schema.String })),
-      usage: optionalNull(OpenAIResponsesUsage),
-    }),
+    Schema.StructWithRest(
+      Schema.Struct({
+        id: Schema.optional(Schema.String),
+        service_tier: optionalNull(Schema.String),
+        incomplete_details: optionalNull(Schema.Struct({ reason: Schema.String })),
+        usage: optionalNull(OpenAIResponsesUsage),
+        error: optionalNull(OpenAIResponsesErrorPayload),
+      }),
+      [Schema.Record(Schema.String, Schema.Unknown)],
+    ),
   ),
   code: Schema.optional(Schema.String),
   message: Schema.optional(Schema.String),
+  param: Schema.optional(Schema.String),
 })
 type OpenAIResponsesEvent = Schema.Schema.Type<typeof OpenAIResponsesEvent>
 
@@ -634,14 +650,27 @@ const onResponseFinish = (state: ParserState, event: OpenAIResponsesEvent): Step
   return [{ ...state, lifecycle }, events]
 }
 
+// Build a single human-readable message from whatever the provider supplied.
+// When both code and message are present, prefix the code so consumers see
+// the failure mode (e.g. `rate_limit_exceeded: Slow down`) instead of just
+// the bare message — production rate limits and context-length failures used
+// to be indistinguishable from generic stream drops.
+const providerErrorMessage = (event: OpenAIResponsesEvent, fallback: string): string => {
+  const nested = event.response?.error ?? undefined
+  const message = event.message || nested?.message || undefined
+  const code = event.code || nested?.code || undefined
+  if (message && code) return `${code}: ${message}`
+  return message || code || fallback
+}
+
 const onResponseFailed = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
   state,
-  [LLMEvent.providerError({ message: event.message ?? event.code ?? "OpenAI Responses response failed" })],
+  [LLMEvent.providerError({ message: providerErrorMessage(event, "OpenAI Responses response failed") })],
 ]
 
 const onError = (state: ParserState, event: OpenAIResponsesEvent): StepResult => [
   state,
-  [LLMEvent.providerError({ message: event.message ?? event.code ?? "OpenAI Responses stream error" })],
+  [LLMEvent.providerError({ message: providerErrorMessage(event, "OpenAI Responses stream error") })],
 ]
 
 const step = (state: ParserState, event: OpenAIResponsesEvent) => {
