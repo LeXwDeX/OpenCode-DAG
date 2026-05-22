@@ -128,7 +128,19 @@ export const layer = Layer.effect(
       )
 
       const updateResult = yield* goal.updateAfterJudge(sessionID, verdict.verdict, verdict.reason, verdict.parseFailed)
-      if (!updateResult || !updateResult.shouldContinue) return
+      if (!updateResult) return
+
+      if (!updateResult.shouldContinue) {
+        // Inject visible completion message when goal is achieved
+        if (verdict.verdict === "done") {
+          yield* promptSvc.prompt({
+            sessionID,
+            noReply: true,
+            parts: [{ type: "text", text: updateResult.message }],
+          }).pipe(Effect.ignore)
+        }
+        return
+      }
 
       const currentStatus = yield* status.get(sessionID)
       if (currentStatus.type !== "idle") {
@@ -148,7 +160,7 @@ export const layer = Layer.effect(
 
       yield* promptSvc.prompt({
         sessionID,
-        parts: [{ type: "text", text: continuationText }],
+        parts: [{ type: "text", text: continuationText, ignored: true }],
       })
 
       yield* bus.publish(GoalEvent.Event.Continued, {

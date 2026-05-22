@@ -58,6 +58,7 @@ import { SessionRunState } from "./run-state"
 import { EffectBridge } from "@/effect/bridge"
 import { Todo } from "./todo"
 import { Goal } from "@/goal/goal"
+import { CacheToggle } from "@/provider/cache-toggle"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -2298,6 +2299,53 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           yield* sessions.updatePart(announcePart)
         }
         effectiveArguments = result.text
+      }
+
+      // /cache toggles explicit prompt caching (cache_control markers).
+      // Arguments: "on" | "off" | "toggle" | "" (default: toggle).
+      if (input.command === "cache") {
+        const arg = input.arguments.trim().toLowerCase()
+        let newState: boolean
+        if (arg === "on" || arg === "enable" || arg === "enabled") {
+          CacheToggle.enable()
+          newState = true
+        } else if (arg === "off" || arg === "disable" || arg === "disabled") {
+          CacheToggle.disable()
+          newState = false
+        } else {
+          newState = CacheToggle.toggle()
+        }
+        const label = newState ? "✅ 已开启" : "⛔ 已关闭"
+        const text = `⚙ 显式上下文缓存 (prompt cache)：${label}`
+        const agentName = input.agent ?? (yield* agents.defaultAgent())
+        const model = input.model
+          ? Provider.parseModel(input.model)
+          : yield* currentModel(input.sessionID)
+        const userMsg: MessageV2.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          sessionID: input.sessionID,
+          role: "user",
+          time: { created: Date.now() },
+          agent: agentName,
+          model: { providerID: model.providerID, modelID: model.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        const part: MessageV2.TextPart = {
+          type: "text",
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          text,
+          ignored: true,
+        }
+        yield* sessions.updatePart(part)
+        yield* bus.publish(Command.Event.Executed, {
+          name: input.command,
+          sessionID: input.sessionID,
+          arguments: input.arguments,
+          messageID: userMsg.id,
+        })
+        return { info: userMsg, parts: [part] } satisfies MessageV2.WithParts
       }
 
       const cmd = yield* commands.get(input.command)
