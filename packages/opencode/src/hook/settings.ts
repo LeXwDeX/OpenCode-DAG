@@ -58,6 +58,7 @@ import { buildAgentTools } from "./agent-tools"
 import { SessionHooks } from "./session-hooks"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
+import { buildForkHooks } from "./extensions" // [FORK:hook-ext]
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -92,7 +93,7 @@ export type HookEvent =
   | "CwdChanged"
   | "FileChanged"
 
-interface HookCommand {
+export interface HookCommand {
   /**
    * Hook execution kind. All 5 types fully implemented:
    * - `command`: shell command via stdin/stdout JSON envelope
@@ -151,7 +152,7 @@ interface HookMatcher {
   hooks: HookCommand[]
 }
 
-interface Settings {
+export interface Settings {
   hooks?: Partial<Record<HookEvent, HookMatcher[]>>
   /**
    * WP-6B placeholder. CC / VS Code-style "workspace trust" flow does not yet
@@ -399,6 +400,46 @@ export interface TriggerResult {
   permissionDecisionReason?: string
   /** Last hook's updatedInput wins (CC behavior) */
   updatedInput?: Record<string, unknown>
+}
+
+// ── [FORK:hook-ext] Extension callback interface ────────────────
+//
+// All fork-specific hook processing plugs in here. settings.ts calls
+// these at well-defined points; implementations live in hook/extensions/
+// and are wired in the Effect layer.
+//
+// INVARIANT: Every field is optional. When undefined, behavior is
+// identical to upstream. This ensures forward-compat — if upstream
+// adds new hook features, they flow through without touching extensions.
+export interface ForkHooks {
+  /**
+   * Called BEFORE runEntry() for each matched hook entry.
+   * Return false to skip this entry (e.g., `if` condition not met).
+   * Return true (or undefined) to proceed.
+   *
+   * INTENT: Centralized pre-dispatch filtering for condition-filter,
+   * future rate-limiting, logging, etc.
+   */
+  readonly beforeRunEntry?: (
+    entry: HookCommand,
+    envelope: Record<string, unknown>,
+    event: HookEvent,
+  ) => boolean
+
+  /**
+   * Called AFTER runEntry() for each executed hook entry.
+   * Receives the handler result. Used for post-dispatch tracking
+   * (batch counting, metrics, etc.).
+   *
+   * INTENT: Centralized post-dispatch observation. Never modifies
+   * the result — that's the trigger reducer's job.
+   */
+  readonly afterRunEntry?: (
+    entry: HookCommand,
+    envelope: Record<string, unknown>,
+    event: HookEvent,
+    result: { json?: HookJSONOutput; exitBlock?: string },
+  ) => void
 }
 
 /**
@@ -1301,6 +1342,12 @@ export const layer = Layer.effect(
       agent: makeAgentHandler(provider, auth, spawner, fs),
     }
 
+    // [FORK:hook-ext] Assemble fork middleware — wired from hook/extensions/index.ts
+    // When undefined, trigger() behaves identically to upstream.
+    const forkHooks: ForkHooks | undefined = buildForkHooks
+      ? buildForkHooks({ sessionHooks })
+      : undefined
+
     /**
      * Execute a single hook entry. Never throws. Returns the parsed JSON
      * output + a synthetic blocking signal for exit-code-2 protocol.
@@ -1414,7 +1461,13 @@ export const layer = Layer.effect(
           )
             continue
 
+          // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
+          if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
+
           const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false)
+
+          // [FORK:hook-ext] Post-dispatch observation — never modifies result
+          forkHooks?.afterRunEntry?.(entry, envelope, payload.event, { json, exitBlock })
 
           // Exit-code-2 block beats stdout decision
           if (exitBlock) {
