@@ -48,6 +48,12 @@ function sdkKey(npm: string): string | undefined {
       return "gateway"
     case "@openrouter/ai-sdk-provider":
       return "openrouter"
+    case "@ai-sdk/alibaba":
+      // @ai-sdk/alibaba reads from providerOptions.alibaba.cacheControl.
+      // Without this mapping, the remap logic would rename "alibaba" →
+      // model.providerID (e.g. "alibaba-cn"), destroying the key the
+      // SDK actually reads.
+      return "alibaba"
     case "ai-gateway-provider":
       // ai-gateway-provider/unified wraps createOpenAICompatible({ name: "Unified" }),
       // and @ai-sdk/openai-compatible parses compatibleOptions from one of
@@ -400,10 +406,32 @@ function applyCaching(msgs: ModelMessage[], model: Provider.Model): ModelMessage
   }
 
   for (const msg of unique([...system, ...final])) {
+    // Providers whose SDK reads cache_control from the message-level
+    // providerOptions (Anthropic, Bedrock, Anthropic-compatible).
     const useMessageLevelOptions =
       model.providerID === "anthropic" ||
+      model.providerID === "google-vertex-anthropic" ||
       model.providerID.includes("bedrock") ||
-      model.api.npm === "@ai-sdk/amazon-bedrock"
+      model.api.npm === "@ai-sdk/amazon-bedrock" ||
+      model.api.npm === "@ai-sdk/anthropic" ||
+      model.api.npm === "@ai-sdk/google-vertex/anthropic"
+
+    // System messages always have string content (AI SDK enforces
+    // `content: z.string()` for SystemModelMessage). Providers like
+    // DashScope/Bailian via @ai-sdk/openai-compatible require
+    // `cache_control` on a content PART inside an array, not at the
+    // message level. Convert string → array for content-level providers
+    // so the SDK forwards cache_control into the HTTP request body.
+    //
+    // Without this, @ai-sdk/openai-compatible spreads message-level
+    // providerOptions as a top-level field on the message object:
+    //   { role: "system", content: "text", cache_control: {...} }  ← WRONG
+    // DashScope expects:
+    //   { role: "system", content: [{ type: "text", text: "...", cache_control: {...} }] }
+    if (!useMessageLevelOptions && msg.role === "system" && typeof msg.content === "string") {
+      msg.content = [{ type: "text" as const, text: msg.content }] as any
+    }
+
     const shouldUseContentOptions = !useMessageLevelOptions && Array.isArray(msg.content) && msg.content.length > 0
 
     if (shouldUseContentOptions) {
