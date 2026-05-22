@@ -101,7 +101,9 @@ function paid(providers: Awaited<ReturnType<typeof list>>) {
   return Object.values(item.models).filter((model) => model.cost.input > 0).length
 }
 
-const it = testEffect(Provider.defaultLayer)
+const languageBaseURL = (language: unknown) => (language as { config: { baseURL: string } }).config.baseURL
+
+const it = testEffect(Layer.mergeAll(Provider.defaultLayer, Env.defaultLayer, Plugin.defaultLayer))
 const experimentalModels = testEffect(providerLayer({ enableExperimentalModels: true }))
 
 const alphaProviderConfig = {
@@ -2117,6 +2119,84 @@ test("model variants can be customized via config", async () => {
       const model = providers[ProviderID.anthropic].models["claude-sonnet-4-20250514"]
       expect(model.variants!["high"]).toBeDefined()
       expect(model.variants!["high"].thinking.budgetTokens).toBe(20000)
+    },
+  })
+})
+
+it.instance("Google Vertex: uses REP endpoint for Claude continental multi-regions", () =>
+  Effect.gen(function* () {
+    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* set("VERTEX_LOCATION", "eu")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderID.make("google-vertex"),
+      ModelID.make("claude-sonnet-4-6@default"),
+    )
+    const language = yield* provider.getLanguage(model)
+    expect(languageBaseURL(language)).toBe(
+      "https://aiplatform.eu.rep.googleapis.com/v1/projects/test-project/locations/eu/publishers/anthropic/models",
+    )
+  }),
+)
+
+it.instance("Google Vertex Anthropic: uses REP endpoint for continental multi-regions", () =>
+  Effect.gen(function* () {
+    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* set("VERTEX_LOCATION", "us")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderID.make("google-vertex-anthropic"),
+      ModelID.make("claude-sonnet-4-6@default"),
+    )
+    const language = yield* provider.getLanguage(model)
+    expect(languageBaseURL(language)).toBe(
+      "https://aiplatform.us.rep.googleapis.com/v1/projects/test-project/locations/us/publishers/anthropic/models",
+    )
+  }),
+)
+
+it.instance("Google Vertex: keeps regional Claude endpoints unchanged", () =>
+  Effect.gen(function* () {
+    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* set("VERTEX_LOCATION", "europe-west1")
+    const provider = yield* Provider.Service
+    const model = yield* provider.getModel(
+      ProviderID.make("google-vertex"),
+      ModelID.make("claude-sonnet-4-6@default"),
+    )
+    const language = yield* provider.getLanguage(model)
+    expect(languageBaseURL(language)).toBe(
+      "https://europe-west1-aiplatform.googleapis.com/v1/projects/test-project/locations/europe-west1/publishers/anthropic/models",
+    )
+  }),
+)
+
+it.instance("cloudflare-ai-gateway loads with env variables", () =>
+  Effect.gen(function* () {
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const providers = yield* list
+    expect(providers[ProviderID.make("cloudflare-ai-gateway")]).toBeDefined()
+  }),
+)
+
+it.instance(
+  "cloudflare-ai-gateway forwards config metadata options",
+  Effect.gen(function* () {
+    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
+    const providers = yield* list
+    expect(providers[ProviderID.make("cloudflare-ai-gateway")]).toBeDefined()
+    expect(providers[ProviderID.make("cloudflare-ai-gateway")].options.metadata).toEqual({
+      invoked_by: "test",
+      project: "opencode",
+    })
+  }),
+  {
+    config: {
+      provider: { "cloudflare-ai-gateway": { options: { metadata: { invoked_by: "test", project: "opencode" } } } },
     },
   })
 })
