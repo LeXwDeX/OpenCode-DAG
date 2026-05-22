@@ -28,6 +28,19 @@ const request = LLM.request({
 
 const configEnv = (env: Record<string, string>) => Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })))
 
+type OpenAIToolOutput = Extract<
+  OpenAIResponses.OpenAIResponsesBody["input"][number],
+  { readonly type: "function_call_output" }
+>
+
+const expectToolOutput = (body: OpenAIResponses.OpenAIResponsesBody): OpenAIToolOutput => {
+  const output = body.input.find(
+    (item): item is OpenAIToolOutput => "type" in item && item.type === "function_call_output",
+  )
+  expect(output).toBeDefined()
+  return output!
+}
+
 describe("OpenAI Responses route", () => {
   it.effect("prepares OpenAI Responses target", () =>
     Effect.gen(function* () {
@@ -269,6 +282,84 @@ describe("OpenAI Responses route", () => {
         ],
         stream: true,
       })
+    }),
+  )
+
+  // Regression: screenshot/read tool results must stay structured so base64
+  // image data is not JSON-stringified into `function_call_output.output`.
+  it.effect("lowers image tool-result content as structured input_image items", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          id: "req_tool_result_image",
+          model,
+          messages: [
+            Message.user("Show me the screenshot."),
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "read", input: { filePath: "shot.png" } })]),
+            Message.tool({
+              id: "call_1",
+              name: "read",
+              resultType: "content",
+              result: [
+                { type: "text", text: "Image read successfully" },
+                { type: "media", mediaType: "image/png", data: "AAECAw==" },
+              ],
+            }),
+          ],
+        }),
+      )
+
+      expect(expectToolOutput(prepared.body).output).toEqual([
+        { type: "input_text", text: "Image read successfully" },
+        { type: "input_image", image_url: "data:image/png;base64,AAECAw==" },
+      ])
+    }),
+  )
+
+  it.effect("lowers single-image tool-result content as structured input_image array", () =>
+    Effect.gen(function* () {
+      const prepared = yield* LLMClient.prepare<OpenAIResponses.OpenAIResponsesBody>(
+        LLM.request({
+          id: "req_tool_result_image_only",
+          model,
+          messages: [
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "screenshot", input: {} })]),
+            Message.tool({
+              id: "call_1",
+              name: "screenshot",
+              resultType: "content",
+              result: [{ type: "media", mediaType: "image/png", data: "AAECAw==" }],
+            }),
+          ],
+        }),
+      )
+
+      expect(expectToolOutput(prepared.body).output).toEqual([
+        { type: "input_image", image_url: "data:image/png;base64,AAECAw==" },
+      ])
+    }),
+  )
+
+  it.effect("rejects non-image media in tool-result content with a clear error", () =>
+    Effect.gen(function* () {
+      const error = yield* LLMClient.prepare(
+        LLM.request({
+          id: "req_tool_result_unsupported_media",
+          model,
+          messages: [
+            Message.assistant([ToolCallPart.make({ id: "call_1", name: "fetch", input: {} })]),
+            Message.tool({
+              id: "call_1",
+              name: "fetch",
+              resultType: "content",
+              result: [{ type: "media", mediaType: "audio/mpeg", data: "AAECAw==" }],
+            }),
+          ],
+        }),
+      ).pipe(Effect.flip)
+
+      expect(error.message).toContain("OpenAI Responses")
+      expect(error.message).toContain("audio/mpeg")
     }),
   )
 

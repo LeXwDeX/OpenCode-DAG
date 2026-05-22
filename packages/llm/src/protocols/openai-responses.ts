@@ -15,6 +15,8 @@ import {
   type TextPart,
   type ToolCallPart,
   type ToolDefinition,
+  type ToolResultContentPart,
+  type ToolResultPart,
 } from "../schema"
 import { JsonObject, optionalArray, optionalNull, ProviderShared } from "./shared"
 import { OpenAIOptions } from "./utils/openai-options"
@@ -50,6 +52,19 @@ const OpenAIResponsesReasoningItem = Schema.Struct({
   encrypted_content: optionalNull(Schema.String),
 })
 
+// `function_call_output.output` accepts either a plain string or an ordered
+// array of content items so tools can return images in addition to text.
+// https://platform.openai.com/docs/api-reference/responses/object
+const OpenAIResponsesFunctionCallOutputContent = Schema.Union([
+  OpenAIResponsesInputText,
+  OpenAIResponsesInputImage,
+])
+
+const OpenAIResponsesFunctionCallOutput = Schema.Union([
+  Schema.String,
+  Schema.Array(OpenAIResponsesFunctionCallOutputContent),
+])
+
 const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({ role: Schema.tag("system"), content: Schema.Union([Schema.String, Schema.Array(OpenAIResponsesInputText)]) }),
   Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputText) }),
@@ -64,7 +79,7 @@ const OpenAIResponsesInputItem = Schema.Union([
   Schema.Struct({
     type: Schema.tag("function_call_output"),
     call_id: Schema.String,
-    output: Schema.String,
+    output: OpenAIResponsesFunctionCallOutput,
   }),
 ])
 type OpenAIResponsesInputItem = Schema.Schema.Type<typeof OpenAIResponsesInputItem>
@@ -242,6 +257,26 @@ const lowerUserContent = Effect.fn("OpenAIResponses.lowerUserContent")(function*
   return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text", "media"])
 })
 
+// Tool results may carry structured text/images. Keep media as provider-native
+// content instead of JSON-stringifying base64 into a prompt string.
+const lowerToolResultContentItem = Effect.fn("OpenAIResponses.lowerToolResultContentItem")(function* (
+  item: ToolResultContentPart,
+) {
+  if (item.type === "text") return { type: "input_text" as const, text: item.text }
+  if (item.mediaType.startsWith("image/"))
+    return {
+      type: "input_image" as const,
+      image_url: ProviderShared.mediaDataUrl(item),
+    }
+  return yield* invalid(`OpenAI Responses tool-result media content only supports images, got ${item.mediaType}`)
+})
+
+const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")(function* (part: ToolResultPart) {
+  // Text/json/error results are encoded as a plain string for backward
+  // compatibility with existing cassettes and provider expectations.
+  if (part.result.type !== "content") return ProviderShared.toolResultText(part)
+  return yield* Effect.forEach(part.result.value, lowerToolResultContentItem)
+})
 
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
   const system: OpenAIResponsesInputItem[] =
@@ -297,7 +332,11 @@ const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (requ
     for (const part of message.content) {
       if (!ProviderShared.supportsContent(part, ["tool-result"]))
         return yield* ProviderShared.unsupportedContent("OpenAI Responses", "tool", ["tool-result"])
-      input.push({ type: "function_call_output", call_id: part.id, output: ProviderShared.toolResultText(part) })
+      input.push({
+        type: "function_call_output",
+        call_id: part.id,
+        output: yield* lowerToolResultOutput(part),
+      })
     }
   }
 
