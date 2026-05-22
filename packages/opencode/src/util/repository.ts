@@ -204,7 +204,8 @@ export function validateRepositoryBranch(branch: string) {
   if (!/^[A-Za-z0-9/_.-]+$/.test(branch) || branch.startsWith("-") || branch.includes("..")) {
     throw new InvalidRepositoryBranchError({
       branch,
-      message: "Branch must contain only alphanumeric characters, /, _, ., and -, and cannot start with - or contain ..",
+      message:
+        "Branch must contain only alphanumeric characters, /, _, ., and -, and cannot start with - or contain ..",
     })
   }
 }
