@@ -25,7 +25,7 @@ import { DialogProvider, useDialog } from "@tui/ui/dialog"
 import { DialogProvider as DialogProviderList } from "@tui/component/dialog-provider"
 import { ErrorComponent } from "@tui/component/error-component"
 import { PluginRouteMissing } from "@tui/component/plugin-route-missing"
-import { ProjectProvider } from "@tui/context/project"
+import { ProjectProvider, useProject } from "@tui/context/project"
 import { EditorContextProvider } from "@tui/context/editor"
 import { useEvent } from "@tui/context/event"
 import { SDKProvider, useSDK } from "@tui/context/sdk"
@@ -282,6 +282,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   const themeState = useTheme()
   const { theme, mode, setMode, locked, lock, unlock } = themeState
   const sync = useSync()
+  const project = useProject()
   const exit = useExit()
   const promptRef = usePromptRef()
   const routes: RouteMap = new Map()
@@ -452,6 +453,13 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
   )
 
   const connected = useConnected()
+  const currentWorktreeWorkspace = createMemo(() => {
+    const workspaceID = project.workspace.current()
+    if (!workspaceID) return
+    const workspace = project.workspace.get(workspaceID)
+    if (workspace?.type !== "worktree" || !workspace.directory) return
+    return workspace
+  })
   const appCommands = createMemo(() =>
     [
       {
@@ -485,6 +493,20 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
           route.navigate({
             type: "home",
           })
+          dialog.clear()
+        },
+      },
+      {
+        name: "workspace.copy_path",
+        title: "Copy worktree path",
+        category: "Workspace",
+        enabled: () => currentWorktreeWorkspace() !== undefined,
+        run: async () => {
+          const workspace = currentWorktreeWorkspace()
+          if (!workspace?.directory) return
+          await Clipboard.copy(workspace.directory)
+            .then(() => toast.show({ message: "Copied worktree path", variant: "info" }))
+            .catch(toast.error)
           dialog.clear()
         },
       },
