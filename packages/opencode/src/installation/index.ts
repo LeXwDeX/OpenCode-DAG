@@ -149,23 +149,26 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
       return `Upgrade failed for ${method}.`
     }
 
-    const upgradeCurl = Effect.fnUntraced(function* (target: string) {
-      const response = yield* httpOk.execute(HttpClientRequest.get("https://opencode.ai/install"))
-      const body = yield* response.text
-      const bodyBytes = new TextEncoder().encode(body)
-      const result = yield* appProcess.run(
-        ChildProcess.make("bash", [], {
-          stdin: Stream.make(bodyBytes),
-          env: { VERSION: target },
-          extendEnv: true,
-        }),
-      )
-      return {
-        code: result.exitCode,
-        stdout: result.stdout.toString("utf8"),
-        stderr: result.stderr.toString("utf8"),
-      }
-    }, Effect.mapError(() => new UpgradeFailedError({ stderr: upgradeFailure("curl") })))
+    const upgradeCurl = Effect.fnUntraced(
+      function* (target: string) {
+        const response = yield* httpOk.execute(HttpClientRequest.get("https://opencode.ai/install"))
+        const body = yield* response.text
+        const bodyBytes = new TextEncoder().encode(body)
+        const result = yield* appProcess.run(
+          ChildProcess.make("bash", [], {
+            stdin: Stream.make(bodyBytes),
+            env: { VERSION: target },
+            extendEnv: true,
+          }),
+        )
+        return {
+          code: result.exitCode,
+          stdout: result.stdout.toString("utf8"),
+          stderr: result.stderr.toString("utf8"),
+        }
+      },
+      Effect.mapError(() => new UpgradeFailedError({ stderr: upgradeFailure("curl") })),
+    )
 
     const result: Interface = {
       info: Effect.fn("Installation.info")(function* () {
