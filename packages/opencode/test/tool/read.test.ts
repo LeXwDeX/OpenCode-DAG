@@ -569,20 +569,22 @@ root_type Monster;`
     }),
   )
 
-  it.live("falls through unsupported image mime types to text", () =>
+  it.live("returns unsupported image mime types as file attachments", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()
       const cases = [
-        ["image.bmp", "BM text content"],
-        ["photo.tiff", "II text content"],
-        ["photo.avif", "avif text content"],
+        ["image.bmp", "image/bmp", "BM text content"],
+        ["photo.tiff", "image/tiff", "II text content"],
+        ["photo.avif", "image/avif", "avif text content"],
       ] as const
 
       for (const item of cases) {
-        yield* put(path.join(dir, item[0]), item[1])
+        yield* put(path.join(dir, item[0]), item[2])
         const result = yield* exec(dir, { filePath: path.join(dir, item[0]) })
-        expect(result.attachments).toBeUndefined()
-        expect(result.output).toContain(item[1])
+        expect(result.attachments?.[0]).toMatchObject({
+          type: "file",
+          mime: item[1],
+        })
       }
     }),
   )

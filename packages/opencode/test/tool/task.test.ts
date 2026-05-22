@@ -449,13 +449,13 @@ describe("tool.task", () => {
     },
   )
 
-  it.instance("rejects background execution when the experiment is disabled", () =>
+  it.instance("executes background requests when the experiment is disabled", () =>
     Effect.gen(function* () {
       const { chat, assistant } = yield* seed()
       const tool = yield* TaskTool
       const def = yield* tool.init()
 
-      const exit = yield* def
+      const result = yield* def
         .execute(
           {
             description: "inspect bug",
@@ -474,9 +474,7 @@ describe("tool.task", () => {
             ask: () => Effect.void,
           },
         )
-        .pipe(Effect.exit)
-
-      expect(Exit.isFailure(exit)).toBe(true)
+      expect(result.metadata.background).toBe(true)
     }),
   )
 

@@ -533,42 +533,51 @@ it.instance("keybinds accept OpenTUI binding specs", () =>
   ),
 )
 
-winIt("defaults Ctrl+Z to input undo on Windows", () =>
+it.instance("defaults Ctrl+Z to input undo on Windows", () =>
   withCleanState(
-    Effect.gen(function* () {
-      const test = yield* TestInstance
-      const config = yield* getTuiConfig(test.directory)
-      expect(config.keybinds.get("terminal.suspend")).toEqual([])
-      expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+z,ctrl+-,super+z")
-    }),
+    withPlatform(
+      "win32",
+      Effect.gen(function* () {
+        const test = yield* TestInstance
+        const config = yield* getTuiConfig(test.directory)
+        expect(config.keybinds.get("terminal.suspend")).toEqual([])
+        expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+z,ctrl+-,super+z")
+      }),
+    ),
   ),
 )
 
-winIt("keeps explicit input undo overrides on Windows", () =>
+it.instance("keeps explicit input undo overrides on Windows", () =>
   withCleanState(
-    Effect.gen(function* () {
-      const fs = yield* AppFileSystem.Service
-      const test = yield* TestInstance
-      yield* fs.writeJson(path.join(test.directory, "tui.json"), { keybinds: { input_undo: "ctrl+y" } })
+    withPlatform(
+      "win32",
+      Effect.gen(function* () {
+        const fs = yield* AppFileSystem.Service
+        const test = yield* TestInstance
+        yield* fs.writeJson(path.join(test.directory, "tui.json"), { keybinds: { input_undo: "ctrl+y" } })
 
-      const config = yield* getTuiConfig(test.directory)
-      expect(config.keybinds.get("terminal.suspend")).toEqual([])
-      expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+y")
-    }),
+        const config = yield* getTuiConfig(test.directory)
+        expect(config.keybinds.get("terminal.suspend")).toEqual([])
+        expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+y")
+      }),
+    ),
   ),
 )
 
-winIt("ignores terminal suspend bindings on Windows", () =>
+it.instance("ignores terminal suspend bindings on Windows", () =>
   withCleanState(
-    Effect.gen(function* () {
-      const fs = yield* AppFileSystem.Service
-      const test = yield* TestInstance
-      yield* fs.writeJson(path.join(test.directory, "tui.json"), { keybinds: { terminal_suspend: "alt+z" } })
+    withPlatform(
+      "win32",
+      Effect.gen(function* () {
+        const fs = yield* AppFileSystem.Service
+        const test = yield* TestInstance
+        yield* fs.writeJson(path.join(test.directory, "tui.json"), { keybinds: { terminal_suspend: "alt+z" } })
 
-      const config = yield* getTuiConfig(test.directory)
-      expect(config.keybinds.get("terminal.suspend")).toEqual([])
-      expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+z,ctrl+-,super+z")
-    }),
+        const config = yield* getTuiConfig(test.directory)
+        expect(config.keybinds.get("terminal.suspend")).toEqual([])
+        expect(config.keybinds.get("input.undo")?.[0]?.key).toBe("ctrl+z,ctrl+-,super+z")
+      }),
+    ),
   ),
 )
 

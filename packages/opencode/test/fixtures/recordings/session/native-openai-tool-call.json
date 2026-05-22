@@ -17,7 +17,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"gpt-4.1-mini\",\"input\":[{\"role\":\"system\",\"content\":\"Call tools exactly as instructed.\\nYou must call the lookup tool exactly once with query weather. Do not answer in text.\"},{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Use lookup.\"}]}],\"tools\":[{\"type\":\"function\",\"name\":\"lookup\",\"description\":\"Lookup data.\",\"parameters\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"additionalProperties\":false}}],\"tool_choice\":\"required\",\"store\":false,\"prompt_cache_key\":\"session-recorded-native-tool\",\"temperature\":0,\"stream\":true}"
+        "body": "{\"model\":\"gpt-4.1-mini\",\"input\":[{\"role\":\"system\",\"content\":[{\"type\":\"input_text\",\"text\":\"Call tools exactly as instructed.\\nYou must call the lookup tool exactly once with query weather. Do not answer in text.\"}]},{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"Use lookup.\"}]}],\"tools\":[{\"type\":\"function\",\"name\":\"lookup\",\"description\":\"Lookup data.\",\"parameters\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"],\"additionalProperties\":false}}],\"tool_choice\":\"required\",\"store\":false,\"prompt_cache_key\":\"session-recorded-native-tool\",\"temperature\":0,\"stream\":true}"
       },
       "response": {
         "status": 200,

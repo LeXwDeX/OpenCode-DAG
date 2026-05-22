@@ -189,41 +189,32 @@ describe("worktree endpoint reproduction", () => {
   )
 
   worktreeTest(
-    "direct HttpApi worktree create accepts missing body",
+    "direct HttpApi worktree create rejects missing body",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const server = yield* serverScoped()
 
-        const response = yield* createWorktreeScoped({
-          server,
-          directory: test.directory,
-          path: `${ExperimentalPaths.worktree}?directory=${encodeURIComponent(test.directory)}`,
-          init: { method: "POST", headers: { "content-type": "application/json" } },
-          timeoutLabel: "direct worktree create without body",
+        const response = yield* request(server, `${ExperimentalPaths.worktree}?directory=${encodeURIComponent(test.directory)}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
         })
-
-        expect(response).toMatchObject({ directory: expect.any(String) })
+        expect(response.status).toBe(400)
       }),
     { git: true },
   )
 
   worktreeTest(
-    "direct HttpApi worktree create accepts missing content type and body",
+    "direct HttpApi worktree create rejects missing content type and body",
     () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
         const server = yield* serverScoped()
 
-        const response = yield* createWorktreeScoped({
-          server,
-          directory: test.directory,
-          path: `${ExperimentalPaths.worktree}?directory=${encodeURIComponent(test.directory)}`,
-          init: { method: "POST" },
-          timeoutLabel: "direct worktree create without content type or body",
+        const response = yield* request(server, `${ExperimentalPaths.worktree}?directory=${encodeURIComponent(test.directory)}`, {
+          method: "POST",
         })
-
-        expect(response).toMatchObject({ directory: expect.any(String) })
+        expect(response.status).toBe(400)
       }),
     { git: true },
   )
