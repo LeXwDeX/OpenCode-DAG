@@ -65,6 +65,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SettingsHook } from "../../src/hook/settings"
 import { Goal } from "../../src/goal/goal"
+import { HookStartContext } from "../../src/hook/start-context"
 
 void Log.init({ print: false })
 
@@ -136,6 +137,7 @@ function makeHttp() {
     EventV2Bridge.defaultLayer,
     SettingsHook.defaultLayer,
     Goal.defaultLayer,
+    HookStartContext.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))

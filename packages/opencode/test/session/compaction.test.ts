@@ -249,7 +249,6 @@ const it = testEffect(env)
 const compactionEnv = Layer.mergeAll(
   SessionNs.defaultLayer,
   CrossSpawnSpawner.defaultLayer,
-  SessionCompaction.layer.pipe(Layer.provide(SessionNs.defaultLayer), Layer.provideMerge(deps)),
 )
 const itCompaction = testEffect(compactionEnv)
 
@@ -290,6 +289,7 @@ function compactionProcessLayer(options?: CompactionProcessOptions) {
     Layer.provide(SyncEvent.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
     Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(SettingsHook.defaultLayer),
   )
 }
 
