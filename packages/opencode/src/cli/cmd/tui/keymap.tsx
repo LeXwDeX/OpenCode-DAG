@@ -25,7 +25,7 @@ const OPENCODE_MODE_KEY = "opencode.mode"
 export const OpencodeKeymapProvider = KeymapProvider
 export const useOpencodeKeymap = useKeymap
 
-export { reactiveMatcherFromSignal, useKeymapSelector }
+export { useKeymapSelector }
 
 // Fork callsites still pass `target: Accessor<T>` (older keymap API). Upstream
 // now expects `targetRef: { current: T | null }`. Wrap with a permissive

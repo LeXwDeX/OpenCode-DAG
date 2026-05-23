@@ -27,6 +27,7 @@ import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { serviceUse } from "@/effect/service-use"
 
 const log = Log.create({ service: "provider" })
 
@@ -1033,6 +1034,8 @@ interface State {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
+
+export const use = serviceUse(Service)
 
 function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
   const result: Model["cost"] = {

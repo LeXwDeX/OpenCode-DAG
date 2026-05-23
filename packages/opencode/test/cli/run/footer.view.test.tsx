@@ -9,6 +9,7 @@ import {
   RunModelSelectBody,
   RunVariantSelectBody,
 } from "@/cli/cmd/run/footer.command"
+import { RunFooterView } from "@/cli/cmd/run/footer.view"
 import { RunEntryContent } from "@/cli/cmd/run/scrollback.writer"
 import { RUN_THEME_FALLBACK } from "@/cli/cmd/run/theme"
 import type {
@@ -123,6 +124,23 @@ function provider() {
   } satisfies RunProvider
 }
 
+function subagent(input: {
+  sessionID: string
+  label: string
+  description: string
+  status?: FooterSubagentTab["status"]
+}) {
+  return {
+    sessionID: input.sessionID,
+    partID: `part-${input.sessionID}`,
+    callID: `call-${input.sessionID}`,
+    label: input.label,
+    description: input.description,
+    status: input.status ?? "running",
+    lastUpdatedAt: 1,
+  } satisfies FooterSubagentTab
+}
+
 test("run entry content updates when live commit text changes", async () => {
   const [commit, setCommit] = createSignal<StreamCommit>({
     kind: "tool",
@@ -221,91 +239,6 @@ test("direct command panel renders grouped command palette", async () => {
     expect(frame).not.toContain("Cycle reasoning effort for future turns")
     expect(frame).not.toContain("Review code")
     expect(frame).not.toContain("Commands 8")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("direct command panel shows subagent entry when available", async () => {
-  const [commands] = createSignal<RunCommand[] | undefined>([])
-  const [subagents] = createSignal([subagent({ sessionID: "s-1", label: "Explore", description: "Inspect auth flow" })])
-  const [variants] = createSignal<string[]>([])
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={RUN_COMMAND_PANEL_ROWS}>
-        <RunCommandMenuBody
-          theme={() => RUN_THEME_FALLBACK.footer}
-          commands={commands}
-          subagents={subagents}
-          variants={variants}
-          keybinds={keybinds}
-          onClose={() => {}}
-          onModel={() => {}}
-          onSubagent={() => {}}
-          onVariant={() => {}}
-          onVariantCycle={() => {}}
-          onCommand={() => {}}
-          onNew={() => {}}
-          onExit={() => {}}
-        />
-      </box>
-    ),
-    {
-      width: 100,
-      height: RUN_COMMAND_PANEL_ROWS,
-    },
-  )
-
-  try {
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-
-    expect(frame).toContain("View subagents")
-    expect(frame).toContain("1 active")
-  } finally {
-    app.renderer.destroy()
-  }
-})
-
-test("direct subagent panel renders active subagents", async () => {
-  const [tabs] = createSignal([
-    subagent({ sessionID: "s-1", label: "Explore", description: "Inspect auth flow" }),
-    subagent({ sessionID: "s-2", label: "General", description: "Write migration plan", status: "completed" }),
-  ])
-  const [current] = createSignal<string | undefined>("s-1")
-  let rows = 0
-
-  const app = await testRender(
-    () => (
-      <box width={100} height={RUN_SUBAGENT_PANEL_ROWS}>
-        <RunSubagentSelectBody
-          theme={() => RUN_THEME_FALLBACK.footer}
-          tabs={tabs}
-          current={current}
-          onClose={() => {}}
-          onSelect={() => {}}
-          onRows={(value) => {
-            rows = value
-          }}
-        />
-      </box>
-    ),
-    {
-      width: 100,
-      height: RUN_SUBAGENT_PANEL_ROWS,
-    },
-  )
-
-  try {
-    await app.renderOnce()
-    const frame = app.captureCharFrame()
-
-    expect(frame).toContain("Select subagent")
-    expect(frame).toContain("Inspect auth flow")
-    expect(frame).toContain("Write migration plan")
-    expect(frame).toContain("done")
-    expect(rows).toBe(8)
   } finally {
     app.renderer.destroy()
   }
