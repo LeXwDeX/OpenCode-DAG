@@ -144,6 +144,13 @@ Rules:
 - For cross-module "how does X relate to Y" questions, prefer `graphify query "<question>"`, `graphify path "<A>" "<B>"`, or `graphify explain "<concept>"` over grep — these traverse the graph's EXTRACTED + INFERRED edges instead of scanning files
 - After modifying code files in this session, run `graphify update .` to keep the graph current (AST-only, no API cost)
 
+## Notes (问题存档与沟通记录)
+
+`notes/` 文件夹用于存档开发过程中发现的问题、讨论结论和沟通记录。每份笔记以 `NNN-简短标题.md` 命名，包含现象、日志证据、根因分析和建议修复方向。
+
+当前存档：
+- `001-subagent-ui-visibility.md` — 子 Agent 运行时 TUI 无状态指示，用户误以为 agent 停止工作
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 

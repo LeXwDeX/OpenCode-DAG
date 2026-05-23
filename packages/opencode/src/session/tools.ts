@@ -102,14 +102,17 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             // CC contract: permissionDecision="deny" short-circuits before execution
             if (preHook.permissionDecision === "deny") {
               const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+              log.warn("Hook denied tool execution", { toolName: item.id, reason, sessionID: ctx.sessionID })
               return { title: "", metadata: {}, output: `Hook denied: ${reason}` }
             }
             if (preHook.blocked) {
+              log.warn("Hook blocked tool execution", { toolName: item.id, reason: preHook.blocked.reason, sessionID: ctx.sessionID })
               return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
             }
             // CC contract: continue=false short-circuits tool execution
             if (preHook.preventContinuation) {
               const reason = preHook.stopReason ?? "Hook requested stop"
+              log.warn("Hook stopped tool execution", { toolName: item.id, reason, sessionID: ctx.sessionID })
               return { title: "", metadata: {}, output: `Hook stopped: ${reason}` }
             }
             // CC contract: hookSpecificOutput.updatedInput rewrites tool args
@@ -231,13 +234,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           )
           if (preHook.permissionDecision === "deny") {
             const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+            log.warn("Hook denied MCP tool execution", { toolName: key, reason, sessionID: ctx.sessionID })
             return { title: "", metadata: {}, output: `Hook denied: ${reason}`, content: [{ type: "text" as const, text: `Hook denied: ${reason}` }] }
           }
           if (preHook.blocked) {
+            log.warn("Hook blocked MCP tool execution", { toolName: key, reason: preHook.blocked.reason, sessionID: ctx.sessionID })
             return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}`, content: [{ type: "text" as const, text: `Hook blocked: ${preHook.blocked.reason}` }] }
           }
           if (preHook.preventContinuation) {
             const reason = preHook.stopReason ?? "Hook requested stop"
+            log.warn("Hook stopped MCP tool execution", { toolName: key, reason, sessionID: ctx.sessionID })
             return { title: "", metadata: {}, output: `Hook stopped: ${reason}`, content: [{ type: "text" as const, text: `Hook stopped: ${reason}` }] }
           }
           const effectiveArgs = preHook.updatedInput ?? args

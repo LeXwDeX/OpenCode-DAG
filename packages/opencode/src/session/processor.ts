@@ -204,6 +204,11 @@ export const layer = Layer.effect(
           },
         })
         if (error instanceof Permission.RejectedError || error instanceof Question.RejectedError) {
+          slog.warn("Permission/Question rejected", {
+            errorType: error instanceof Permission.RejectedError ? "Permission" : "Question",
+            errorMessage: errorMessage(error),
+            shouldBreak: ctx.shouldBreak,
+          })
           ctx.blocked = ctx.shouldBreak
         }
         yield* settleToolCall(toolCallID)

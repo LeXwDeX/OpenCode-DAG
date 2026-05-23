@@ -615,15 +615,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                   // lives inside individual tools and is not replaced at this layer.
                   if (preHook.permissionDecision === "deny") {
                     const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+                    log.warn("Hook denied tool execution", { toolName: item.id, reason, sessionID: ctx.sessionID })
                     return { title: "", metadata: {}, output: `Hook denied: ${reason}` }
                   }
                   if (preHook.blocked) {
+                    log.warn("Hook blocked tool execution", { toolName: item.id, reason: preHook.blocked.reason, sessionID: ctx.sessionID })
                     return { title: "", metadata: {}, output: `Hook blocked: ${preHook.blocked.reason}` }
                   }
                   // CC contract: continue=false short-circuits tool execution
                   // (treated as deny-equivalent; stopReason becomes the user-visible reason).
                   if (preHook.preventContinuation) {
                     const reason = preHook.stopReason ?? "Hook requested stop"
+                    log.warn("Hook stopped tool execution", { toolName: item.id, reason, sessionID: ctx.sessionID })
                     return { title: "", metadata: {}, output: `Hook stopped: ${reason}` }
                   }
                   // CC contract: hookSpecificOutput.updatedInput rewrites tool args
@@ -747,6 +750,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               // the legacy `blocked` check. allow/ask are decorative at this layer.
               if (preHook.permissionDecision === "deny") {
                 const reason = preHook.permissionDecisionReason ?? "Denied by hook"
+                log.warn("Hook denied MCP tool execution", { toolName: key, reason, sessionID: ctx.sessionID })
                 return {
                   title: "",
                   metadata: {} as Record<string, unknown>,
@@ -755,6 +759,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 }
               }
               if (preHook.blocked) {
+                log.warn("Hook blocked MCP tool execution", { toolName: key, reason: preHook.blocked.reason, sessionID: ctx.sessionID })
                 return {
                   title: "",
                   metadata: {} as Record<string, unknown>,
@@ -768,6 +773,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               // (treated as deny-equivalent; stopReason becomes the user-visible reason).
               if (preHook.preventContinuation) {
                 const reason = preHook.stopReason ?? "Hook requested stop"
+                log.warn("Hook stopped MCP tool execution", { toolName: key, reason, sessionID: ctx.sessionID })
                 return {
                   title: "",
                   metadata: {} as Record<string, unknown>,
@@ -1817,13 +1823,21 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           { sessionID: input.sessionID, transcriptPath: "" },
         )
         if (submitHook.blocked) {
-          log.warn("UserPromptSubmit blocked by hook", { reason: submitHook.blocked.reason })
+          log.warn("UserPromptSubmit blocked by hook", {
+            reason: submitHook.blocked.reason,
+            sessionID: input.sessionID,
+            promptLength: userText.length,
+          })
           return message
         }
         // CC contract: continue=false on UserPromptSubmit aborts the LLM call
         // (same short-circuit as blocked; user message is already persisted).
         if (submitHook.preventContinuation) {
-          log.warn("UserPromptSubmit stopped by hook", { reason: submitHook.stopReason ?? "continue=false" })
+          log.warn("UserPromptSubmit stopped by hook", {
+            reason: submitHook.stopReason ?? "continue=false",
+            sessionID: input.sessionID,
+            promptLength: userText.length,
+          })
           return message
         }
 
@@ -1963,7 +1977,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-            yield* slog.info("exiting loop")
+            yield* slog.info("exiting loop", {
+              finishReason: lastAssistant.finish,
+              hasToolCalls,
+              step,
+              lastUserId: lastUser.id,
+              lastAssistantId: lastAssistant.id,
+              lastAssistantTokens: lastFinished?.tokens,
+              lastAssistantModel: lastUser.model.modelID,
+            })
             break
           }
 
@@ -2153,6 +2175,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 lastAssistantFinish: lastAssistant?.finish,
                 lastAssistantId: lastAssistant?.id,
                 lastUserId: lastUser?.id,
+                lastAssistantModel: lastUser.model.modelID,
+                lastAssistantProvider: lastUser.model.providerID,
+                hasToolCalls,
+                lastFinishedTokens: lastFinished?.tokens,
               })
               return "break" as const
             }
