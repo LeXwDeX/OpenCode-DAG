@@ -1977,6 +1977,41 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
+            // Detect model hallucinating <analysis>/<summary> compression format
+            // instead of calling the compress tool. If detected, inject a
+            // continuation message and keep the loop running.
+            const assistantText = lastAssistantMsg?.parts
+              .filter((p): p is MessageV2.TextPart => p.type === "text")
+              .map((p) => p.text)
+              .join("") ?? ""
+            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>\s*<summary>/.test(assistantText)
+
+            if (hasCompressionHallucination) {
+              yield* slog.warn("detected compression hallucination, injecting continuation", {
+                finishReason: lastAssistant.finish,
+                step,
+                lastAssistantModel: lastUser.model.modelID,
+              })
+              const continueMsg = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                time: { created: Date.now() },
+                agent: lastUser.agent,
+                model: lastUser.model,
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: continueMsg.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                text: "You just output a compression summary as plain text instead of calling the compress tool. This is incorrect. Resume your previous task immediately — do NOT generate summaries inline. If you need to compress context, use the compress tool call.",
+                time: { start: Date.now(), end: Date.now() },
+              })
+              continue
+            }
+
             yield* slog.info("exiting loop", {
               finishReason: lastAssistant.finish,
               hasToolCalls,
