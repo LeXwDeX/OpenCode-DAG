@@ -34,13 +34,6 @@ export type RequestInput = {
   readonly headers?: Record<string, string>
 }
 
-const baseURL = (input: Provider.Model | RequestInput) =>
-  "model" in input ? (input.baseURL ?? (input.model.api.url || undefined)) : input.api.url || undefined
-
-const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
-  if (url) return url
-  throw new Error(`Native LLM request adapter requires a base URL for ${model.providerID}/${model.id}`)
-}
 
 const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
   if (!isRecord(value)) return undefined
@@ -150,6 +143,14 @@ const generation = (input: RequestInput) => {
   return Object.values(result).some((value) => value !== undefined) ? result : undefined
 }
 
+const baseURL = (input: Provider.Model | RequestInput) =>
+  "model" in input ? (input.baseURL ?? (input.model.api.url || undefined)) : input.api.url || undefined
+
+const requireBaseURL = (model: Provider.Model, url: string | undefined) => {
+  if (url) return url
+  throw new Error(`Native LLM request adapter requires a base URL for ${model.providerID}/${model.id}`)
+}
+
 export const model = (input: Provider.Model | RequestInput, headers?: Record<string, string>) => {
   const model = "model" in input ? input.model : input
   const url = baseURL(input)
@@ -180,6 +181,8 @@ export const model = (input: Provider.Model | RequestInput, headers?: Record<str
 
 export const request = (input: RequestInput) => {
   const converted = messages(input.messages)
+  // This is the only native adapter boundary that should construct canonical
+  // @opencode-ai/llm request objects from opencode's session/AI SDK-shaped data.
   return LLM.request({
     model: model(input, input.headers),
     system: [...(input.system ?? []).map(SystemPart.make), ...converted.system],

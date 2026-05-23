@@ -171,7 +171,8 @@ export const dict = {
   "provider.custom.field.baseURL.placeholder": "https://api.myprovider.com/v1",
   "provider.custom.field.apiKey.label": "Ключ API",
   "provider.custom.field.apiKey.placeholder": "Ключ API",
-  "provider.custom.field.apiKey.description": "Необов'язково. Залиште порожнім, якщо ви керуєте авторизацією через заголовки.",
+  "provider.custom.field.apiKey.description":
+    "Необов'язково. Залиште порожнім, якщо ви керуєте авторизацією через заголовки.",
   "provider.custom.models.label": "Моделі",
   "provider.custom.models.id.label": "ID",
   "provider.custom.models.id.placeholder": "model-id",
@@ -232,7 +233,7 @@ export const dict = {
   "common.attachment": "вкладення",
 
   "prompt.placeholder.shell": "Введіть команду термінала... {{example}}",
-  "prompt.placeholder.normal": "Запитайте що завгодно... \"{{example}}\"",
+  "prompt.placeholder.normal": 'Запитайте що завгодно... "{{example}}"',
   "prompt.placeholder.simple": "Запитайте що завгодно...",
   "prompt.placeholder.summarizeComments": "Підсумувати коментарі…",
   "prompt.placeholder.summarizeComment": "Підсумувати коментар…",
@@ -368,7 +369,8 @@ export const dict = {
   "dialog.releaseNotes.media.alt": "Попередній перегляд релізу",
 
   "context.breakdown.title": "Розподіл контексту",
-  "context.breakdown.note": "Приблизний розподіл вхідних токенів. \"Інше\" включає визначення інструментів і накладні витрати.",
+  "context.breakdown.note":
+    'Приблизний розподіл вхідних токенів. "Інше" включає визначення інструментів і накладні витрати.',
   "context.breakdown.system": "Система",
   "context.breakdown.user": "Користувач",
   "context.breakdown.assistant": "Асистент",
@@ -500,14 +502,15 @@ export const dict = {
   "error.chain.didYouMean": "Можливо, ви мали на увазі: {{suggestions}}",
   "error.chain.modelNotFound": "Модель не знайдено: {{provider}}/{{model}}",
   "error.chain.checkConfig": "Перевірте назви провайдерів/моделей у конфігурації (opencode.json)",
-  "error.chain.mcpFailed": "Сервер MCP \"{{name}}\" не працює. Зверніть увагу, OpenCode ще не підтримує автентифікацію MCP.",
+  "error.chain.mcpFailed":
+    'Сервер MCP "{{name}}" не працює. Зверніть увагу, OpenCode ще не підтримує автентифікацію MCP.',
   "error.chain.providerAuthFailed": "Автентифікація провайдера не вдалася ({{provider}}): {{message}}",
   "error.chain.providerInitFailed":
-    "Не вдалося ініціалізувати провайдера \"{{provider}}\". Перевірте облікові дані та конфігурацію.",
+    'Не вдалося ініціалізувати провайдера "{{provider}}". Перевірте облікові дані та конфігурацію.',
   "error.chain.configJsonInvalid": "Файл конфігурації {{path}} не є дійсним JSON(C)",
   "error.chain.configJsonInvalidWithMessage": "Файл конфігурації {{path}} не є дійсним JSON(C): {{message}}",
   "error.chain.configDirectoryTypo":
-    "Каталог \"{{dir}}\" у {{path}} недійсний. Перейменуйте каталог на \"{{suggestion}}\" або видаліть його. Це поширена помилка.",
+    'Каталог "{{dir}}" у {{path}} недійсний. Перейменуйте каталог на "{{suggestion}}" або видаліть його. Це поширена помилка.',
   "error.chain.configFrontmatterError": "Не вдалося розібрати frontmatter у {{path}}:\n{{message}}",
   "error.chain.configInvalid": "Файл конфігурації {{path}} недійсний",
   "error.chain.configInvalidWithMessage": "Файл конфігурації {{path}} недійсний: {{message}}",
@@ -682,7 +685,8 @@ export const dict = {
   "sidebar.workspaces.disable": "Вимкнути робочі області",
   "sidebar.gettingStarted.title": "Початок роботи",
   "sidebar.gettingStarted.line1": "OpenCode містить безкоштовні моделі, тому ви можете почати негайно.",
-  "sidebar.gettingStarted.line2": "Підключіть будь-якого провайдера, щоб використовувати моделі, включаючи Claude, GPT, Gemini тощо.",
+  "sidebar.gettingStarted.line2":
+    "Підключіть будь-якого провайдера, щоб використовувати моделі, включаючи Claude, GPT, Gemini тощо.",
   "sidebar.project.recentSessions": "Нещодавні сесії",
   "sidebar.project.viewAllSessions": "Переглянути всі сесії",
   "sidebar.project.clearNotifications": "Очистити сповіщення",
@@ -755,11 +759,13 @@ export const dict = {
   "settings.general.row.followup.option.queue": "Черга",
   "settings.general.row.followup.option.steer": "Керування",
   "settings.general.row.showFileTree.title": "Дерево файлів",
-  "settings.general.row.showFileTree.description": "Показувати перемикач і панель дерева файлів у сесіях на робочому столі",
+  "settings.general.row.showFileTree.description":
+    "Показувати перемикач і панель дерева файлів у сесіях на робочому столі",
   "settings.general.row.showNavigation.title": "Елементи навігації",
   "settings.general.row.showNavigation.description": "Показувати кнопки назад і вперед у заголовку робочого столу",
   "settings.general.row.showSearch.title": "Палітра команд",
-  "settings.general.row.showSearch.description": "Показувати кнопку пошуку та палітри команд у заголовку робочого столу",
+  "settings.general.row.showSearch.description":
+    "Показувати кнопку пошуку та палітри команд у заголовку робочого столу",
   "settings.general.row.showTerminal.title": "Термінал",
   "settings.general.row.showTerminal.description": "Показувати кнопку термінала в заголовку робочого столу",
   "settings.general.row.showStatus.title": "Статус сервера",
@@ -782,7 +788,7 @@ export const dict = {
     "На Linux з моніторами з різною частотою оновлення нативний Wayland може бути більш стабільним.",
 
   "settings.general.row.releaseNotes.title": "Нотатки до релізу",
-  "settings.general.row.releaseNotes.description": "Показувати спливаючі вікна \"Що нового\" після оновлень",
+  "settings.general.row.releaseNotes.description": 'Показувати спливаючі вікна "Що нового" після оновлень',
 
   "settings.updates.row.startup.title": "Перевіряти оновлення під час запуску",
   "settings.updates.row.startup.description": "Автоматично перевіряти наявність оновлень під час запуску OpenCode",
@@ -928,7 +934,8 @@ export const dict = {
   "settings.permissions.tool.external_directory.title": "Зовнішній каталог",
   "settings.permissions.tool.external_directory.description": "Доступ до файлів за межами каталогу проєкту",
   "settings.permissions.tool.doom_loop.title": "Цикл приреченості",
-  "settings.permissions.tool.doom_loop.description": "Виявлення повторюваних викликів інструментів з однаковими вхідними даними",
+  "settings.permissions.tool.doom_loop.description":
+    "Виявлення повторюваних викликів інструментів з однаковими вхідними даними",
 
   "session.delete.failed.title": "Не вдалося видалити сесію",
   "session.delete.title": "Видалити сесію",

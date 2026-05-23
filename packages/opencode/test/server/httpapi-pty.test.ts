@@ -112,6 +112,31 @@ describe("pty HttpApi bridge", () => {
 
     const missing = await app().request(PtyPaths.get.replace(":ptyID", info.id), { headers })
     expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({
+      _tag: "PtyNotFoundError",
+      ptyID: info.id,
+      message: `PTY session not found: ${info.id}`,
+    })
+
+    const missingUpdate = await app().request(PtyPaths.update.replace(":ptyID", info.id), {
+      method: "PUT",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ title: "missing" }),
+    })
+    expect(missingUpdate.status).toBe(404)
+    expect(await missingUpdate.json()).toEqual({
+      _tag: "PtyNotFoundError",
+      ptyID: info.id,
+      message: `PTY session not found: ${info.id}`,
+    })
+
+    const missingRemove = await app().request(PtyPaths.remove.replace(":ptyID", info.id), { method: "DELETE", headers })
+    expect(missingRemove.status).toBe(404)
+    expect(await missingRemove.json()).toEqual({
+      _tag: "PtyNotFoundError",
+      ptyID: info.id,
+      message: `PTY session not found: ${info.id}`,
+    })
   })
 
   test("returns 404 for missing PTY websocket before upgrade", async () => {
@@ -178,7 +203,6 @@ describe("pty HttpApi bridge", () => {
       message: `PTY session not found: ${missingID}`,
     })
   })
-
   ;(process.platform === "win32" ? effectIt.live.skip : effectIt.live)(
     "serves PTY websocket output and input through Effect routes",
     () =>

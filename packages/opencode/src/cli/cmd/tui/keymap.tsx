@@ -5,12 +5,7 @@ import {
   formatCommandBindings as formatCommandBindingsExtra,
   formatKeySequence as formatKeySequenceExtra,
 } from "@opentui/keymap/extras"
-import {
-  KeymapProvider,
-  useKeymap,
-  useKeymapSelector,
-  useBindings as useBindingsUpstream,
-} from "@opentui/keymap/solid"
+import { KeymapProvider, useKeymap, useKeymapSelector, useBindings } from "@opentui/keymap/solid"
 import { createMemo, type Accessor } from "solid-js"
 import type { TuiConfig } from "./config/tui"
 import { useTuiConfig } from "./context/tui-config"
@@ -25,15 +20,7 @@ const OPENCODE_MODE_KEY = "opencode.mode"
 export const OpencodeKeymapProvider = KeymapProvider
 export const useOpencodeKeymap = useKeymap
 
-export { useKeymapSelector }
-
-// Fork callsites still pass `target: Accessor<T>` (older keymap API). Upstream
-// now expects `targetRef: { current: T | null }`. Wrap with a permissive
-// signature so callsites typecheck; runtime adaptation is tracked separately.
-export const useBindings = useBindingsUpstream as unknown as (
-  createLayer: () => Record<string, unknown>,
-  deps?: unknown,
-) => void
+export { useBindings, useKeymapSelector }
 
 export type OpenTuiKeymap = ReturnType<typeof useKeymap>
 type OpencodeModeStack = ReturnType<typeof createOpencodeModeStack>
@@ -257,12 +244,11 @@ export function useLeaderActive(): Accessor<boolean> {
 export function useCommandSlashes(): Accessor<readonly CommandSlashEntry[]> {
   const keymap = useOpencodeKeymap()
   const entries = useKeymapSelector((keymap: OpenTuiKeymap) =>
-    keymap
-      .getCommandEntries({
-        visibility: "reachable",
-        namespace: "palette",
-        filter: isVisiblePaletteCommand,
-      })
+    keymap.getCommandEntries({
+      visibility: "reachable",
+      namespace: "palette",
+      filter: isVisiblePaletteCommand,
+    }),
   )
 
   return createMemo<CommandSlashEntry[]>(() =>

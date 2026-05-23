@@ -24,7 +24,6 @@ import type {
   SessionMessageCompaction,
   SessionMessageModelSwitched,
   SessionMessageShell,
-  SessionMessageSynthetic,
   SessionMessageUser,
   ToolFileContent,
   ToolTextContent,
@@ -410,13 +409,7 @@ function AssistantReasoning(props: {
     <Show when={content()}>
       <Switch>
         <Match when={!inMinimal() || expanded()}>
-          <box
-            paddingLeft={3}
-            marginTop={1}
-            flexDirection="column"
-            flexShrink={0}
-            onMouseUp={toggle}
-          >
+          <box paddingLeft={3} marginTop={1} flexDirection="column" flexShrink={0} onMouseUp={toggle}>
             <code
               filetype="markdown"
               drawUnstyledText={false}
@@ -429,12 +422,7 @@ function AssistantReasoning(props: {
           </box>
         </Match>
         <Match when={isDone()}>
-          <box
-            paddingLeft={3}
-            marginTop={1}
-            flexShrink={0}
-            onMouseUp={toggle}
-          >
+          <box paddingLeft={3} marginTop={1} flexShrink={0} onMouseUp={toggle}>
             <CollapsedReasoningText title={title()} />
           </box>
         </Match>
@@ -453,9 +441,7 @@ function CollapsedReasoningText(props: { title: string | null }) {
 
   return (
     <text fg={theme.warning} wrapMode="none">
-      <span style={{ fg: theme.warning, italic: true }}>
-        {props.title ? "+ Thought: " + props.title : "+ Thought"}
-      </span>
+      <span style={{ fg: theme.warning, italic: true }}>{props.title ? "+ Thought: " + props.title : "+ Thought"}</span>
     </text>
   )
 }

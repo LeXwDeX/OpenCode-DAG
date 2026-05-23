@@ -221,7 +221,7 @@ export function createTuiApi(input: Input): TuiPluginApi {
         return Keymap.formatKeyBindings(bindings, input.tuiConfig)
       },
     },
-    keymap: input.keymap as any,
+    keymap: input.keymap,
     mode: {
       current() {
         return Keymap.getOpencodeModeStack(input.keymap).current()

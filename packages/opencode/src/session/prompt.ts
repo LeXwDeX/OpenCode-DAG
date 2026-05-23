@@ -59,7 +59,6 @@ import { EffectBridge } from "@/effect/bridge"
 import { Todo } from "./todo"
 import { Goal } from "@/goal/goal"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { EventV2 } from "@opencode-ai/core/event"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionEvent } from "@opencode-ai/core/session-event"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -1806,6 +1805,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
+
+      const permissions: Permission.Rule[] = []
+      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
+        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
+      }
+      if (permissions.length > 0) {
+        session.permission = permissions
+        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
+      }
 
         // UserPromptSubmit hook (Claude Code compatible) — fires once per user turn,
         // after the user message is persisted and before the agent loop starts.

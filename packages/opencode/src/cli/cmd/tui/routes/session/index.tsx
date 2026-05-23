@@ -53,7 +53,6 @@ import type { SkillTool } from "@/tool/skill"
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
 import { useEditorContext } from "@tui/context/editor"
-import type { DialogContext } from "@tui/ui/dialog"
 import { useDialog } from "../../ui/dialog"
 import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
@@ -1533,13 +1532,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
       <Switch>
         <Match when={!inMinimal() || expanded()}>
           {/* Full markdown block: `show` mode, or `hide` after the user opens it. */}
-          <box
-            id={"text-" + props.part.id}
-            paddingLeft={3}
-            marginTop={1}
-            flexDirection="column"
-            onMouseUp={toggle}
-          >
+          <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexDirection="column" onMouseUp={toggle}>
             <code
               filetype="markdown"
               drawUnstyledText={false}
@@ -1554,13 +1547,7 @@ function ReasoningPart(props: { last: boolean; part: ReasoningPart; message: Ass
           </box>
         </Match>
         <Match when={isDone()}>
-          <box
-            id={"text-" + props.part.id}
-            paddingLeft={3}
-            marginTop={1}
-            flexShrink={0}
-            onMouseUp={toggle}
-          >
+          <box id={"text-" + props.part.id} paddingLeft={3} marginTop={1} flexShrink={0} onMouseUp={toggle}>
             <CollapsedReasoningText title={title()} duration={duration()} />
           </box>
         </Match>

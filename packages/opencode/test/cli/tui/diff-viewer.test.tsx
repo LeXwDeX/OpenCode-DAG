@@ -16,7 +16,10 @@ import { createTuiResolvedConfig } from "../../fixture/tui-runtime"
 
 test("closing the diff viewer returns to the route it opened from", async () => {
   const startRoute: TuiRouteCurrent = { name: "session", params: { sessionID: "session-1" } }
-  const commands = new Map<string, NonNullable<Parameters<TuiPluginApi["keymap"]["registerLayer"]>[0]["commands"]>[number]>()
+  const commands = new Map<
+    string,
+    NonNullable<Parameters<TuiPluginApi["keymap"]["registerLayer"]>[0]["commands"]>[number]
+  >()
   let current = startRoute
   let renderDiff: TuiRouteDefinition["render"] | undefined
   await mkdir(Global.Path.state, { recursive: true })
@@ -60,7 +63,9 @@ test("closing the diff viewer returns to the route it opened from", async () => 
       <OpencodeKeymapProvider keymap={keymap}>
         <TuiConfigProvider config={createTuiResolvedConfig()}>
           <KVProvider>
-            <ThemeProvider mode="dark">{renderDiff?.({ params: "params" in current ? current.params : undefined })}</ThemeProvider>
+            <ThemeProvider mode="dark">
+              {renderDiff?.({ params: "params" in current ? current.params : undefined })}
+            </ThemeProvider>
           </KVProvider>
         </TuiConfigProvider>
       </OpencodeKeymapProvider>

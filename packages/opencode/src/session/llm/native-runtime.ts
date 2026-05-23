@@ -56,7 +56,7 @@ function statusWithFetch(
   }
 
   const apiKey = typeof input.provider.options.apiKey === "string" ? input.provider.options.apiKey : input.provider.key
-  if (!apiKey) return { type: "unsupported", reason: "OpenAI API key is not configured" }
+  if (!apiKey) return { type: "unsupported", reason: "API key is not configured" }
 
   return {
     type: "supported",
@@ -120,6 +120,8 @@ export function nativeTools(tools: Record<string, Tool>, input: Pick<StreamInput
   return Object.fromEntries(
     Object.entries(tools).map(([name, item]) => [
       name,
+      // Tool execution remains opencode-owned. The native runtime only adapts
+      // the @opencode-ai/llm tool call back into the AI SDK Tool.execute shape.
       nativeTool({
         description: item.description ?? "",
         jsonSchema: nativeSchema(item.inputSchema),

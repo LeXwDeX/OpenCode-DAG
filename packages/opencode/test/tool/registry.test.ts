@@ -34,7 +34,6 @@ import { ProviderID, ModelID } from "@/provider/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { MessageID, SessionID } from "@/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { SettingsHook } from "@/hook/settings"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -68,7 +67,7 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(Format.defaultLayer),
       Layer.provide(node),
       Layer.provide(Ripgrep.defaultLayer),
-      Layer.provide(Layer.mergeAll(Truncate.defaultLayer, SettingsHook.defaultLayer)),
+      Layer.provide(Truncate.defaultLayer),
     )
     .pipe(Layer.provide(RuntimeFlags.layer(opts.flags ?? {})))
 
@@ -79,7 +78,8 @@ const brokenPluginLayer = Layer.succeed(
   Plugin.Service,
   Plugin.Service.of({
     init: () => Effect.void,
-    trigger: ((_name: unknown, _input: unknown, output: unknown) => Effect.succeed(output)) as Plugin.Interface["trigger"],
+    trigger: ((_name: unknown, _input: unknown, output: unknown) =>
+      Effect.succeed(output)) as Plugin.Interface["trigger"],
     list: () =>
       Effect.succeed([
         {
@@ -96,7 +96,9 @@ const brokenPluginLayer = Layer.succeed(
 )
 
 const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
-const scout = testEffect(Layer.mergeAll(registryLayer({ flags: { experimentalScout: true } }), node, Agent.defaultLayer))
+const scout = testEffect(
+  Layer.mergeAll(registryLayer({ flags: { experimentalScout: true } }), node, Agent.defaultLayer),
+)
 const background = testEffect(
   Layer.mergeAll(registryLayer({ flags: { experimentalBackgroundSubagents: true } }), node, Agent.defaultLayer),
 )

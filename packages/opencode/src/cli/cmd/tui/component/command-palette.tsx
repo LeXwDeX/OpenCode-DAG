@@ -30,12 +30,11 @@ export function CommandPaletteDialog() {
     const query = {
       namespace: "palette",
     }
-    const reachable = keymap
-      .getCommandEntries({
-        ...query,
-        visibility: "reachable",
-        filter: isVisiblePaletteCommand,
-      })
+    const reachable = keymap.getCommandEntries({
+      ...query,
+      visibility: "reachable",
+      filter: isVisiblePaletteCommand,
+    })
     const registeredBindings = keymap.getCommandBindings({
       visibility: "registered",
       commands: reachable.map((entry) => entry.command.name),

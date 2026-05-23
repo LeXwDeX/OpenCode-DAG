@@ -104,7 +104,11 @@ export function DiffViewerFileTree(props: DiffViewerFileTreeProps) {
                         {name()}
                       </text>
                     </box>
-                    <text fg={highlighted() ? props.theme.background : props.theme.textMuted} wrapMode="none" flexShrink={0}>
+                    <text
+                      fg={highlighted() ? props.theme.background : props.theme.textMuted}
+                      wrapMode="none"
+                      flexShrink={0}
+                    >
                       {status()}
                     </text>
                   </box>

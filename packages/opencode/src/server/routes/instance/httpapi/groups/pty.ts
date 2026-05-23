@@ -89,7 +89,7 @@ export const PtyApi = HttpApi.make("pty")
           query: WorkspaceRoutingQuery,
           payload: Pty.UpdateInput,
           success: described(Pty.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, PtyNotFoundError],
+          error: [PtyNotFoundError, HttpApiError.BadRequest],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "pty.update",

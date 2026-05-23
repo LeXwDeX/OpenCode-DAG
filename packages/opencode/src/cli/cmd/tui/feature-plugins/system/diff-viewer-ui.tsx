@@ -33,12 +33,13 @@ export function Panel(props: Omit<JSX.IntrinsicElements["box"], "border"> & { bo
   const { theme } = useTheme()
   const [local, boxProps] = splitProps(props, ["border"])
   const border = local.border ?? "start"
-  const borderProps = border === "none"
-    ? {}
-    : {
-        border: panelBorderSides(group?.axis ?? "y", border),
-        borderColor: theme.border,
-      }
+  const borderProps =
+    border === "none"
+      ? {}
+      : {
+          border: panelBorderSides(group?.axis ?? "y", border),
+          borderColor: theme.border,
+        }
 
   return (
     <box

@@ -110,7 +110,10 @@ export interface Interface {
     id: PtyID,
     ws: Socket,
     cursor?: number,
-  ) => Effect.Effect<{ onMessage: (message: string | ArrayBuffer) => void; onClose: () => void } | undefined, NotFoundError>
+  ) => Effect.Effect<
+    { onMessage: (message: string | ArrayBuffer) => void; onClose: () => void } | undefined,
+    NotFoundError
+  >
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Pty") {}

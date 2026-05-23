@@ -155,7 +155,8 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
               if (error instanceof Provider.ModelNotFoundError) {
                 return fail(`Model not found: ${error.providerID}/${error.modelID}`)
               }
-              if (error instanceof Provider.NoModelsError) return fail(`No models found for provider ${error.providerID}`)
+              if (error instanceof Provider.NoModelsError)
+                return fail(`No models found for provider ${error.providerID}`)
               return fail("No providers found")
             },
           }),

@@ -69,10 +69,7 @@ describe("diff viewer file tree utilities", () => {
 
   test("collapses unary directory chains while flattening", () => {
     const rows = flattenFileTree(
-      buildFileTree([
-        { file: "packages/opencode/src/cli/app.ts" },
-        { file: "packages/opencode/src/server/server.ts" },
-      ]),
+      buildFileTree([{ file: "packages/opencode/src/cli/app.ts" }, { file: "packages/opencode/src/server/server.ts" }]),
     )
 
     expect(rows.map((row) => `${"  ".repeat(row.depth)}${row.kind}:${row.name}`)).toEqual([
@@ -128,19 +125,17 @@ describe("diff viewer file tree utilities", () => {
 
   test("flattens all-expanded rows depth-first with depths and file references", () => {
     const rows = flattenFileTree(
-      buildFileTree([
-        { file: "src/config/tui.ts" },
-        { file: "src/config/keybind.ts" },
-        { file: "README.md" },
-      ]),
+      buildFileTree([{ file: "src/config/tui.ts" }, { file: "src/config/keybind.ts" }, { file: "README.md" }]),
     )
 
-    expect(rows.map((row) => ({ name: row.name, kind: row.kind, depth: row.depth, fileIndex: row.fileIndex }))).toEqual([
-      { name: "src/config", kind: "directory", depth: 0, fileIndex: undefined },
-      { name: "keybind.ts", kind: "file", depth: 1, fileIndex: 1 },
-      { name: "tui.ts", kind: "file", depth: 1, fileIndex: 0 },
-      { name: "README.md", kind: "file", depth: 0, fileIndex: 2 },
-    ])
+    expect(rows.map((row) => ({ name: row.name, kind: row.kind, depth: row.depth, fileIndex: row.fileIndex }))).toEqual(
+      [
+        { name: "src/config", kind: "directory", depth: 0, fileIndex: undefined },
+        { name: "keybind.ts", kind: "file", depth: 1, fileIndex: 1 },
+        { name: "tui.ts", kind: "file", depth: 1, fileIndex: 0 },
+        { name: "README.md", kind: "file", depth: 0, fileIndex: 2 },
+      ],
+    )
   })
 
   test("collapses expanded unary children under the first visible directory id", () => {
@@ -159,11 +154,7 @@ describe("diff viewer file tree utilities", () => {
   })
 
   test("flattens only expanded directory descendants when expansion is provided", () => {
-    const tree = buildFileTree([
-      { file: "src/config/tui.ts" },
-      { file: "src/session/index.ts" },
-      { file: "README.md" },
-    ])
+    const tree = buildFileTree([{ file: "src/config/tui.ts" }, { file: "src/session/index.ts" }, { file: "README.md" }])
     const src = tree.nodes.find((node) => node.kind === "directory" && node.name === "src")!
     const config = tree.nodes.find((node) => node.kind === "directory" && node.name === "config")!
 
@@ -206,10 +197,7 @@ describe("diff viewer file tree utilities", () => {
 
   test("moves collapsed chain selection to first visible child", () => {
     const rows = flattenFileTree(
-      buildFileTree([
-        { file: "packages/opencode/src/cli/app.ts" },
-        { file: "packages/opencode/src/server/server.ts" },
-      ]),
+      buildFileTree([{ file: "packages/opencode/src/cli/app.ts" }, { file: "packages/opencode/src/server/server.ts" }]),
     )
     const packages = rows.find((row) => row.kind === "directory" && row.name === "packages/opencode/src")!
     const cli = rows.find((row) => row.kind === "directory" && row.name === "cli")!
@@ -219,10 +207,7 @@ describe("diff viewer file tree utilities", () => {
 
   test("moves file and collapsed directory selection to visible parent", () => {
     const rows = flattenFileTree(
-      buildFileTree([
-        { file: "packages/opencode/src/cli/app.ts" },
-        { file: "packages/opencode/src/server/server.ts" },
-      ]),
+      buildFileTree([{ file: "packages/opencode/src/cli/app.ts" }, { file: "packages/opencode/src/server/server.ts" }]),
     )
     const root = rows.find((row) => row.kind === "directory" && row.name === "packages/opencode/src")!
     const cli = rows.find((row) => row.kind === "directory" && row.name === "cli")!
@@ -236,11 +221,7 @@ describe("diff viewer file tree utilities", () => {
 
   test("moves file selection relative to the highlighted row", () => {
     const rows = flattenFileTree(
-      buildFileTree([
-        { file: "src/config/tui.ts" },
-        { file: "src/session/index.ts" },
-        { file: "README.md" },
-      ]),
+      buildFileTree([{ file: "src/config/tui.ts" }, { file: "src/session/index.ts" }, { file: "README.md" }]),
     )
     const config = rows.find((row) => row.kind === "directory" && row.name === "config")!
     const session = rows.find((row) => row.kind === "directory" && row.name === "session")!
@@ -258,14 +239,12 @@ describe("diff viewer file tree utilities", () => {
   })
 
   test("selects a file tree node and expands its parents for a patch file", () => {
-    const tree = buildFileTree([
-      { file: "src/config/tui.ts" },
-      { file: "src/session/index.ts" },
-      { file: "README.md" },
-    ])
+    const tree = buildFileTree([{ file: "src/config/tui.ts" }, { file: "src/session/index.ts" }, { file: "README.md" }])
     const selection = fileTreeFileSelection(tree, 1)
 
-    expect(selection?.highlightedNode).toBe(tree.nodes.find((node) => node.kind === "file" && node.name === "index.ts")?.id)
+    expect(selection?.highlightedNode).toBe(
+      tree.nodes.find((node) => node.kind === "file" && node.name === "index.ts")?.id,
+    )
     expect([...selection!.expandedNodes].map((id) => tree.nodes[id]!.name)).toEqual(["session", "src"])
     expect(fileTreeFileSelection(tree, 99)).toBeUndefined()
   })

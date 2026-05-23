@@ -7,7 +7,7 @@ import { SettingsHook } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import * as ShareNext from "./share-next"
+import { ShareNext } from "./share-next"
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
