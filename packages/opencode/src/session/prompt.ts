@@ -1806,15 +1806,6 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
-      const permissions: Permission.Rule[] = []
-      for (const [t, enabled] of Object.entries(input.tools ?? {})) {
-        permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
-      }
-      if (permissions.length > 0) {
-        session.permission = permissions
-        yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
-      }
-
         // UserPromptSubmit hook (Claude Code compatible) — fires once per user turn,
         // after the user message is persisted and before the agent loop starts.
         const userText = input.parts
@@ -1886,7 +1877,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
           }
         }
 
-        const permissions: Permission.Ruleset = []
+        const permissions: Permission.Rule[] = []
         for (const [t, enabled] of Object.entries(input.tools ?? {})) {
           permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
         }

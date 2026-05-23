@@ -28,7 +28,6 @@ import * as ProviderTransform from "./transform"
 import { ModelID, ProviderID } from "./schema"
 import { ModelStatus } from "./model-status"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { serviceUse } from "@/effect/service-use"
 
 const log = Log.create({ service: "provider" })
 
