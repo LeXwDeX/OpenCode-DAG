@@ -425,8 +425,8 @@ export function createPromptState(input: PromptInput): PromptState {
   const mentionOptions = createMemo(() => [...agents(), ...files(), ...resources()])
   const slashOptions = createMemo<SlashOption[]>(() => {
     const builtins = [
-      { kind: "slash", name: "new", display: "/new", description: "start a new session" } satisfies SlashOption,
-      { kind: "slash", name: "exit", display: "/exit", description: "close direct mode" } satisfies SlashOption,
+      { kind: "slash", name: "new", display: "/new", description: "新建会话" } satisfies SlashOption,
+      { kind: "slash", name: "exit", display: "/exit", description: "关闭直接模式" } satisfies SlashOption,
     ]
     const hidden = new Set(builtins.map((item) => item.name))
     return [

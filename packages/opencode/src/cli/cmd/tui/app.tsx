@@ -464,7 +464,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
     [
       {
         name: COMMAND_PALETTE_COMMAND,
-        title: "Show command palette",
+        title: "显示命令面板",
         category: "System",
         hidden: true,
         run: () => {
@@ -473,7 +473,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "session.list",
-        title: "Switch session",
+        title: "切换会话",
         category: "Session",
         suggested: sync.data.session.length > 0,
         slashName: "sessions",
@@ -484,7 +484,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "session.new",
-        title: "New session",
+        title: "新建会话",
         suggested: route.data.type === "session",
         category: "Session",
         slashName: "new",
@@ -498,7 +498,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "workspace.copy_path",
-        title: "Copy worktree path",
+        title: "复制工作树路径",
         category: "Workspace",
         enabled: () => currentWorktreeWorkspace() !== undefined,
         run: async () => {
@@ -512,7 +512,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       ...Array.from({ length: 9 }, (_, i) => ({
         name: `session.quick_switch.${i + 1}`,
-        title: `Switch to session in quick slot ${i + 1}`,
+        title: `切换到快捷槽位 ${i + 1} 的会话`,
         category: "Session",
         hidden: true,
         run: () => {
@@ -521,7 +521,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       })),
       {
         name: "model.list",
-        title: "Switch model",
+        title: "切换模型",
         suggested: true,
         category: "Agent",
         slashName: "models",
@@ -531,7 +531,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "model.cycle_recent",
-        title: "Model cycle",
+        title: "循环切换模型",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -540,7 +540,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "model.cycle_recent_reverse",
-        title: "Model cycle reverse",
+        title: "反向循环切换模型",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -549,7 +549,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "model.cycle_favorite",
-        title: "Favorite cycle",
+        title: "循环切换收藏模型",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -558,7 +558,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "model.cycle_favorite_reverse",
-        title: "Favorite cycle reverse",
+        title: "反向循环切换收藏模型",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -567,7 +567,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "agent.list",
-        title: "Switch agent",
+        title: "切换代理",
         category: "Agent",
         slashName: "agents",
         run: () => {
@@ -576,7 +576,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "mcp.list",
-        title: "Toggle MCPs",
+        title: "切换 MCP",
         category: "Agent",
         slashName: "mcps",
         run: () => {
@@ -585,7 +585,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "agent.cycle",
-        title: "Agent cycle",
+        title: "循环切换代理",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -594,7 +594,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "variant.cycle",
-        title: "Variant cycle",
+        title: "循环切换变体",
         category: "Agent",
         run: () => {
           local.model.variant.cycle()
@@ -602,7 +602,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "variant.list",
-        title: "Switch model variant",
+        title: "切换模型变体",
         category: "Agent",
         hidden: local.model.variant.list().length === 0,
         slashName: "variants",
@@ -612,7 +612,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "agent.cycle.reverse",
-        title: "Agent cycle reverse",
+        title: "反向循环切换代理",
         category: "Agent",
         hidden: true,
         run: () => {
@@ -621,7 +621,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "provider.connect",
-        title: "Connect provider",
+        title: "连接提供商",
         suggested: !connected(),
         slashName: "connect",
         run: () => {
@@ -633,7 +633,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         ? [
             {
               name: "console.org.switch",
-              title: "Switch org",
+              title: "切换组织",
               suggested: Boolean(sync.data.console_state.activeOrgName),
               slashName: "org",
               slashAliases: ["orgs", "switch-org"],
@@ -646,7 +646,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
         : []),
       {
         name: "opencode.status",
-        title: "View status",
+        title: "查看状态",
         slashName: "status",
         run: () => {
           dialog.replace(() => <DialogStatus />)
@@ -655,7 +655,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "theme.switch",
-        title: "Switch theme",
+        title: "切换主题",
         slashName: "themes",
         run: () => {
           dialog.replace(() => <DialogThemeList />)
@@ -664,7 +664,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "theme.switch_mode",
-        title: mode() === "dark" ? "Switch to light mode" : "Switch to dark mode",
+        title: mode() === "dark" ? "切换到亮色模式" : "切换到暗色模式",
         run: () => {
           setMode(mode() === "dark" ? "light" : "dark")
           dialog.clear()
@@ -673,7 +673,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "theme.mode.lock",
-        title: locked() ? "Unlock theme mode" : "Lock theme mode",
+        title: locked() ? "解锁主题模式" : "锁定主题模式",
         run: () => {
           if (locked()) unlock()
           else lock()
@@ -683,7 +683,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "help.show",
-        title: "Help",
+        title: "帮助",
         slashName: "help",
         run: () => {
           dialog.replace(() => <DialogHelp />)
@@ -692,7 +692,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "docs.open",
-        title: "Open docs",
+        title: "打开文档",
         run: () => {
           open("https://opencode.ai/docs").catch(() => {})
           dialog.clear()
@@ -701,7 +701,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "app.exit",
-        title: "Exit the app",
+        title: "退出应用",
         slashName: "exit",
         slashAliases: ["quit", "q"],
         run: () => exit(),
@@ -709,7 +709,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "app.debug",
-        title: "Toggle debug panel",
+        title: "切换调试面板",
         category: "System",
         run: () => {
           renderer.toggleDebugOverlay()
@@ -718,7 +718,7 @@ function App(props: { onSnapshot?: () => Promise<string[]> }) {
       },
       {
         name: "app.console",
-        title: "Toggle console",
+        title: "切换控制台",
         category: "System",
         run: () => {
           renderer.console.toggle()

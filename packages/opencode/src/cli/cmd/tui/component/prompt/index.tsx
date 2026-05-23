@@ -491,7 +491,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Open editor",
+        title: "打开编辑器",
         category: "Session",
         name: "prompt.editor",
         slashName: "editor",
@@ -575,7 +575,7 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Skills",
+        title: "技能",
         name: "prompt.skills",
         category: "Prompt",
         slashName: "skills",
@@ -595,8 +595,8 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Warp",
-        desc: "Change the workspace for the session",
+        title: "切换工作区",
+        desc: "切换当前会话的工作区",
         name: "workspace.set",
         category: "Session",
         enabled: Flag.OPENCODE_EXPERIMENTAL_WORKSPACES,

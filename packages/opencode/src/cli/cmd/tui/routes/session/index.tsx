@@ -445,7 +445,7 @@ export function Session() {
 
   const sessionCommandList = createMemo(() => [
     {
-      title: session()?.share?.url ? "Copy share link" : "Share session",
+      title: session()?.share?.url ? "复制分享链接" : "分享会话",
       value: "session.share",
       suggested: route.type === "session",
       category: "Session",
@@ -484,7 +484,7 @@ export function Session() {
       },
     },
     {
-      title: "Rename session",
+      title: "重命名会话",
       value: "session.rename",
       category: "Session",
       slash: {
@@ -495,7 +495,7 @@ export function Session() {
       },
     },
     {
-      title: "Jump to message",
+      title: "跳转到消息",
       value: "session.timeline",
       category: "Session",
       slash: {
@@ -517,7 +517,7 @@ export function Session() {
       },
     },
     {
-      title: "Fork session",
+      title: "分叉会话",
       value: "session.fork",
       category: "Session",
       slash: {
@@ -539,7 +539,7 @@ export function Session() {
       },
     },
     {
-      title: "Compact session",
+      title: "压缩会话",
       value: "session.compact",
       category: "Session",
       slash: {
@@ -565,7 +565,7 @@ export function Session() {
       },
     },
     {
-      title: "Unshare session",
+      title: "取消分享会话",
       value: "session.unshare",
       category: "Session",
       enabled: !!session()?.share?.url,
@@ -588,7 +588,7 @@ export function Session() {
       },
     },
     {
-      title: "Undo previous message",
+      title: "撤销上一条消息",
       value: "session.undo",
       category: "Session",
       slash: {
@@ -625,7 +625,7 @@ export function Session() {
       },
     },
     {
-      title: "Redo",
+      title: "重做",
       value: "session.redo",
       category: "Session",
       enabled: !!session()?.revert?.messageID,
@@ -651,7 +651,7 @@ export function Session() {
       },
     },
     {
-      title: sidebarVisible() ? "Hide sidebar" : "Show sidebar",
+      title: sidebarVisible() ? "隐藏侧边栏" : "显示侧边栏",
       value: "session.sidebar.toggle",
       category: "Session",
       run: () => {
@@ -664,7 +664,7 @@ export function Session() {
       },
     },
     {
-      title: conceal() ? "Disable code concealment" : "Enable code concealment",
+      title: conceal() ? "关闭代码折叠" : "开启代码折叠",
       value: "session.toggle.conceal",
       category: "Session",
       run: () => {
@@ -673,7 +673,7 @@ export function Session() {
       },
     },
     {
-      title: showTimestamps() ? "Hide timestamps" : "Show timestamps",
+      title: showTimestamps() ? "隐藏时间戳" : "显示时间戳",
       value: "session.toggle.timestamps",
       category: "Session",
       slash: {
@@ -688,8 +688,8 @@ export function Session() {
     {
       title: (() => {
         const next = nextThinkingMode(thinkingMode())
-        if (next === "hide") return "Collapse thinking"
-        return "Expand thinking"
+        if (next === "hide") return "折叠思考过程"
+        return "展开思考过程"
       })(),
       value: "session.toggle.thinking",
       category: "Session",
@@ -703,7 +703,7 @@ export function Session() {
       },
     },
     {
-      title: showDetails() ? "Hide tool details" : "Show tool details",
+      title: showDetails() ? "隐藏工具详情" : "显示工具详情",
       value: "session.toggle.actions",
       category: "Session",
       run: () => {
@@ -712,7 +712,7 @@ export function Session() {
       },
     },
     {
-      title: "Toggle session scrollbar",
+      title: "切换滚动条",
       value: "session.toggle.scrollbar",
       category: "Session",
       run: () => {
@@ -721,7 +721,7 @@ export function Session() {
       },
     },
     {
-      title: showGenericToolOutput() ? "Hide generic tool output" : "Show generic tool output",
+      title: showGenericToolOutput() ? "隐藏通用工具输出" : "显示通用工具输出",
       value: "session.toggle.generic_tool_output",
       category: "Session",
       run: () => {
@@ -730,7 +730,7 @@ export function Session() {
       },
     },
     {
-      title: "Page up",
+      title: "向上翻页",
       value: "session.page.up",
       category: "Session",
       hidden: true,
@@ -740,7 +740,7 @@ export function Session() {
       },
     },
     {
-      title: "Page down",
+      title: "向下翻页",
       value: "session.page.down",
       category: "Session",
       hidden: true,
@@ -750,7 +750,7 @@ export function Session() {
       },
     },
     {
-      title: "Line up",
+      title: "向上滚动一行",
       value: "session.line.up",
       category: "Session",
       hidden: true,
@@ -760,7 +760,7 @@ export function Session() {
       },
     },
     {
-      title: "Line down",
+      title: "向下滚动一行",
       value: "session.line.down",
       category: "Session",
       hidden: true,
@@ -770,7 +770,7 @@ export function Session() {
       },
     },
     {
-      title: "Half page up",
+      title: "向上翻半页",
       value: "session.half.page.up",
       category: "Session",
       hidden: true,
@@ -780,7 +780,7 @@ export function Session() {
       },
     },
     {
-      title: "Half page down",
+      title: "向下翻半页",
       value: "session.half.page.down",
       category: "Session",
       hidden: true,
@@ -790,7 +790,7 @@ export function Session() {
       },
     },
     {
-      title: "First message",
+      title: "跳转到首条消息",
       value: "session.first",
       category: "Session",
       hidden: true,
@@ -800,7 +800,7 @@ export function Session() {
       },
     },
     {
-      title: "Last message",
+      title: "跳转到末条消息",
       value: "session.last",
       category: "Session",
       hidden: true,
@@ -810,7 +810,7 @@ export function Session() {
       },
     },
     {
-      title: "Jump to last user message",
+      title: "跳转到最后一条用户消息",
       value: "session.messages_last_user",
       category: "Session",
       hidden: true,
@@ -841,21 +841,21 @@ export function Session() {
       },
     },
     {
-      title: "Next message",
+      title: "下一条消息",
       value: "session.message.next",
       category: "Session",
       hidden: true,
       run: () => scrollToMessage("next", dialog),
     },
     {
-      title: "Previous message",
+      title: "上一条消息",
       value: "session.message.previous",
       category: "Session",
       hidden: true,
       run: () => scrollToMessage("prev", dialog),
     },
     {
-      title: "Copy last assistant message",
+      title: "复制最后一条助手消息",
       value: "messages.copy",
       category: "Session",
       run: () => {
@@ -897,7 +897,7 @@ export function Session() {
       },
     },
     {
-      title: "Copy session transcript",
+      title: "复制会话记录",
       value: "session.copy",
       category: "Session",
       slash: {
@@ -927,7 +927,7 @@ export function Session() {
       },
     },
     {
-      title: "Export session transcript",
+      title: "导出会话记录",
       value: "session.export",
       category: "Session",
       slash: {
