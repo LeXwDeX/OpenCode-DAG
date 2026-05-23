@@ -2,7 +2,6 @@ import { Effect, Schema } from "effect"
 import { Route } from "../route/client"
 import { Auth } from "../route/auth"
 import { Endpoint } from "../route/endpoint"
-import { Framing } from "../route/framing"
 import { HttpTransport, WebSocketTransport } from "../route/transport"
 import { Protocol } from "../route/protocol"
 import {
@@ -34,6 +33,12 @@ const OpenAIResponsesInputText = Schema.Struct({
   type: Schema.tag("input_text"),
   text: Schema.String,
 })
+const OpenAIResponsesInputImage = Schema.Struct({
+  type: Schema.tag("input_image"),
+  image_url: Schema.String,
+})
+const OpenAIResponsesInputContent = Schema.Union([OpenAIResponsesInputText, OpenAIResponsesInputImage])
+type OpenAIResponsesInputContent = Schema.Schema.Type<typeof OpenAIResponsesInputContent>
 
 const OpenAIResponsesOutputText = Schema.Struct({
   type: Schema.tag("output_text"),
@@ -55,10 +60,7 @@ const OpenAIResponsesReasoningItem = Schema.Struct({
 // `function_call_output.output` accepts either a plain string or an ordered
 // array of content items so tools can return images in addition to text.
 // https://platform.openai.com/docs/api-reference/responses/object
-const OpenAIResponsesFunctionCallOutputContent = Schema.Union([
-  OpenAIResponsesInputText,
-  OpenAIResponsesInputImage,
-])
+const OpenAIResponsesFunctionCallOutputContent = Schema.Union([OpenAIResponsesInputText, OpenAIResponsesInputImage])
 
 const OpenAIResponsesFunctionCallOutput = Schema.Union([
   Schema.String,
@@ -66,8 +68,8 @@ const OpenAIResponsesFunctionCallOutput = Schema.Union([
 ])
 
 const OpenAIResponsesInputItem = Schema.Union([
-  Schema.Struct({ role: Schema.tag("system"), content: Schema.Union([Schema.String, Schema.Array(OpenAIResponsesInputText)]) }),
-  Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputText) }),
+  Schema.Struct({ role: Schema.tag("system"), content: Schema.String }),
+  Schema.Struct({ role: Schema.tag("user"), content: Schema.Array(OpenAIResponsesInputContent) }),
   Schema.Struct({ role: Schema.tag("assistant"), content: Schema.Array(OpenAIResponsesOutputText) }),
   OpenAIResponsesReasoningItem,
   Schema.Struct({
@@ -296,19 +298,13 @@ const lowerToolResultOutput = Effect.fn("OpenAIResponses.lowerToolResultOutput")
 
 const lowerMessages = Effect.fn("OpenAIResponses.lowerMessages")(function* (request: LLMRequest) {
   const system: OpenAIResponsesInputItem[] =
-    request.system.length === 0 ? [] : [{ role: "system", content: request.system.map((part) => ({ type: "input_text", text: part.text })) }]
+    request.system.length === 0 ? [] : [{ role: "system", content: ProviderShared.joinText(request.system) }]
   const input: OpenAIResponsesInputItem[] = [...system]
   const store = OpenAIOptions.store(request)
 
   for (const message of request.messages) {
     if (message.role === "user") {
-      const content: TextPart[] = []
-      for (const part of message.content) {
-        if (!ProviderShared.supportsContent(part, ["text"]))
-          return yield* ProviderShared.unsupportedContent("OpenAI Responses", "user", ["text"])
-        content.push(part)
-      }
-      input.push({ role: "user", content: content.map((part) => ({ type: "input_text", text: part.text })) })
+      input.push({ role: "user", content: yield* Effect.forEach(message.content, lowerUserContent) })
       continue
     }
 
@@ -719,27 +715,18 @@ export const protocol = Protocol.make({
   },
 })
 
-const encodeBody = Schema.encodeSync(Schema.fromJsonString(OpenAIResponsesBody))
-const transportBase = {
-  endpoint: Endpoint.path<OpenAIResponsesBody>(PATH),
-  auth: Auth.bearer(),
-  encodeBody,
-}
-const routeDefaults = {
-  baseURL: DEFAULT_BASE_URL,
-}
+const endpoint = Endpoint.path<OpenAIResponsesBody>(PATH, { baseURL: DEFAULT_BASE_URL })
+const auth = Auth.none
 
-export const httpTransport = HttpTransport.httpJson({
-  ...transportBase,
-  framing: Framing.sse,
-})
+export const httpTransport = HttpTransport.sseJson.with<OpenAIResponsesBody>()
 
 export const route = Route.make({
   id: ADAPTER,
   provider: "openai",
   protocol,
+  endpoint,
+  auth,
   transport: httpTransport,
-  defaults: routeDefaults,
 })
 
 const decodeWebSocketMessage = ProviderShared.validateWith(Schema.decodeUnknownEffect(OpenAIResponsesWebSocketMessage))
@@ -752,8 +739,10 @@ const webSocketMessage = (body: OpenAIResponsesBody | Record<string, unknown>) =
     return yield* decodeWebSocketMessage({ ...message, type: "response.create" })
   })
 
-export const webSocketTransport = WebSocketTransport.json({
-  ...transportBase,
+export const webSocketTransport = WebSocketTransport.jsonTransport.with<
+  OpenAIResponsesBody,
+  OpenAIResponsesWebSocketMessage
+>({
   toMessage: webSocketMessage,
   encodeMessage: encodeWebSocketMessage,
 })
@@ -762,15 +751,9 @@ export const webSocketRoute = Route.make({
   id: `${ADAPTER}-websocket`,
   provider: "openai",
   protocol,
+  endpoint,
+  auth,
   transport: webSocketTransport,
-  defaults: routeDefaults,
 })
-
-// =============================================================================
-// Model Helper
-// =============================================================================
-export const model = route.model
-
-export const webSocketModel = webSocketRoute.model
 
 export * as OpenAIResponses from "./openai-responses"

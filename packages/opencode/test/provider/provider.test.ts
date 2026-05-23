@@ -2135,8 +2135,8 @@ test("model variants can be customized via config", async () => {
 
 it.instance("Google Vertex: uses REP endpoint for Claude continental multi-regions", () =>
   Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "eu")
+    yield* setProcessEnv("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* setProcessEnv("VERTEX_LOCATION", "eu")
     const provider = yield* Provider.Service
     const model = yield* provider.getModel(
       ProviderID.make("google-vertex"),
@@ -2151,8 +2151,8 @@ it.instance("Google Vertex: uses REP endpoint for Claude continental multi-regio
 
 it.instance("Google Vertex Anthropic: uses REP endpoint for continental multi-regions", () =>
   Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "us")
+    yield* setProcessEnv("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* setProcessEnv("VERTEX_LOCATION", "us")
     const provider = yield* Provider.Service
     const model = yield* provider.getModel(
       ProviderID.make("google-vertex-anthropic"),
@@ -2167,8 +2167,8 @@ it.instance("Google Vertex Anthropic: uses REP endpoint for continental multi-re
 
 it.instance("Google Vertex: keeps regional Claude endpoints unchanged", () =>
   Effect.gen(function* () {
-    yield* set("GOOGLE_CLOUD_PROJECT", "test-project")
-    yield* set("VERTEX_LOCATION", "europe-west1")
+    yield* setProcessEnv("GOOGLE_CLOUD_PROJECT", "test-project")
+    yield* setProcessEnv("VERTEX_LOCATION", "europe-west1")
     const provider = yield* Provider.Service
     const model = yield* provider.getModel(
       ProviderID.make("google-vertex"),
@@ -2183,10 +2183,10 @@ it.instance("Google Vertex: keeps regional Claude endpoints unchanged", () =>
 
 it.instance("cloudflare-ai-gateway loads with env variables", () =>
   Effect.gen(function* () {
-    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
-    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
-    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
-    const providers = yield* list
+    yield* setProcessEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* setProcessEnv("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* setProcessEnv("CLOUDFLARE_API_TOKEN", "test-token")
+    const providers = yield* Provider.Service.use((provider) => provider.list())
     expect(providers[ProviderID.make("cloudflare-ai-gateway")]).toBeDefined()
   }),
 )
@@ -2194,10 +2194,10 @@ it.instance("cloudflare-ai-gateway loads with env variables", () =>
 it.instance(
   "cloudflare-ai-gateway forwards config metadata options",
   Effect.gen(function* () {
-    yield* set("CLOUDFLARE_ACCOUNT_ID", "test-account")
-    yield* set("CLOUDFLARE_GATEWAY_ID", "test-gateway")
-    yield* set("CLOUDFLARE_API_TOKEN", "test-token")
-    const providers = yield* list
+    yield* setProcessEnv("CLOUDFLARE_ACCOUNT_ID", "test-account")
+    yield* setProcessEnv("CLOUDFLARE_GATEWAY_ID", "test-gateway")
+    yield* setProcessEnv("CLOUDFLARE_API_TOKEN", "test-token")
+    const providers = yield* Provider.Service.use((provider) => provider.list())
     expect(providers[ProviderID.make("cloudflare-ai-gateway")]).toBeDefined()
     expect(providers[ProviderID.make("cloudflare-ai-gateway")].options.metadata).toEqual({
       invoked_by: "test",
@@ -2208,8 +2208,8 @@ it.instance(
     config: {
       provider: { "cloudflare-ai-gateway": { options: { metadata: { invoked_by: "test", project: "opencode" } } } },
     },
-  })
-})
+  },
+)
 
 test("disabled key is stripped from variant config", async () => {
   await using tmp = await tmpdir({
