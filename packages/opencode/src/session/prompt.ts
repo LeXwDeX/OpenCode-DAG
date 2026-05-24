@@ -1984,7 +1984,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               .filter((p): p is MessageV2.TextPart => p.type === "text")
               .map((p) => p.text)
               .join("") ?? ""
-            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>\s*<summary>/.test(assistantText)
+            // Match either <analysis> or <summary> tags (or both)
+            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>|<summary>[\s\S]*?<\/summary>/.test(assistantText)
 
             if (hasCompressionHallucination) {
               yield* slog.warn("detected compression hallucination, injecting continuation", {
