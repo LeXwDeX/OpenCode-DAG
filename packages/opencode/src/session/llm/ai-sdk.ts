@@ -81,6 +81,14 @@ export function toLLMEvents(
 
     case "finish":
       return Effect.sync(() => {
+        // Log full API response for debugging qwen3.7-max premature stop issue
+        console.log("[LLM API Response Debug]", {
+          finishReason: event.finishReason,
+          totalUsage: event.totalUsage,
+          providerMetadata: "providerMetadata" in event ? event.providerMetadata : undefined,
+          fullEvent: JSON.stringify(event, null, 2),
+        })
+        
         const events = [
           LLMEvent.finish({
             reason: finishReason(event.finishReason),

@@ -2021,6 +2021,13 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               lastAssistantId: lastAssistant.id,
               lastAssistantTokens: lastFinished?.tokens,
               lastAssistantModel: lastUser.model.modelID,
+              // Debug: capture actual text content for qwen3.7-max premature stop issue
+              lastAssistantTextContent: assistantText,
+              lastAssistantTextLength: assistantText.length,
+              lastAssistantParts: lastAssistantMsg?.parts.map(p => ({
+                type: p.type,
+                text: p.type === "text" ? p.text : undefined,
+              })),
             })
             break
           }
