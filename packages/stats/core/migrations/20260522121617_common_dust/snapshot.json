@@ -2,9 +2,7 @@
   "version": "6",
   "dialect": "mysql",
   "id": "72655266-65da-408e-bfd8-9f3a4ad817a5",
-  "prevIds": [
-    "00000000-0000-0000-0000-000000000000"
-  ],
+  "prevIds": ["00000000-0000-0000-0000-000000000000"],
   "ddl": [
     {
       "name": "stat",
@@ -515,9 +513,7 @@
       "table": "stat"
     },
     {
-      "columns": [
-        "id"
-      ],
+      "columns": ["id"],
       "name": "PRIMARY",
       "table": "stat",
       "entityType": "pks"

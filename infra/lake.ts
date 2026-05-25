@@ -13,13 +13,10 @@ const glueS3TablesDatabaseWildcardArn = $interpolate`arn:${partition.partition}:
 const glueS3TablesTableWildcardArn = $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:table/${glueCatalogName}/${tableBucketName}/*/*`
 const s3TablesBucketWildcardArn = $interpolate`arn:${partition.partition}:s3tables:${region.region}:${current.accountId}:bucket/*`
 
-export const tableBucket = new aws.s3tables.TableBucket(
-  "LakeTableBucket",
-  {
-    name: tableBucketName,
-    forceDestroy: $app.stage !== "production",
-  },
-)
+export const tableBucket = new aws.s3tables.TableBucket("LakeTableBucket", {
+  name: tableBucketName,
+  forceDestroy: $app.stage !== "production",
+})
 
 const s3TablesCatalog = new aws.cloudcontrol.Resource(
   "LakeS3TablesCatalog",
@@ -54,122 +51,107 @@ const s3TablesCatalog = new aws.cloudcontrol.Resource(
   { dependsOn: [tableBucket] },
 )
 
-const athenaResultsBucket = new aws.s3.Bucket(
-  "LakeAthenaResults",
-  {
-    bucket: `opencode-${$app.stage}-lake-athena-results`,
-    forceDestroy: $app.stage !== "production",
-  },
-)
+const athenaResultsBucket = new aws.s3.Bucket("LakeAthenaResults", {
+  bucket: `opencode-${$app.stage}-lake-athena-results`,
+  forceDestroy: $app.stage !== "production",
+})
 
-const firehoseErrorBucket = new aws.s3.Bucket(
-  "LakeFirehoseErrors",
-  {
-    bucket: `opencode-${$app.stage}-lake-firehose-errors`,
-    forceDestroy: $app.stage !== "production",
-  },
-)
+const firehoseErrorBucket = new aws.s3.Bucket("LakeFirehoseErrors", {
+  bucket: `opencode-${$app.stage}-lake-firehose-errors`,
+  forceDestroy: $app.stage !== "production",
+})
 
-const athenaWorkgroup = new aws.athena.Workgroup(
-  "LakeAthenaWorkgroup",
-  {
-    name: `opencode-${$app.stage}-lake-workgroup`,
-    forceDestroy: $app.stage !== "production",
-    configuration: {
-      enforceWorkgroupConfiguration: true,
-      publishCloudwatchMetricsEnabled: true,
-      resultConfiguration: {
-        outputLocation: $interpolate`s3://${athenaResultsBucket.bucket}/`,
-      },
+const athenaWorkgroup = new aws.athena.Workgroup("LakeAthenaWorkgroup", {
+  name: `opencode-${$app.stage}-lake-workgroup`,
+  forceDestroy: $app.stage !== "production",
+  configuration: {
+    enforceWorkgroupConfiguration: true,
+    publishCloudwatchMetricsEnabled: true,
+    resultConfiguration: {
+      outputLocation: $interpolate`s3://${athenaResultsBucket.bucket}/`,
     },
   },
-)
+})
 
-const firehoseRole = new aws.iam.Role(
-  "LakeFirehoseRole",
-  {
-    assumeRolePolicy: aws.iam.getPolicyDocumentOutput({
-      statements: [
-        {
-          effect: "Allow",
-          actions: ["sts:AssumeRole"],
-          principals: [
-            {
-              type: "Service",
-              identifiers: ["firehose.amazonaws.com"],
-            },
-          ],
-        },
-      ],
-    }).json,
-  },
-)
+const firehoseRole = new aws.iam.Role("LakeFirehoseRole", {
+  assumeRolePolicy: aws.iam.getPolicyDocumentOutput({
+    statements: [
+      {
+        effect: "Allow",
+        actions: ["sts:AssumeRole"],
+        principals: [
+          {
+            type: "Service",
+            identifiers: ["firehose.amazonaws.com"],
+          },
+        ],
+      },
+    ],
+  }).json,
+})
 
-const firehosePolicy = new aws.iam.RolePolicy(
-  "LakeFirehosePolicy",
-  {
-    role: firehoseRole.id,
-    policy: aws.iam.getPolicyDocumentOutput({
-      statements: [
-        {
-          effect: "Allow",
-          actions: [
-            "s3tables:ListTableBuckets",
-            "s3tables:GetTableBucket",
-            "s3tables:GetNamespace",
-            "s3tables:GetTable",
-            "s3tables:GetTableData",
-            "s3tables:GetTableMetadataLocation",
-            "s3tables:ListNamespaces",
-            "s3tables:ListTables",
-            "s3tables:PutTableData",
-            "s3tables:UpdateTableMetadataLocation",
-          ],
-          resources: ["*"],
-        },
-        {
-          effect: "Allow",
-          actions: [
-            "glue:GetCatalog",
-            "glue:GetCatalogs",
-            "glue:GetDatabase",
-            "glue:GetDatabases",
-            "glue:GetTable",
-            "glue:GetTables",
-            "glue:UpdateTable",
-          ],
-          resources: [
-            glueCatalogArn,
-            glueS3TablesCatalogArn,
-            $interpolate`${glueS3TablesCatalogArn}/*`,
-            glueS3TablesDatabaseWildcardArn,
-            glueS3TablesTableWildcardArn,
-            $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:database/*`,
-            $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:table/*/*`,
-            $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:table/${glueCatalogName}/*`,
-          ],
-        },
-        {
-          effect: "Allow",
-          actions: [
-            "s3:AbortMultipartUpload",
-            "s3:GetBucketLocation",
-            "s3:GetObject",
-            "s3:ListBucket",
-            "s3:ListBucketMultipartUploads",
-            "s3:PutObject",
-          ],
-          resources: [firehoseErrorBucket.arn, $interpolate`${firehoseErrorBucket.arn}/*`],
-        },
-        {
-          effect: "Allow",
-          actions: ["lakeformation:GetDataAccess"],
-          resources: ["*"],
-        },
-      ],
-    }).json,
-  },
-)
+const firehosePolicy = new aws.iam.RolePolicy("LakeFirehosePolicy", {
+  role: firehoseRole.id,
+  policy: aws.iam.getPolicyDocumentOutput({
+    statements: [
+      {
+        effect: "Allow",
+        actions: [
+          "s3tables:ListTableBuckets",
+          "s3tables:GetTableBucket",
+          "s3tables:GetNamespace",
+          "s3tables:GetTable",
+          "s3tables:GetTableData",
+          "s3tables:GetTableMetadataLocation",
+          "s3tables:ListNamespaces",
+          "s3tables:ListTables",
+          "s3tables:PutTableData",
+          "s3tables:UpdateTableMetadataLocation",
+        ],
+        resources: ["*"],
+      },
+      {
+        effect: "Allow",
+        actions: [
+          "glue:GetCatalog",
+          "glue:GetCatalogs",
+          "glue:GetDatabase",
+          "glue:GetDatabases",
+          "glue:GetTable",
+          "glue:GetTables",
+          "glue:UpdateTable",
+        ],
+        resources: [
+          glueCatalogArn,
+          glueS3TablesCatalogArn,
+          $interpolate`${glueS3TablesCatalogArn}/*`,
+          glueS3TablesDatabaseWildcardArn,
+          glueS3TablesTableWildcardArn,
+          $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:database/*`,
+          $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:table/*/*`,
+          $interpolate`arn:${partition.partition}:glue:${region.region}:${current.accountId}:table/${glueCatalogName}/*`,
+        ],
+      },
+      {
+        effect: "Allow",
+        actions: [
+          "s3:AbortMultipartUpload",
+          "s3:GetBucketLocation",
+          "s3:GetObject",
+          "s3:ListBucket",
+          "s3:ListBucketMultipartUploads",
+          "s3:PutObject",
+        ],
+        resources: [firehoseErrorBucket.arn, $interpolate`${firehoseErrorBucket.arn}/*`],
+      },
+      {
+        effect: "Allow",
+        actions: ["lakeformation:GetDataAccess"],
+        resources: ["*"],
+      },
+    ],
+  }).json,
+})
 
 const firehose = new aws.kinesis.FirehoseDeliveryStream(
   "LakeFirehose",

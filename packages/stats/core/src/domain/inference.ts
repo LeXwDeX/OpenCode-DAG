@@ -10,11 +10,7 @@ export type StatDimension = "model" | "provider" | "geo"
 export function buildStatsQuery(periodStart: Date, periodEnd: Date, dimension: StatDimension) {
   const periodStartValue = sqlString(periodStart.toISOString())
   const periodEndValue = sqlString(periodEnd.toISOString())
-  const sourceTable = [
-    Resource.InferenceEvent.catalog,
-    Resource.InferenceEvent.database,
-    Resource.InferenceEvent.table,
-  ]
+  const sourceTable = [Resource.InferenceEvent.catalog, Resource.InferenceEvent.database, Resource.InferenceEvent.table]
     .map(sqlIdentifier)
     .join(".")
   const dimensionSql = (() => {

@@ -40,15 +40,13 @@ export class Ingest extends Context.Service<Ingest, Ingest.Service>()("@opencode
           })
         }
 
-        const failed = (
-          yield* Effect.all(
-            chunks(
-              records.map((event) => ({ Data: Buffer.from(JSON.stringify(event)) })),
-              MAX_FIREHOSE_BATCH_SIZE,
-            ).map((batch) => putRecords(client, Resource.LakeIngestConfig.streamName, batch)),
-            { concurrency: 8 },
-          )
-        ).reduce((sum, item) => sum + item, 0)
+        const failed = (yield* Effect.all(
+          chunks(
+            records.map((event) => ({ Data: Buffer.from(JSON.stringify(event)) })),
+            MAX_FIREHOSE_BATCH_SIZE,
+          ).map((batch) => putRecords(client, Resource.LakeIngestConfig.streamName, batch)),
+          { concurrency: 8 },
+        )).reduce((sum, item) => sum + item, 0)
 
         if (failed > 0) {
           return yield* new IngestError({ message: "Failed to ingest all lake records", failed })
@@ -75,7 +73,8 @@ const putRecords: (
 ) {
   const result = yield* Effect.tryPromise({
     try: () => client.send(new PutRecordBatchCommand({ DeliveryStreamName: streamName, Records: records })),
-    catch: (cause) => new IngestError({ message: "Failed to write lake records to Firehose", failed: records.length, cause }),
+    catch: (cause) =>
+      new IngestError({ message: "Failed to write lake records to Firehose", failed: records.length, cause }),
   })
   const failed =
     result.RequestResponses?.flatMap((item, index) => {
