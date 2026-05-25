@@ -69,17 +69,14 @@ describe("opencode acp-next (subprocess)", () => {
         )
         yield* acp.request<InitializeResponse>("initialize", { protocolVersion: 1 })
 
-        const session = expectOk(
-          yield* acp.request<NewSessionResponse>("session/new", { cwd: home, mcpServers: [] }),
-        )
+        const session = expectOk(yield* acp.request<NewSessionResponse>("session/new", { cwd: home, mcpServers: [] }))
         expect(typeof session.sessionId).toBe("string")
         expect(selectConfigOption(session.configOptions, "model")?.category).toBe("model")
 
         const update = yield* acp.waitForNotification<SessionNotification>(
           "session/update",
           (params) =>
-            params.sessionId === session.sessionId &&
-            params.update.sessionUpdate === "available_commands_update",
+            params.sessionId === session.sessionId && params.update.sessionUpdate === "available_commands_update",
         )
         expect(update.params?.sessionId).toBe(session.sessionId)
 

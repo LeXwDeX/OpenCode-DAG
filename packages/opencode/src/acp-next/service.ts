@@ -39,7 +39,10 @@ export type Interface = {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/ACPNext/Service") {}
 
-export function make(input: { sdk: OpencodeClient; connection?: Pick<AgentSideConnection, "sessionUpdate"> }): Interface {
+export function make(input: {
+  sdk: OpencodeClient
+  connection?: Pick<AgentSideConnection, "sessionUpdate">
+}): Interface {
   const sessions = new Map<string, SessionState>()
   const directories = new Map<string, Promise<Directory.Snapshot>>()
   const registeredMcp = new Map<string, Set<string>>()
@@ -401,7 +404,10 @@ function registerMcpServers(
               { throwOnError: true },
             ),
           "mcp",
-        ).pipe(Effect.tap(() => Effect.sync(() => current.add(server.name))), Effect.ignore),
+        ).pipe(
+          Effect.tap(() => Effect.sync(() => current.add(server.name))),
+          Effect.ignore,
+        ),
       ),
     { concurrency: "unbounded" },
   ).pipe(Effect.asVoid)

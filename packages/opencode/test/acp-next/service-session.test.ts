@@ -215,7 +215,6 @@ describe("ACP next service sessions", () => {
     expect(result.configOptions?.find((option) => option.id === "mode")?.currentValue).toBe("plan")
   })
 
-
   it("maps provider auth failures to auth-required request errors", async () => {
     const service = ACPNextService.make({
       sdk: {
@@ -244,15 +243,15 @@ describe("ACP next service sessions", () => {
   it("does not cache failed directory snapshots", async () => {
     let providersCalls = 0
     const sdk = {
-        config: {
-          providers: () => {
+      config: {
+        providers: () => {
           providersCalls++
           if (providersCalls === 1) {
             return Promise.reject({ name: "ProviderAuthError", data: { providerID: "test" } })
           }
           return Promise.resolve({ data: { providers: [provider], default: { test: modelID } } })
-          },
-          get: () => Promise.resolve({ data: {} }),
+        },
+        get: () => Promise.resolve({ data: {} }),
       },
       app: {
         agents: () => Promise.resolve({ data: [{ name: "build", mode: "primary", permission: [], options: {} }] }),
