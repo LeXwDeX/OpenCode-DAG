@@ -2,6 +2,9 @@ import { FinishReason, LLMEvent, ProviderMetadata, ToolResultValue } from "@open
 import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
 import { errorMessage } from "@/util/error"
+import * as Log from "@opencode-ai/core/util/log"
+
+const log = Log.create({ service: "llm.ai-sdk" })
 
 type Result = Awaited<ReturnType<typeof streamText>>
 type AISDKEvent = Result["fullStream"] extends AsyncIterable<infer T> ? T : never
@@ -82,11 +85,10 @@ export function toLLMEvents(
     case "finish":
       return Effect.sync(() => {
         // Log full API response for debugging qwen3.7-max premature stop issue
-        console.log("[LLM API Response Debug]", {
+        log.debug("LLM API finish event", {
           finishReason: event.finishReason,
           totalUsage: event.totalUsage,
           providerMetadata: "providerMetadata" in event ? event.providerMetadata : undefined,
-          fullEvent: JSON.stringify(event, null, 2),
         })
         
         const events = [
