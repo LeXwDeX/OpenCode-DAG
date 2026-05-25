@@ -1977,15 +1977,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-            // Detect model hallucinating <analysis>/<summary> compression format
+            // Detect model hallucinating <analysis>/<summary>/<thought> tags
             // instead of calling the compress tool. If detected, inject a
             // continuation message and keep the loop running.
             const assistantText = lastAssistantMsg?.parts
               .filter((p): p is MessageV2.TextPart => p.type === "text")
               .map((p) => p.text)
               .join("") ?? ""
-            // Match either <analysis> or <summary> tags (or both)
-            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>|<summary>[\s\S]*?<\/summary>/.test(assistantText)
+            // Match <analysis>, <summary>, or <thought> tags
+            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>|<summary>[\s\S]*?<\/summary>|<thought>[\s\S]*?<\/thought>/.test(assistantText)
 
             if (hasCompressionHallucination) {
               yield* slog.warn("detected compression hallucination, injecting continuation", {
