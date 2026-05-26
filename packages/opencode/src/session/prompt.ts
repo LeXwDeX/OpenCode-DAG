@@ -1992,11 +1992,15 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               const tagSummary = matchedTags.length > 0 ? matchedTags.join(", ") : "unknown"
               const upstreamRequestId = getLastUpstreamRequestId(sessionID)
 
-              yield* slog.warn("detected compression hallucination, injecting continuation", {
+              // 明确标记：补丁代码已触发
+              yield* slog.warn("🔧 HALLUCINATION_PATCH_TRIGGERED", {
+                patchType: "compression_hallucination",
                 finishReason: lastAssistant.finish,
                 step,
                 lastAssistantModel: lastUser.model.modelID,
                 matchedTags: tagSummary,
+                upstreamRequestId: upstreamRequestId || "N/A",
+                action: "injecting_continuation_message",
               })
 
               // Add red alert part to the assistant message for TUI display
