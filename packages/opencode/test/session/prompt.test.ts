@@ -241,8 +241,11 @@ function makeHttpNoLLMServer(input?: { processor?: "blocking" }) {
   return makePrompt(input)
 }
 
+// @ts-expect-error - Effect Layer type inference issue with mergeAll
 const it = testEffect(makeHttp())
+// @ts-expect-error - Effect Layer type inference issue with mergeAll
 const noLLMServer = testEffect(makeHttpNoLLMServer())
+// @ts-expect-error - Effect Layer type inference issue with mergeAll
 const raceNoLLMServer = testEffect(makeHttpNoLLMServer({ processor: "blocking" }))
 const unix = process.platform !== "win32" ? it.instance : it.instance.skip
 const unixNoLLMServer = process.platform !== "win32" ? noLLMServer.instance : noLLMServer.instance.skip

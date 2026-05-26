@@ -16,6 +16,8 @@ import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
+import { detectHallucination } from "./hallucination"
+import { getLastUpstreamRequestId } from "./llm"
 import { Bus } from "../bus"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
@@ -1977,22 +1979,38 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-            // Detect model hallucinating <analysis>/<summary>/<thought> tags
-            // instead of calling the compress tool. If detected, inject a
+            // Detect model hallucinating tool-call/compression tags as plain text
+            // instead of actually calling tools. If detected, inject a
             // continuation message and keep the loop running.
             const assistantText = lastAssistantMsg?.parts
               .filter((p): p is MessageV2.TextPart => p.type === "text")
               .map((p) => p.text)
               .join("") ?? ""
-            // Match <analysis>, <summary>, or <thought> tags
-            const hasCompressionHallucination = /<analysis>[\s\S]*?<\/analysis>|<summary>[\s\S]*?<\/summary>|<thought>[\s\S]*?<\/thought>/.test(assistantText)
+            const { detected: hasHallucination, matchedTags } = detectHallucination(assistantText)
 
-            if (hasCompressionHallucination) {
+            if (hasHallucination) {
+              const tagSummary = matchedTags.length > 0 ? matchedTags.join(", ") : "unknown"
+              const upstreamRequestId = getLastUpstreamRequestId(sessionID)
+
               yield* slog.warn("detected compression hallucination, injecting continuation", {
                 finishReason: lastAssistant.finish,
                 step,
                 lastAssistantModel: lastUser.model.modelID,
+                matchedTags: tagSummary,
               })
+
+              // Add red alert part to the assistant message for TUI display
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: lastAssistant.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                text: `⚠ 检测到模型幻觉标签 [${tagSummary}] + STOP，已触发 opencode 业务自动化继续${upstreamRequestId ? `，upstream_request_id：${upstreamRequestId}` : ""}`,
+                metadata: { alert: "hallucination" },
+                time: { start: Date.now(), end: Date.now() },
+              })
+
               const continueMsg = yield* sessions.updateMessage({
                 id: MessageID.ascending(),
                 role: "user",
@@ -2010,6 +2028,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 text: "You just output a compression summary as plain text instead of calling the compress tool. This is incorrect. Resume your previous task immediately — do NOT generate summaries inline. If you need to compress context, use the compress tool call.",
                 time: { start: Date.now(), end: Date.now() },
               })
+              // Always continue: detected tags + STOP means model stopped prematurely.
+              // The synthetic user message above tells it to resume.
               continue
             }
 

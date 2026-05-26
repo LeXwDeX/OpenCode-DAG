@@ -1,3 +1,4 @@
+// @ts-expect-error - @lydell/node-pty types not exported via package.json "exports"
 import * as pty from "@lydell/node-pty"
 import type { Opts, Proc } from "./pty"
 

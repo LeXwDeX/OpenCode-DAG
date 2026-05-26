@@ -1423,21 +1423,28 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
 
   return (
     <>
-      <For each={props.parts}>
-        {(part, index) => {
-          const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
-          return (
-            <Show when={component()}>
-              <Dynamic
-                last={index() === props.parts.length - 1}
-                component={component()}
-                part={part as any}
-                message={props.message}
-              />
-            </Show>
-          )
-        }}
-      </For>
+      {(() => {
+        const renderParts = createMemo(() =>
+          props.parts.filter((x) => !(x.type === "text" && x.synthetic === true && x.metadata?.alert === "hallucination")),
+        )
+        return (
+          <For each={renderParts()}>
+            {(part, index) => {
+              const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])
+              return (
+                <Show when={component()}>
+                  <Dynamic
+                    last={index() === renderParts().length - 1}
+                    component={component()}
+                    part={part as any}
+                    message={props.message}
+                  />
+                </Show>
+              )
+            }}
+          </For>
+        )
+      })()}
       <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
@@ -1460,6 +1467,22 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           <text fg={theme.textMuted}>{props.message.error?.data.message}</text>
         </box>
       </Show>
+      <For each={props.parts.filter((x): x is TextPart => x.type === "text" && x.synthetic === true && x.metadata?.alert === "hallucination")}>
+        {(alertPart) => (
+          <box
+            border={["left"]}
+            paddingTop={1}
+            paddingBottom={1}
+            paddingLeft={2}
+            marginTop={1}
+            backgroundColor={theme.backgroundPanel}
+            customBorderChars={SplitBorder.customBorderChars}
+            borderColor={theme.error}
+          >
+            <text fg={theme.error}>{alertPart.text}</text>
+          </box>
+        )}
+      </For>
       <Switch>
         <Match when={props.last || final() || props.message.error?.name === "MessageAbortedError"}>
           <box paddingLeft={3}>

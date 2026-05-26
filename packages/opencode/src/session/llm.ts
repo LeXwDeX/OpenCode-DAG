@@ -31,6 +31,15 @@ import { LLMRequestPrep } from "./llm/request"
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+// Upstream request ID captured from proxy response headers (X-Upstream-Request-Id).
+// Stored per-session so hallucination detection can surface it in TUI alerts.
+// Capped at 50 entries to prevent unbounded growth; oldest entries are evicted.
+const MAX_UPSTREAM_IDS = 50
+const upstreamRequestIds = new Map<string, string>()
+export function getLastUpstreamRequestId(sessionID: string): string | undefined {
+  return upstreamRequestIds.get(sessionID)
+}
+
 export type StreamInput = {
   user: MessageV2.User
   sessionID: string
@@ -355,6 +364,22 @@ const live: Layer.Layer<
             const result = yield* run({ ...input, abort: ctrl.signal })
 
             if (result.type === "native") return result.stream
+
+            // Capture upstream request ID from proxy response headers (non-blocking).
+            // The AI SDK exposes response headers via result.response promise.
+            result.result.response.then(
+              (resp) => {
+                const id = resp.headers?.["x-upstream-request-id"] ?? resp.headers?.["X-Upstream-Request-Id"]
+                if (id) {
+                  if (upstreamRequestIds.size >= MAX_UPSTREAM_IDS) {
+                    const oldest = upstreamRequestIds.keys().next().value
+                    if (oldest) upstreamRequestIds.delete(oldest)
+                  }
+                  upstreamRequestIds.set(input.sessionID, id)
+                }
+              },
+              () => {},
+            )
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.

@@ -95,14 +95,18 @@ const brokenPluginLayer = Layer.succeed(
   }),
 )
 
+// @ts-expect-error - Effect Layer type inference issue with mergeAll
 const it = testEffect(Layer.mergeAll(registryLayer(), node, Agent.defaultLayer))
 const scout = testEffect(
+  // @ts-expect-error - Effect Layer type inference issue with mergeAll
   Layer.mergeAll(registryLayer({ flags: { experimentalScout: true } }), node, Agent.defaultLayer),
 )
 const background = testEffect(
+  // @ts-expect-error - Effect Layer type inference issue with mergeAll
   Layer.mergeAll(registryLayer({ flags: { experimentalBackgroundSubagents: true } }), node, Agent.defaultLayer),
 )
 const withBrokenPlugin = testEffect(
+  // @ts-expect-error - Effect Layer type inference issue with mergeAll
   Layer.mergeAll(registryLayer({ plugin: brokenPluginLayer }), node, Agent.defaultLayer),
 )
 
