@@ -9,6 +9,13 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
+OC_VERSION="1.1.0"
+
+# ---------- 插件管理配置 ----------
+OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
+THINK_PKG="think-mcp-tool"
+DCP_PKG="@lexwdex-org/opencode-dcp"
+OC_RAW_URL="https://raw.githubusercontent.com/${REPO}/stable/oc"
 
 # 本地包目录候选（按顺序尝试）：
 #   1) $OC_LOCAL_DIR  显式指定
@@ -241,26 +248,55 @@ extract_and_install() {
 }
 
 # ---------- TUI ----------
+# 计算居中左边距
+_center_pad() {
+    local content_width="$1"
+    local term_width
+    term_width=$(tput cols 2>/dev/null || echo 80)
+    local pad=$(( (term_width - content_width) / 2 ))
+    [ "$pad" -lt 0 ] && pad=0
+    printf '%*s' "$pad" ''
+}
+
+# 装饰横线（固定宽度，居中）
+_divider() {
+    local pad
+    pad=$(_center_pad 50)
+    echo "${pad}${C_CYAN}━━━━━━━━━━━━━━━━━━━━ ✦ ━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+}
+
 banner() {
-    local cur="$1" latest="$2"
-    cat <<EOF
-${C_BOLD}opencode 升级工具 (oc)${C_RESET}
-  ${C_DIM}当前版本：${C_RESET}${cur}
-  ${C_DIM}最新版本：${C_RESET}${C_GREEN}${latest}${C_RESET}
-  ${C_DIM}fork 上游：${C_RESET}${RELEASES_URL}
-EOF
+    local cur="$1" latest="$2" oc_ver="$3"
+    clear
+    local pad
+    pad=$(_center_pad 50)
+    echo
+    _divider
+    echo
+    echo "${pad}${C_BOLD}${C_CYAN}🚀 opencode 管理工具 (oc v${oc_ver})${C_RESET}"
+    echo
+    _divider
+    echo
+    echo "${pad}  ${C_DIM}📦 当前版本：${C_RESET}${C_CYAN}${cur}${C_RESET}"
+    echo "${pad}  ${C_DIM}✨ 最新版本：${C_RESET}${C_GREEN}${latest}${C_RESET}"
+    echo "${pad}  ${C_DIM}🔗 上游仓库：${C_RESET}${C_DIM}${RELEASES_URL}${C_RESET}"
+    echo
 }
 
 choose_action() {
     local latest="$1"
     local options
     options=$(printf '%s\n' \
-        "▶ 升级到最新版本 (${latest})" \
-        "▶ 手工选择具体版本号..." \
-        "▶ 仅查看已发布版本（不安装）" \
-        "▶ 退出")
-    printf '%s' "$options" | fzf --ansi --height=40% --prompt="选择操作 > " --no-info \
-        --header="↑/↓ 移动，Enter 确认，Esc/Ctrl-C 退出"
+        "🚀 升级到最新版本 (${latest})" \
+        "📋 手工选择具体版本号..." \
+        "👁  仅查看已发布版本（不安装）" \
+        "🔌 插件管理（think MCP + DCP）" \
+        "🔄 自更新 oc 脚本" \
+        "❌ 退出")
+    printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
+        --header="↑/↓ 移动，Enter 确认，Esc/Ctrl-C 退出" \
+        --border rounded --border-label=" 主菜单 " --border-label-pos=center \
+        --margin=1,20
 }
 
 choose_release() {
@@ -300,6 +336,387 @@ check_brew_shadow() {
         warn "  brew uninstall opencode # 完全卸载 Homebrew 版本"
         echo
     fi
+}
+
+# ---------- 自更新 ----------
+self_update() {
+    info "检查脚本更新..."
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    if ! curl -fsSL --connect-timeout 5 --max-time 15 -o "$tmp_file" "$OC_RAW_URL" 2>/dev/null; then
+        rm -f "$tmp_file"
+        warn "下载失败（网络不通或超时），请检查网络连接"
+        return 1
+    fi
+
+    if ! head -1 "$tmp_file" | grep -q "^#!/usr/bin/env bash"; then
+        rm -f "$tmp_file"
+        warn "下载内容不是有效的 bash 脚本"
+        return 1
+    fi
+
+    local remote_version
+    remote_version=$(grep '^OC_VERSION=' "$tmp_file" | head -1 | cut -d'"' -f2)
+    if [ -z "$remote_version" ]; then
+        rm -f "$tmp_file"
+        warn "远程脚本缺少 OC_VERSION，可能版本过旧"
+        return 1
+    fi
+
+    info "当前版本: v${OC_VERSION}"
+    info "远程版本: v${remote_version}"
+
+    if [ "$OC_VERSION" = "$remote_version" ]; then
+        rm -f "$tmp_file"
+        ok "已是最新版 (v${OC_VERSION})"
+        return 0
+    fi
+
+    local newer
+    newer=$(printf '%s\n%s' "$remote_version" "$OC_VERSION" | sort -V | tail -1)
+    if [ "$newer" = "$OC_VERSION" ]; then
+        rm -f "$tmp_file"
+        ok "本地版本 (v${OC_VERSION}) 比远程 (v${remote_version}) 更新，无需更新"
+        return 0
+    fi
+
+    info "发现新版本: v${OC_VERSION} → v${remote_version}"
+
+    local self_path
+    self_path=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+
+    if [ ! -w "$self_path" ]; then
+        rm -f "$tmp_file"
+        warn "当前脚本无写入权限: $self_path"
+        warn "请手动更新: sudo cp <新脚本> $self_path"
+        return 1
+    fi
+
+    local backup_path="${self_path}.bak.${OC_VERSION}"
+    cp "$self_path" "$backup_path"
+    info "已备份: $(basename "$backup_path")"
+
+    cp "$tmp_file" "$self_path"
+    chmod +x "$self_path"
+    rm -f "$tmp_file"
+
+    ok "已更新到 v${remote_version}"
+    return 2  # 特殊返回值：需要重启
+}
+
+# ---------- 插件管理 ----------
+# 静默获取插件状态（不打印 info）
+_get_plugin_status() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        echo "error|config_missing"
+        return 1
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        echo "error|python_missing"
+        return 1
+    fi
+
+    python3 - "$OC_CONFIG_FILE" <<'PYEOF'
+import json, sys, shutil
+
+config_file = sys.argv[1]
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+# think MCP
+think = cfg.get("mcp", {}).get("think")
+if think:
+    cmd = think.get("command", [])
+    runner = cmd[0] if cmd else "unknown"
+    pkg = cmd[1] if len(cmd) > 1 else ""
+    enabled = think.get("enabled", True)
+    status = "enabled" if enabled else "disabled"
+    print(f"think|found|{runner}|{pkg}|{status}")
+else:
+    print("think|missing|||")
+
+# DCP plugin
+plugins = cfg.get("plugin", [])
+dcp_pkg = "@lexwdex-org/opencode-dcp"
+if dcp_pkg in plugins:
+    print("dcp|found")
+else:
+    print("dcp|missing")
+
+# bun
+print(f"bun|{'ok' if shutil.which('bun') else 'missing'}")
+PYEOF
+}
+
+plugins_check() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        die "opencode 配置文件不存在: $OC_CONFIG_FILE"
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装（JSON 操作需要）"
+    fi
+
+    info "检查插件状态..."
+    _get_plugin_status
+}
+
+plugins_install_think() {
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    local runner="bunx"
+    if ! command -v bun &>/dev/null; then
+        if command -v npx &>/dev/null; then
+            warn "bun 未安装，将使用 npx"
+            runner="npx"
+        else
+            die "bun 和 npx 均未安装"
+        fi
+    fi
+
+    info "添加 think MCP ($runner $THINK_PKG@latest)..."
+    python3 - "$OC_CONFIG_FILE" "$runner" "$THINK_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+runner = sys.argv[2]
+pkg = sys.argv[3]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+cfg.setdefault("mcp", {})
+cfg["mcp"]["think"] = {
+    "type": "local",
+    "command": [runner, f"{pkg}@latest"],
+    "enabled": True,
+    "timeout": 30000
+}
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print(f"[ok] think MCP 已添加 ({runner} {pkg}@latest)")
+PYEOF
+    ok "think MCP 已配置"
+}
+
+plugins_switch_think_bunx() {
+    if ! command -v bun &>/dev/null; then
+        die "bun 未安装"
+    fi
+
+    info "切换 think MCP 到 bunx..."
+    python3 - "$OC_CONFIG_FILE" "$THINK_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+pkg = sys.argv[2]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+think = cfg.get("mcp", {}).get("think", {})
+think["command"] = ["bunx", f"{pkg}@latest"]
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print("[ok] think MCP 已切换到 bunx")
+PYEOF
+    ok "think MCP 已切换到 bunx"
+}
+
+plugins_install_dcp() {
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    info "添加 DCP plugin ($DCP_PKG)..."
+    python3 - "$OC_CONFIG_FILE" "$DCP_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+pkg = sys.argv[2]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+plugins = cfg.get("plugin", [])
+if pkg not in plugins:
+    plugins.append(pkg)
+    cfg["plugin"] = plugins
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print(f"[ok] DCP plugin 已添加 ({pkg})")
+PYEOF
+    ok "DCP plugin 已配置"
+
+    local oc_dir
+    oc_dir=$(dirname "$OC_CONFIG_FILE")
+    if [ -f "${oc_dir}/package.json" ]; then
+        info "安装 DCP npm 包..."
+        (cd "$oc_dir" && npm install "$DCP_PKG" --save 2>/dev/null) \
+            && ok "DCP 包已安装" \
+            || warn "npm install 失败，opencode 首次启动时会自动拉取"
+    fi
+}
+
+plugins_refresh_cache() {
+    echo
+    echo "${C_BOLD}刷新插件缓存${C_RESET}"
+    echo
+
+    # think-mcp-tool (bun 缓存)
+    if command -v bun &>/dev/null; then
+        info "清除 think-mcp-tool bun 缓存..."
+        bun pm cache rm 2>/dev/null || true
+
+        info "重新拉取 think-mcp-tool 最新版..."
+        timeout 15 bunx "${THINK_PKG}@latest" --version 2>/dev/null &
+        local bunx_pid=$!
+        sleep 8
+        kill $bunx_pid 2>/dev/null || true
+        wait $bunx_pid 2>/dev/null || true
+
+        local cached
+        cached=$(find ~/.bun/install/cache -maxdepth 1 -name "think-mcp-tool@*" -type d 2>/dev/null | head -1)
+        if [ -n "$cached" ]; then
+            ok "think-mcp-tool: $(basename "$cached")"
+        else
+            warn "think-mcp-tool: 未找到缓存，首次启动时会自动拉取"
+        fi
+    else
+        warn "bun 未安装，跳过 think-mcp-tool 缓存刷新"
+    fi
+
+    echo
+
+    # DCP plugin (npm 缓存)
+    local oc_dir
+    oc_dir=$(dirname "$OC_CONFIG_FILE")
+    if [ -f "${oc_dir}/package.json" ] && command -v npm &>/dev/null; then
+        info "更新 DCP plugin (${DCP_PKG})..."
+        if (cd "$oc_dir" && npm update "$DCP_PKG" 2>/dev/null); then
+            local dcp_ver
+            dcp_ver=$(cd "$oc_dir" && node -e "try{console.log(require('${DCP_PKG}/package.json').version)}catch(e){console.log('?')}" 2>/dev/null || echo "?")
+            ok "DCP plugin: v${dcp_ver}"
+        else
+            warn "DCP plugin: npm update 失败，opencode 启动时会自动拉取"
+        fi
+    elif command -v npm &>/dev/null; then
+        warn "opencode 目录无 package.json，跳过 DCP 缓存刷新"
+    else
+        warn "npm 未安装，跳过 DCP 缓存刷新"
+    fi
+}
+
+plugins_tui() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        die "opencode 配置文件不存在: $OC_CONFIG_FILE"
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    while true; do
+        clear
+        local pad
+        pad=$(_center_pad 50)
+        echo
+        _divider
+        echo
+        echo "${pad}${C_BOLD}${C_CYAN}🔌 插件管理${C_RESET}"
+        echo
+        _divider
+        echo
+
+        local status_output
+        status_output=$(_get_plugin_status)
+
+        local think_status think_runner think_pkg think_enabled
+        think_status=$(echo "$status_output" | grep "^think|" | cut -d'|' -f2)
+        think_runner=$(echo "$status_output" | grep "^think|" | cut -d'|' -f3)
+        think_pkg=$(echo "$status_output" | grep "^think|" | cut -d'|' -f4)
+        think_enabled=$(echo "$status_output" | grep "^think|" | cut -d'|' -f5)
+
+        local dcp_status bun_status
+        dcp_status=$(echo "$status_output" | grep "^dcp|" | cut -d'|' -f2)
+        bun_status=$(echo "$status_output" | grep "^bun|" | cut -d'|' -f2)
+
+        echo "${pad}${C_BOLD}当前状态：${C_RESET}"
+        if [ "$think_status" = "found" ]; then
+            if [ "$think_enabled" = "enabled" ]; then
+                echo "${pad}  ${C_GREEN}✓${C_RESET} think MCP: ${C_CYAN}$think_runner${C_RESET} $think_pkg"
+            else
+                echo "${pad}  ${C_YELLOW}!${C_RESET} think MCP: 已禁用"
+            fi
+        else
+            echo "  ${C_RED}✗${C_RESET} think MCP: 未配置"
+        fi
+
+        if [ "$dcp_status" = "found" ]; then
+            echo "  ${C_GREEN}✓${C_RESET} DCP plugin: ${C_CYAN}$DCP_PKG${C_RESET}"
+        else
+            echo "  ${C_RED}✗${C_RESET} DCP plugin: 未配置"
+        fi
+
+        if [ "$bun_status" = "ok" ]; then
+            local bun_ver
+            bun_ver=$(bun --version 2>/dev/null || echo "?")
+            echo "  ${C_GREEN}✓${C_RESET} bun: v${bun_ver}"
+        else
+            echo "  ${C_YELLOW}!${C_RESET} bun: 未安装"
+        fi
+        echo
+
+        local options=()
+        if [ "$think_status" = "missing" ]; then
+            options+=("➕ 安装 think MCP")
+        elif [ "$think_runner" = "npx" ] && [ "$bun_status" = "ok" ]; then
+            options+=("🔄 切换 think MCP 到 bunx")
+        fi
+
+        if [ "$dcp_status" = "missing" ]; then
+            options+=("➕ 安装 DCP plugin")
+        fi
+
+        if [ "$bun_status" = "ok" ] && [ "$think_status" = "found" ]; then
+            options+=("🗑  刷新插件缓存（think + DCP）")
+        fi
+
+        options+=("⬅  返回主菜单")
+
+        local action
+        action=$(printf '%s\n' "${options[@]}" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
+            --border rounded --border-label=" 插件管理 " --border-label-pos=center \
+            --margin=1,20)
+
+        case "${action:-}" in
+            *"安装 think MCP"*)
+                plugins_install_think
+                ;;
+            *"切换 think MCP 到 bunx"*)
+                plugins_switch_think_bunx
+                ;;
+            *"安装 DCP plugin"*)
+                plugins_install_dcp
+                ;;
+            *"刷新插件缓存"*)
+                plugins_refresh_cache
+                ;;
+            *)
+                return
+                ;;
+        esac
+    done
 }
 
 # ---------- 主流程 ----------
@@ -385,23 +802,45 @@ main() {
         exit 0
     fi
 
-    banner "$cur" "$latest"
-    echo
+    while true; do
+        banner "$cur" "$latest" "$OC_VERSION"
 
-    local action; action=$(choose_action "$latest" || true)
-    case "${action:-}" in
-        *"升级到最新"*)        do_upgrade "$latest" ;;
-        *"手工选择"*)
-            local pick; pick=$(choose_release || true)
-            [ -z "${pick:-}" ] && { info "已取消"; exit 0; }
-            do_upgrade "$pick" ;;
-        *"仅查看"*)
-            list_releases | awk -F'\t' '{
-                mark = ($4=="pre") ? "[预] " : "    ";
-                printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
-            }' | less -R ;;
-        *) info "已退出" ;;
-    esac
+        local action; action=$(choose_action "$latest" || true)
+        case "${action:-}" in
+            *"升级到最新"*)
+                do_upgrade "$latest"
+                cur=$(current_version)
+                ;;
+            *"手工选择"*)
+                local pick; pick=$(choose_release || true)
+                [ -z "${pick:-}" ] && continue
+                do_upgrade "$pick"
+                cur=$(current_version)
+                ;;
+            *"仅查看"*)
+                list_releases | awk -F'\t' '{
+                    mark = ($4=="pre") ? "[预] " : "    ";
+                    printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+                }' | less -R
+                ;;
+            *"插件管理"*)
+                plugins_tui
+                ;;
+            *"自更新"*)
+                self_update
+                local ret=$?
+                if [ $ret -eq 2 ]; then
+                    echo
+                    info "脚本已更新，请重新运行 oc"
+                    exit 0
+                fi
+                ;;
+            *)
+                info "已退出"
+                exit 0
+                ;;
+        esac
+    done
 }
 
 case "${1:-}" in
@@ -415,6 +854,13 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc <tag>            升级到指定 tag（如 oc v1.14.30-fork-2）
   oc list             列出所有 release
   oc current          显示当前已安装版本
+  oc plugins          插件管理（think MCP + DCP）
+  oc plugins check    检查插件状态
+  oc plugins install-think   安装 think MCP
+  oc plugins install-dcp     安装 DCP plugin
+  oc plugins switch-bunx     切换 think MCP 到 bunx
+  oc plugins refresh         刷新插件缓存（think + DCP）
+  oc update           自更新本脚本
   oc -h | --help      显示本帮助
 
 环境变量：
@@ -441,6 +887,18 @@ EOF
         do_upgrade "$tag" ;;
     list)    list_releases ;;
     current) current_version ;;
+    plugins)
+        case "${2:-}" in
+            check)          plugins_check ;;
+            install-think)  plugins_install_think ;;
+            install-dcp)    plugins_install_dcp ;;
+            switch-bunx)    plugins_switch_think_bunx ;;
+            refresh)        plugins_refresh_cache ;;
+            "")             plugins_tui ;;
+            *)              die "未知 plugins 子命令：$2（用 oc --help 查看）" ;;
+        esac
+        ;;
+    update)  self_update ;;
     "")      main ;;
     v*|*-fork-*) do_upgrade "$1" ;;
     *) die "未知子命令：$1（用 oc --help 查看）" ;;
