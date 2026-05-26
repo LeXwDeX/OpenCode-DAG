@@ -26,6 +26,8 @@ import { AttachCommand } from "./cli/cmd/tui/attach"
 import { TuiThreadCommand } from "./cli/cmd/tui/thread"
 import { AcpCommand } from "./cli/cmd/acp"
 import { EOL } from "os"
+import fs from "fs/promises"
+import HOOKS_REFERENCE from "./session/prompt/hooks-reference.md"
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
@@ -162,6 +164,18 @@ const cli = yargs(args)
       }
       process.stderr.write("Database migration complete." + EOL)
     }
+
+    // Ensure bundled docs are available for model reference.
+    // Writes hooks-reference.md to ~/.config/opencode/docs/ if not present.
+    // Silent on failure — docs are best-effort, never block startup.
+    try {
+      const docsDir = path.join(Global.Path.config, "docs")
+      const hooksRef = path.join(docsDir, "hooks-reference.md")
+      if (!(await Filesystem.exists(hooksRef))) {
+        await fs.mkdir(docsDir, { recursive: true })
+        await fs.writeFile(hooksRef, HOOKS_REFERENCE, "utf8")
+      }
+    } catch {}
   })
   .usage("")
   .completion("completion", "generate shell completion script")

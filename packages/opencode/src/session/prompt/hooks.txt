@@ -1,154 +1,37 @@
-# Claude Code Hooks API — Full Compatibility
+# Claude Code Hooks API
 
-OpenCode is **fully compatible with the Claude Code hooks protocol**. The hooks system is built-in and active — it reads and executes hooks from standard Claude Code settings files at runtime.
+OpenCode is **fully compatible with the Claude Code hooks protocol**. The hooks system is built-in and active. When installing plugins or configuring automations, **always use the standard Claude Code hooks mechanism** — do NOT skip hooks or assume they are unavailable.
 
-## What This Means
+## Quick Reference
 
-When installing plugins, configuring automations, or setting up project workflows, you **should** use the Claude Code hooks mechanism. Do NOT skip hooks, do NOT assume hooks are unavailable, and do NOT look for alternative approaches when hooks are the correct solution.
+**Settings paths** (6-layer chain, merged in order):
+1. `~/.claude/settings.json` (global)
+2. `~/.config/opencode/settings.json` (OpenCode global)
+3. `<project>/.claude/settings.json`
+4. `<project>/.opencode/settings.json`
+5. `<project>/.claude/settings.local.json`
+6. `<project>/.opencode/settings.local.json`
 
-## Actively Triggered Hook Events (22 events)
+**Hook types**: `command` | `mcp` | `http` | `prompt` | `agent`
 
-These events have concrete trigger call sites in the runtime and **will fire** when the corresponding action occurs:
+**22 actively triggered events**: PreToolUse, PostToolUse, PostToolUseFailure, FileChanged, UserPromptSubmit, Stop, StopFailure, InstructionsLoaded, SessionStart, SessionEnd, PermissionRequest, PermissionDenied, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, TeammateIdle, PreCompact, PostCompact, WorktreeCreate, WorktreeRemove, ConfigChange
 
-| Event | When It Fires | Trigger Location |
-|---|---|---|
-| `PreToolUse` | Before any tool executes (can block/deny/modify input) | session/prompt.ts, session/tools.ts |
-| `PostToolUse` | After a tool completes successfully | session/prompt.ts, session/tools.ts |
-| `PostToolUseFailure` | After a tool execution fails | session/prompt.ts, session/tools.ts |
-| `FileChanged` | When a file is created or modified by edit/write tools | session/prompt.ts, session/tools.ts |
-| `UserPromptSubmit` | When the user submits a prompt | session/prompt.ts |
-| `Stop` | When the agent finishes its turn | session/prompt.ts |
-| `StopFailure` | When the agent loop fails with an error | session/prompt.ts |
-| `InstructionsLoaded` | When instruction files (AGENTS.md, CLAUDE.md, etc.) are loaded | session/prompt.ts |
-| `SessionStart` | When a session begins (startup/resume/clear/compact) | share/session.ts |
-| `SessionEnd` | When a session ends | session/session.ts |
-| `PermissionRequest` | When a tool permission is requested | permission/index.ts |
-| `PermissionDenied` | When a tool permission is denied | permission/index.ts |
-| `SubagentStart` | When a sub-agent (Task tool) is launched | tool/task.ts |
-| `SubagentStop` | When a sub-agent finishes | tool/task.ts |
-| `TaskCreated` | When a Task tool invocation creates a subtask | tool/task.ts |
-| `TaskCompleted` | When a Task tool invocation completes | tool/task.ts |
-| `TeammateIdle` | When a teammate agent becomes idle | tool/task.ts |
-| `PreCompact` | Before context compaction begins | session/compaction.ts |
-| `PostCompact` | After context compaction completes | session/compaction.ts |
-| `WorktreeCreate` | When a git worktree is created | worktree/index.ts |
-| `WorktreeRemove` | When a git worktree is removed | worktree/index.ts |
-| `ConfigChange` | When a configuration file changes | config/config-watcher.ts |
-
-## Schema-Defined Events (not actively triggered)
-
-These events are defined in the hook type system and accepted by the settings parser, but the runtime does not currently have trigger call sites for them. Hooks registered for these events will be loaded but not fired:
-
-`Notification`, `Setup`, `Elicitation`, `ElicitationResult`, `CwdChanged`
-
-## Settings File Locations (6-Layer Chain)
-
-Hooks are loaded from these paths, **merged in order** (later layers append to earlier ones):
-
-1. `~/.claude/settings.json` — Claude Code global (shared)
-2. `<opencode-global-config>/settings.json` — OpenCode global (typically `~/.config/opencode/settings.json`)
-3. `<project>/.claude/settings.json` — Claude Code project-level
-4. `<project>/.opencode/settings.json` — OpenCode project-level
-5. `<project>/.claude/settings.local.json` — Claude Code project local
-6. `<project>/.opencode/settings.local.json` — OpenCode project local
-
-If the git worktree root differs from the working directory, the corresponding `.claude/` and `.opencode/` paths under the worktree root are also checked (appended after layer 6).
-
-**All paths are valid.** Writing hooks to any of them will take effect automatically.
-
-## Hook Entry Types (5 types)
-
-| Type | Description |
-|---|---|
-| `command` | Shell command via stdin/stdout JSON envelope |
-| `mcp` | Invoke MCP tool via `mcp__<server>__<tool>` naming convention |
-| `http` | POST the JSON envelope to a URL, parse response body |
-| `prompt` | Single-turn LLM call with structured output (HookJSONOutput schema) |
-| `agent` | Multi-turn LLM agent loop with read-only tools (read_file, list_dir, grep, bash) |
-
-## Configuration Format
-
+**Config format**:
 ```json
 {
   "hooks": {
-    "<HookEvent>": [
-      {
-        "matcher": "<tool-name-pattern or *>",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "<shell-command>",
-            "timeout": 60
-          }
-        ]
-      }
-    ]
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "your-script.sh" }] }]
   }
 }
 ```
 
-The `matcher` field supports: exact match, pipe-separated list (`edit|write`), regex, or `*`/empty for match-all. For tool-bound events (PreToolUse, PostToolUse, etc.) the matcher is tested against the tool name; for other events it matches all.
+**Exit codes**: 0=allow (parse stdout JSON), 2=block (stderr=reason), other=log+continue
 
-## Hook stdin/stdout Protocol
+**Env vars**: `CLAUDE_PROJECT_DIR`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`
 
-Each `command` hook receives a JSON envelope on **stdin**:
-```json
-{
-  "hook_event_name": "PreToolUse",
-  "session_id": "...",
-  "transcript_path": "...",
-  "cwd": "...",
-  "tool_name": "edit",
-  "tool_input": { "filePath": "...", "oldString": "...", "newString": "..." }
-}
+## Detailed Reference
+
+For the complete protocol specification (stdin/stdout envelope, all event payloads, template variables, hookSpecificOutput fields), read:
 ```
-
-The hook can return JSON on **stdout** to control behavior:
-```json
-{
-  "continue": true,
-  "stopReason": "...",
-  "decision": "approve",
-  "reason": "...",
-  "systemMessage": "...",
-  "hookSpecificOutput": {
-    "hookEventName": "PreToolUse",
-    "permissionDecision": "allow",
-    "permissionDecisionReason": "...",
-    "updatedInput": { "key": "rewritten-value" },
-    "additionalContext": "extra info injected into the agent context"
-  }
-}
+~/.config/opencode/docs/hooks-reference.md
 ```
-
-**Exit codes** (Claude Code spec):
-- `0` → allow, parse stdout for control JSON
-- `2` → block, stderr becomes the block reason
-- Any other non-zero → log warning, do NOT abort main flow (hooks must never crash the host)
-
-## Environment Variables
-
-Hook `command` entries receive these environment variables:
-- `CLAUDE_PROJECT_DIR` — the project working directory
-- `CLAUDE_PLUGIN_ROOT` — the directory of the settings file that declared the hook (from `__sourceDir`)
-- `CLAUDE_PLUGIN_DATA` — a per-plugin persistent data directory (`<global-data>/hooks/<parent>-<base>-<sha256-hash>`)
-- `CLAUDE_PLUGIN_OPTION_<KEY>` — when the hook entry has an `options` field, each key is exported as `CLAUDE_PLUGIN_OPTION_<KEY>=JSON.stringify(value)`
-
-## Template Variables in `command`
-
-Hook commands support these template variables:
-- `${CLAUDE_PLUGIN_ROOT}` → the settings file's directory
-- `${CLAUDE_PLUGIN_DATA}` → the per-plugin data directory
-- `${user_config.<key>}` → resolved from the hook entry's `options` field
-
-## MCP Configuration
-
-MCP servers are configured in OpenCode's own config file (`~/.config/opencode/opencode.json` under the `mcp` key), **not** in `~/.claude.json`. The MCP protocol itself is identical — the same MCP server binaries work in both Claude Code and OpenCode, only the configuration format differs.
-
-## Key Rules for Plugin Installation
-
-1. **Always write hooks to settings.json** — either `~/.claude/settings.json` (global) or `<project>/.opencode/settings.json` (project-level). Both work and are actively read.
-2. **Use the standard Claude Code hook format** — no special adaptation needed. The settings parser accepts the exact same JSON schema.
-3. **Verify hook commands are executable** — check that referenced binaries exist on PATH.
-4. **Do NOT skip hook registration** — if a plugin requires hooks, register them. The hooks system is active and will execute them.
-5. **Do NOT assume hooks are unsupported** — they are a first-class feature of this runtime with 22 actively triggered events.
