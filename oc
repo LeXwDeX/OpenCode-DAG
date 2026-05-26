@@ -1,0 +1,447 @@
+#!/usr/bin/env bash
+# oc — opencode (LeXwDeX fork) version manager TUI
+# 升级渠道：https://github.com/LeXwDeX/opencode/releases
+# 依赖：bash, curl, tar/unzip, fzf（必需）；gh（可选，无 token 走 curl）
+
+set -euo pipefail
+
+REPO="LeXwDeX/opencode"
+RELEASES_URL="https://github.com/${REPO}/releases"
+INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
+
+# 本地包目录候选（按顺序尝试）：
+#   1) $OC_LOCAL_DIR  显式指定
+#   2) oc 脚本所在目录（仓内 packages/opencode/ 直接执行场景）
+#   3) ~/.cache/oc    在线下载产物缓存
+# 目录里需含 VERSION 文件（BUNDLED_VERSION + SHA256_*）和对应平台压缩包
+OC_SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")" && pwd)"
+LOCAL_DIR_CANDIDATES=(
+    "${OC_LOCAL_DIR:-}"
+    "$OC_SCRIPT_DIR"
+    "$HOME/.cache/oc"
+)
+
+C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_CYAN=$'\033[36m'
+
+die()  { printf "%s[err]%s %s\n" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+info() { printf "%s[oc]%s %s\n" "$C_CYAN" "$C_RESET" "$*"; }
+warn() { printf "%s[warn]%s %s\n" "$C_YELLOW" "$C_RESET" "$*" >&2; }
+ok()   { printf "%s[ok]%s %s\n" "$C_GREEN" "$C_RESET" "$*"; }
+
+need() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
+need curl
+need fzf
+# shasum 或 sha256sum 至少有一个
+command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
+    || die "缺少依赖：shasum 或 sha256sum"
+
+# ---------- 平台检测 ----------
+detect_asset() {
+    local os arch
+    os=$(uname -s); arch=$(uname -m)
+    case "$os" in
+        Linux)
+            case "$arch" in
+                x86_64|amd64) echo "opencode-linux-x64.tar.gz" ;;
+                *) die "不支持的 Linux 架构：$arch（fork 当前仅发布 linux-x64）" ;;
+            esac ;;
+        Darwin)
+            case "$arch" in
+                arm64|aarch64) echo "opencode-darwin-arm64.zip" ;;
+                *) die "不支持的 macOS 架构：$arch（fork 当前仅发布 darwin-arm64）" ;;
+            esac ;;
+        MINGW*|MSYS*|CYGWIN*) echo "opencode-windows-x64.zip" ;;
+        *) die "未知操作系统：$os" ;;
+    esac
+}
+
+# ---------- 当前版本 ----------
+current_version() {
+    local bin
+    bin=$(command -v "$INSTALL_NAME" 2>/dev/null || true)
+    [ -z "$bin" ] && { echo "(未安装)"; return; }
+    # 穿透 tmux shim + wrapper，找到真实 opencode 二进制
+    local real="$bin"
+    if head -n5 "$bin" 2>/dev/null | grep -q "opencode-tmux"; then
+        # shim 里 exec 的是 wrapper.sh，wrapper.sh 里有 OPENCODE_REAL_BIN=
+        local wrapper
+        wrapper=$(grep -m1 'exec ' "$bin" 2>/dev/null | sed 's/exec //' | tr -d '"' | awk '{print $1}' || true)
+        if [ -n "$wrapper" ] && [ -f "$wrapper" ]; then
+            local extracted
+            extracted=$(grep -m1 '^OPENCODE_REAL_BIN=' "$wrapper" 2>/dev/null | cut -d'"' -f2 || true)
+            [ -n "$extracted" ] && [ -x "$extracted" ] && real="$extracted"
+        fi
+    fi
+    "$real" --version 2>/dev/null | head -n1 || echo "(无法读取)"
+}
+
+# ---------- GitHub API ----------
+gh_api() {
+    # 调用方式：gh_api "latest" 或 gh_api "?per_page=100"
+    # 自动拼接到 .../releases 后面（path 以 ? 开头时无分隔符，否则加 /）
+    local path="$1"
+    local sep="/"
+    [[ "$path" == \?* ]] && sep=""
+    local relpath="repos/${REPO}/releases${sep}${path}"
+    if command -v gh >/dev/null 2>&1; then
+        local gh_out
+        if gh_out=$(gh api "$relpath" 2>/dev/null); then
+            printf '%s' "$gh_out"
+            return 0
+        fi
+    fi
+    local hdr=()
+    [ -n "${GITHUB_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    curl -fsSL "${hdr[@]}" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/${relpath}"
+}
+
+list_releases() {
+    # 输出 TSV：tag<TAB>name<TAB>publishedAt<TAB>prerelease
+    gh_api "?per_page=100" \
+        | python3 -c '
+import json, sys
+for r in json.load(sys.stdin):
+    tag = r.get("tag_name","")
+    name = r.get("name","") or tag
+    pub = (r.get("published_at","") or "")[:10]
+    pre = "pre" if r.get("prerelease") else "stable"
+    print(f"{tag}\t{name}\t{pub}\t{pre}")
+'
+}
+
+latest_tag() {
+    gh_api "latest" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))'
+}
+
+# ---------- 下载与校验 ----------
+download_asset() {
+    local tag="$1" asset="$2" out="$3"
+    local url="${RELEASES_URL}/download/${tag}/${asset}"
+    info "下载 $url"
+    curl -fL --progress-bar -o "$out" "$url" || die "下载失败：$url"
+}
+
+try_verify_sha256() {
+    # 尝试拉取 SHA256SUMS / *.sha256，存在则校验，不存在跳过并 warn
+    local tag="$1" asset="$2" file="$3" tmpdir="$4"
+    local sums_url="${RELEASES_URL}/download/${tag}/SHA256SUMS"
+    local sums="$tmpdir/SHA256SUMS"
+    if curl -fsSL -o "$sums" "$sums_url" 2>/dev/null && [ -s "$sums" ]; then
+        local expect actual
+        expect=$(awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}' "$sums")
+        if [ -n "$expect" ]; then
+            actual=$(file_sha256 "$file")
+            [ "$expect" = "$actual" ] || die "SHA256 不匹配：期望 $expect，实际 $actual"
+            ok "SHA256 校验通过"
+            return
+        fi
+    fi
+    warn "上游未提供 SHA256SUMS，跳过校验（仍依赖 GitHub HTTPS 安全传输）"
+}
+
+# ---------- 本地包发现 ----------
+file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# 当前平台对应 VERSION 里的 SHA256_* 字段名
+asset_hash_key() {
+    case "$(detect_asset)" in
+        opencode-linux-x64.tar.gz)   echo "SHA256_LINUX_X64" ;;
+        opencode-darwin-arm64.zip)   echo "SHA256_DARWIN_ARM64" ;;
+        opencode-windows-x64.zip)    echo "SHA256_WINDOWS_X64" ;;
+    esac
+}
+
+# 在候选目录里找一个同时具备 VERSION + 当前平台压缩包的目录；返回路径或空
+find_local_dir() {
+    local asset key dir
+    asset=$(detect_asset)
+    for dir in "${LOCAL_DIR_CANDIDATES[@]}"; do
+        [ -z "$dir" ] && continue
+        [ -f "$dir/VERSION" ] && [ -f "$dir/$asset" ] || continue
+        echo "$dir"
+        return 0
+    done
+    return 1
+}
+
+# 从 VERSION 读 key=value（key 形如 BUNDLED_VERSION / SHA256_LINUX_X64）
+read_version_field() {
+    local file="$1" key="$2"
+    [ -f "$file" ] || return 1
+    awk -F= -v k="$key" '$1==k {print $2; exit}' "$file" | tr -d '[:space:]'
+}
+
+# 用本地包安装；前置：local_dir 已找到，且本地包 hash 与 VERSION 自洽
+install_from_local() {
+    local local_dir="$1" asset
+    asset=$(detect_asset)
+    local file="$local_dir/$asset"
+    local key actual expect
+    key=$(asset_hash_key)
+    expect=$(read_version_field "$local_dir/VERSION" "$key" || true)
+    actual=$(file_sha256 "$file")
+    if [ -n "$expect" ] && [ "$expect" != "$actual" ]; then
+        die "本地包 hash 与 VERSION 不一致（$asset）：VERSION=$expect 实际=$actual"
+    fi
+    info "使用本地包：$file"
+    ok "本地 SHA256 自洽"
+    local tmpdir; tmpdir=$(mktemp -d); trap "rm -rf '$tmpdir'" EXIT
+    extract_and_install "$file" "$tmpdir"
+    ok "安装完成：$(${INSTALL_DIR}/${INSTALL_NAME} --version 2>/dev/null || echo "(版本未知)")"
+    check_brew_shadow
+}
+
+extract_and_install() {
+    local file="$1" tmpdir="$2"
+    local extract_dir="$tmpdir/extract"
+    mkdir -p "$extract_dir"
+    case "$file" in
+        *.tar.gz) tar -xzf "$file" -C "$extract_dir" ;;
+        *.zip)
+            command -v unzip >/dev/null 2>&1 || die "需要 unzip 命令"
+            unzip -q "$file" -d "$extract_dir" ;;
+        *) die "未知压缩格式：$file" ;;
+    esac
+
+    local bin
+    bin=$(find "$extract_dir" -type f -name "opencode*" ! -name "*.zip" ! -name "*.tar.gz" \
+           -perm -u+x 2>/dev/null | head -n1 || true)
+    [ -z "$bin" ] && bin=$(find "$extract_dir" -type f -name "opencode*" 2>/dev/null | head -n1 || true)
+    [ -z "$bin" ] && die "解包后未找到 opencode 二进制"
+
+    local target="${INSTALL_DIR}/${INSTALL_NAME}"
+    info "安装到 $target"
+    if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+        mkdir -p "$INSTALL_DIR"
+        cp -f "$bin" "$target" && chmod +x "$target"
+    else
+        sudo mkdir -p "$INSTALL_DIR"
+        sudo cp -f "$bin" "$target" && sudo chmod +x "$target"
+    fi
+
+    # macOS: 清除 quarantine 属性 + ad-hoc 重签名（否则 Gatekeeper SIGKILL）
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ -w "$target" ]; then
+            xattr -cr "$target" 2>/dev/null || true
+            codesign -fs - "$target" 2>/dev/null || warn "ad-hoc 签名失败，可能需要 sudo codesign -fs - $target"
+        else
+            sudo xattr -cr "$target" 2>/dev/null || true
+            sudo codesign -fs - "$target" 2>/dev/null || warn "ad-hoc 签名失败"
+        fi
+    fi
+}
+
+# ---------- TUI ----------
+banner() {
+    local cur="$1" latest="$2"
+    cat <<EOF
+${C_BOLD}opencode 升级工具 (oc)${C_RESET}
+  ${C_DIM}当前版本：${C_RESET}${cur}
+  ${C_DIM}最新版本：${C_RESET}${C_GREEN}${latest}${C_RESET}
+  ${C_DIM}fork 上游：${C_RESET}${RELEASES_URL}
+EOF
+}
+
+choose_action() {
+    local latest="$1"
+    local options
+    options=$(printf '%s\n' \
+        "▶ 升级到最新版本 (${latest})" \
+        "▶ 手工选择具体版本号..." \
+        "▶ 仅查看已发布版本（不安装）" \
+        "▶ 退出")
+    printf '%s' "$options" | fzf --ansi --height=40% --prompt="选择操作 > " --no-info \
+        --header="↑/↓ 移动，Enter 确认，Esc/Ctrl-C 退出"
+}
+
+choose_release() {
+    # 输入 list_releases 输出，列出全部 release 给用户选
+    local picked
+    picked=$(list_releases | \
+        awk -F'\t' '{
+            mark = ($4=="pre") ? "[预] " : "    ";
+            printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+        }' | \
+        fzf --ansi --height=70% --prompt="选择版本 > " --no-info \
+            --header="标 [预] 为预发布；↑/↓ 移动，Enter 确认，Esc 取消" \
+            --preview="echo '查看详情：${RELEASES_URL}/tag/'\$(echo {} | sed -E 's/^\[预\] +//' | awk '{print \$1}')")
+    [ -z "$picked" ] && return 1
+    # 取第一列（去掉 [预] 前缀）
+    echo "$picked" | sed -E 's/^\[预\] +//' | awk '{print $1}'
+}
+
+# ---------- Homebrew 遮蔽检测 ----------
+check_brew_shadow() {
+    # 安装后检测 PATH 中实际解析到的 opencode 是否为 Homebrew 管理的版本
+    local resolved
+    resolved=$(command -v "$INSTALL_NAME" 2>/dev/null || true)
+    [ -z "$resolved" ] && return 0
+    local target="${INSTALL_DIR}/${INSTALL_NAME}"
+    # 如果 PATH 解析到的就是我们刚装的，没问题
+    [ "$resolved" = "$target" ] && return 0
+    # 检测是否是 Homebrew 路径
+    if echo "$resolved" | grep -qE '/(opt/homebrew|Cellar|Homebrew)/'; then
+        echo
+        warn "检测到 Homebrew 的 opencode 正在遮蔽 fork 版本："
+        warn "  PATH 解析到：$resolved (Homebrew)"
+        warn "  fork 已装到：$target"
+        warn ""
+        warn "解决方法（任选其一）："
+        warn "  brew unlink opencode    # 取消 Homebrew 的 PATH 链接"
+        warn "  brew uninstall opencode # 完全卸载 Homebrew 版本"
+        echo
+    fi
+}
+
+# ---------- 主流程 ----------
+# 在线获取指定 tag 的 SHA256SUMS 中当前 asset 的 hash；失败返回非 0
+fetch_remote_hash() {
+    local tag="$1" asset
+    asset=$(detect_asset)
+    local sums_url="${RELEASES_URL}/download/${tag}/SHA256SUMS"
+    local sums; sums=$(curl -fsSL "$sums_url" 2>/dev/null) || return 1
+    [ -n "$sums" ] || return 1
+    printf '%s\n' "$sums" | awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}'
+}
+
+# 主升级入口：tag 必填
+# 策略：
+#   1) 优先看本地包 + 在线 hash 是否命中 → 直接装本地（节省下载）
+#   2) 在线能拿到 hash 但本地没命中 → 在线下载 + 校验 + 装
+#   3) 在线拿不到（网络/限流）→ fallback：本地 VERSION 与 opencode --version 不一致就装本地
+do_upgrade() {
+    local tag="$1" asset
+    asset=$(detect_asset)
+
+    local local_dir=""; local_dir=$(find_local_dir 2>/dev/null || true)
+    local local_ver=""
+    [ -n "$local_dir" ] && local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
+
+    local remote_hash=""
+    remote_hash=$(fetch_remote_hash "$tag" 2>/dev/null || true)
+
+    # ---------- 路径 A：在线可用 ----------
+    if [ -n "$remote_hash" ]; then
+        if [ -n "$local_dir" ]; then
+            local local_hash; local_hash=$(file_sha256 "$local_dir/$asset")
+            if [ "$remote_hash" = "$local_hash" ]; then
+                info "本地包 hash 与 GitHub ($tag) 一致，跳过下载"
+                install_from_local "$local_dir"
+                return
+            fi
+            info "本地包与 $tag 不一致，转在线下载"
+        fi
+        # 在线下载流程
+        local tmpdir; tmpdir=$(mktemp -d); trap "rm -rf '$tmpdir'" EXIT
+        local file="$tmpdir/$asset"
+        download_asset "$tag" "$asset" "$file"
+        try_verify_sha256 "$tag" "$asset" "$file" "$tmpdir"
+        extract_and_install "$file" "$tmpdir"
+        ok "安装完成：$(${INSTALL_DIR}/${INSTALL_NAME} --version 2>/dev/null || echo "(版本未知)")"
+        check_brew_shadow
+        return
+    fi
+
+    # ---------- 路径 B：在线不可用，尝试本地 fallback ----------
+    warn "无法在线获取 $tag 的 SHA256SUMS（网络/限流）"
+    [ -z "$local_dir" ] && die "本地无可用包（候选：${LOCAL_DIR_CANDIDATES[*]}），无法离线安装"
+    local cur; cur=$(current_version)
+    if [ -n "$local_ver" ] && echo "$cur" | grep -qF "$local_ver"; then
+        ok "已安装版本与本地包一致 ($local_ver)，无需操作"
+        return
+    fi
+    info "离线 fallback：用本地包 $local_dir (BUNDLED=$local_ver) 替换当前 $cur"
+    install_from_local "$local_dir"
+}
+
+main() {
+    local cur latest local_dir local_ver
+    cur=$(current_version)
+    info "查询 GitHub releases..."
+    latest=$(latest_tag 2>/dev/null || true)
+
+    if [ -z "$latest" ]; then
+        # 在线失败，尝试离线 fallback
+        warn "无法获取最新 release（网络或 API 限流），进入离线模式"
+        local_dir=$(find_local_dir 2>/dev/null || true)
+        [ -z "$local_dir" ] && die "且本地无可用包，无法继续"
+        local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
+        info "本地包 BUNDLED_VERSION=$local_ver"
+        if echo "$cur" | grep -qF "$local_ver"; then
+            ok "已安装版本与本地包一致，无需操作"
+            exit 0
+        fi
+        info "用本地包覆盖安装"
+        install_from_local "$local_dir"
+        exit 0
+    fi
+
+    banner "$cur" "$latest"
+    echo
+
+    local action; action=$(choose_action "$latest" || true)
+    case "${action:-}" in
+        *"升级到最新"*)        do_upgrade "$latest" ;;
+        *"手工选择"*)
+            local pick; pick=$(choose_release || true)
+            [ -z "${pick:-}" ] && { info "已取消"; exit 0; }
+            do_upgrade "$pick" ;;
+        *"仅查看"*)
+            list_releases | awk -F'\t' '{
+                mark = ($4=="pre") ? "[预] " : "    ";
+                printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+            }' | less -R ;;
+        *) info "已退出" ;;
+    esac
+}
+
+case "${1:-}" in
+    -h|--help)
+        cat <<EOF
+oc — opencode (LeXwDeX fork) 版本管理工具
+
+用法：
+  oc                  进入 TUI 选择升级
+  oc latest           直接升级到最新版本
+  oc <tag>            升级到指定 tag（如 oc v1.14.30-fork-2）
+  oc list             列出所有 release
+  oc current          显示当前已安装版本
+  oc -h | --help      显示本帮助
+
+环境变量：
+  OC_INSTALL_DIR       安装目录（默认 /usr/local/bin）
+  OC_OPENCODE_NAME     目标命令名（默认 opencode）
+  OC_LOCAL_DIR         本地包目录（含 VERSION + 平台压缩包）
+                       命中且 hash 与 GitHub 一致时跳过下载；
+                       离线时与 opencode --version 对比决定是否覆盖
+  GITHUB_TOKEN         GitHub API token（可选，避免限流）
+
+升级渠道：${RELEASES_URL}
+EOF
+        ;;
+    latest)
+        tag=$(latest_tag 2>/dev/null || true)
+        if [ -z "$tag" ]; then
+            warn "无法获取最新版本（网络/限流），尝试本地 fallback"
+            ld=$(find_local_dir 2>/dev/null || true)
+            [ -z "$ld" ] && die "且本地无可用包"
+            tag=$(read_version_field "$ld/VERSION" BUNDLED_VERSION || true)
+            [ -z "$tag" ] && die "本地 VERSION 缺 BUNDLED_VERSION"
+            info "回退到本地 BUNDLED_VERSION=$tag"
+        fi
+        do_upgrade "$tag" ;;
+    list)    list_releases ;;
+    current) current_version ;;
+    "")      main ;;
+    v*|*-fork-*) do_upgrade "$1" ;;
+    *) die "未知子命令：$1（用 oc --help 查看）" ;;
+esac

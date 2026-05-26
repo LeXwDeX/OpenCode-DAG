@@ -194,3 +194,12 @@ This project is indexed by GitNexus as **opencode** (48343 symbols, 75343 relati
 | Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
 
 <!-- gitnexus:end -->
+
+## OC — OpenCode 版本管理工具
+
+`oc` 是仓库根目录下的 bash TUI 脚本，用于管理 opencode 二进制的版本升级。
+
+- 升级渠道：`https://github.com/LeXwDeX/opencode/releases`
+- 依赖：bash, curl, tar/unzip, fzf（必需）；gh（可选）
+- 用法：`./oc` 启动 TUI 交互，支持版本选择、安装、升级
+- 源码维护在本仓库根目录，修改后直接提交即可
