@@ -256,10 +256,14 @@ async function graphql(input: { query: string; variables: Record<string, string 
 }
 
 async function closePullRequest(pr: CleanupCandidate) {
-  await githubRequest(`/repos/${repo.owner}/${repo.name}/issues/${pr.number}/comments`, {
-    method: "POST",
-    body: JSON.stringify({ body: message }),
-  })
+  try {
+    await githubRequest(`/repos/${repo.owner}/${repo.name}/issues/${pr.number}/comments`, {
+      method: "POST",
+      body: JSON.stringify({ body: message }),
+    })
+  } catch (error) {
+    console.warn(`Failed to comment on #${pr.number} (may be a fork PR): ${error}`)
+  }
   await githubRequest(`/repos/${repo.owner}/${repo.name}/pulls/${pr.number}`, {
     method: "PATCH",
     body: JSON.stringify({ state: "closed" }),
