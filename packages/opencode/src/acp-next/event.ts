@@ -21,11 +21,7 @@ type GlobalEventStream = {
   stream: AsyncIterable<GlobalEventEnvelope>
 }
 
-export function start(input: {
-  sdk: OpencodeClient
-  connection: Connection
-  session: ACPNextSession.Interface
-}) {
+export function start(input: { sdk: OpencodeClient; connection: Connection; session: ACPNextSession.Interface }) {
   const subscription = new Subscription(input)
   subscription.start()
   return subscription

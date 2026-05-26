@@ -232,14 +232,10 @@ describe("acp-next event routing", () => {
     await harness.subscription.handle(textDelta("ses_b", "msg_b", "part_b", "B2"))
 
     expect(
-      harness.updates
-        .filter((update) => update.sessionId === "ses_a")
-        .map((update) => update.update.sessionUpdate),
+      harness.updates.filter((update) => update.sessionId === "ses_a").map((update) => update.update.sessionUpdate),
     ).toEqual(["agent_message_chunk", "agent_message_chunk"])
     expect(
-      harness.updates
-        .filter((update) => update.sessionId === "ses_b")
-        .map((update) => update.update.sessionUpdate),
+      harness.updates.filter((update) => update.sessionId === "ses_b").map((update) => update.update.sessionUpdate),
     ).toEqual(["agent_thought_chunk", "agent_thought_chunk"])
   })
 
