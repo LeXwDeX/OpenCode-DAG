@@ -13,6 +13,7 @@ COPY packages/console/core/package.json ./packages/console/core/package.json
 COPY packages/console/function/package.json ./packages/console/function/package.json
 COPY packages/console/mail/package.json ./packages/console/mail/package.json
 COPY packages/console/resource/package.json ./packages/console/resource/package.json
+COPY packages/console/support/package.json ./packages/console/support/package.json
 COPY packages/core/package.json ./packages/core/package.json
 COPY packages/desktop/package.json ./packages/desktop/package.json
 COPY packages/effect-drizzle-sqlite/package.json ./packages/effect-drizzle-sqlite/package.json
