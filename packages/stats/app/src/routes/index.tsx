@@ -5,6 +5,7 @@ import ibmPlexMonoRegularLatin1 from "@ibm/plex/IBM-Plex-Mono/fonts/split/woff2/
 import ibmPlexMonoMediumLatin1 from "@ibm/plex/IBM-Plex-Mono/fonts/split/woff2/IBMPlexMono-Medium-Latin1.woff2?url"
 import ibmPlexMonoSemiBoldLatin1 from "@ibm/plex/IBM-Plex-Mono/fonts/split/woff2/IBMPlexMono-SemiBold-Latin1.woff2?url"
 import ibmPlexMonoBoldLatin1 from "@ibm/plex/IBM-Plex-Mono/fonts/split/woff2/IBMPlexMono-Bold-Latin1.woff2?url"
+import opencodeWordmarkDark from "../asset/logo-ornate-dark.svg"
 import {
   getStatsHomeData,
   type LeaderboardEntry,
@@ -1318,7 +1319,18 @@ function StatsMark() {
   )
 }
 
+function OpenCodeMark() {
+  return (
+    <svg data-slot="opencode-mark" width="40" height="40" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+      <path d="M40 40H0V0H40V40Z" fill="var(--stats-logo-bg)" />
+      <path d="M26 29H14V17H26V29Z" fill="var(--stats-logo-fill)" />
+      <path d="M26 11H14V29H26V11ZM32 35H8V5H32V35Z" fill="var(--stats-logo-stroke)" />
+    </svg>
+  )
+}
+
 function Footer() {
+  const [subscribeOpen, setSubscribeOpen] = createSignal(false)
   const modelStats = [
     { href: "#top-models", label: "Top Models" },
     { href: "#leaderboard", label: "Leaderboard" },
@@ -1333,17 +1345,17 @@ function Footer() {
   const connect = [
     { href: "mailto:hello@opencode.ai", label: "Contact us" },
     { href: "https://opencode.ai/discord", label: "Community" },
-    { href: "https://x.com/opencode_ai", label: "X" },
-    { href: "https://github.com/sst/opencode", label: "GitHub" },
-    { href: "https://youtube.com/@opencode-ai", label: "YouTube" },
+    { href: "https://x.com/opencode", label: "X" },
+    { href: "https://github.com/anomalyco/opencode", label: "GitHub" },
+    { href: "https://www.youtube.com/@anomaly-co", label: "YouTube" },
   ]
 
   return (
     <footer data-component="footer">
       <SectionBridge label="SESSION COST" href="#session-cost" />
       <div data-slot="footer-grid">
-        <a data-slot="footer-mark" href="/" aria-label="OpenCode home">
-          <StatsMark />
+        <a data-slot="footer-mark" href="https://opencode.ai" aria-label="OpenCode home">
+          <OpenCodeMark />
         </a>
         <FooterColumn title="Model Stats" links={modelStats} />
         <FooterColumn title="Legal" links={legal} />
@@ -1351,9 +1363,9 @@ function Footer() {
         <div data-slot="footer-column">
           <h2>Newsletter</h2>
           <p>Be the first to know about new releases.</p>
-          <a data-slot="subscribe-button" href="https://opencode.ai/">
+          <button data-slot="subscribe-button" type="button" onClick={() => setSubscribeOpen(true)}>
             Subscribe
-          </a>
+          </button>
         </div>
       </div>
       <div data-slot="footer-pattern" aria-hidden="true" />
@@ -1362,19 +1374,114 @@ function Footer() {
           <span>© 2026 Anomaly Innovations Inc.</span>
           <span data-slot="status">All systems Operational</span>
         </div>
-        <div data-slot="theme-toggle" aria-label="Theme preference">
-          <button type="button" aria-label="Use dark theme">
-            <MoonIcon />
-          </button>
-          <button type="button" aria-label="Use light theme">
-            <SunIcon />
-          </button>
-          <button type="button" aria-label="Use system theme" data-active="true">
-            <MonitorIcon />
+      </div>
+      <Show when={subscribeOpen()}>
+        <SubscribeModal onClose={() => setSubscribeOpen(false)} />
+      </Show>
+    </footer>
+  )
+}
+
+function SubscribeModal(props: { onClose: () => void }) {
+  const [status, setStatus] = createSignal<"idle" | "pending" | "success" | "error">("idle")
+  const [message, setMessage] = createSignal("")
+  let input: HTMLInputElement | undefined
+
+  onMount(() => {
+    if (typeof document === "undefined") return
+    const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : undefined
+    const htmlOverflow = document.documentElement.style.overflow
+    const bodyOverflow = document.body.style.overflow
+    document.documentElement.style.overflow = "hidden"
+    document.body.style.overflow = "hidden"
+    const focusTimeout = window.setTimeout(() => input?.focus(), 0)
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") props.onClose()
+    }
+    document.addEventListener("keydown", onKeyDown)
+    onCleanup(() => {
+      window.clearTimeout(focusTimeout)
+      document.documentElement.style.overflow = htmlOverflow
+      document.body.style.overflow = bodyOverflow
+      document.removeEventListener("keydown", onKeyDown)
+      activeElement?.focus()
+    })
+  })
+
+  return (
+    <div data-component="subscribe-modal" role="dialog" aria-modal="true" aria-labelledby="subscribe-title">
+      <div data-slot="modal-scrim" aria-hidden="true" onClick={props.onClose} />
+      <div data-slot="modal-panel">
+        <div data-slot="modal-brand">
+          <img data-slot="modal-logo" src={opencodeWordmarkDark} alt="OpenCode" />
+          <button data-slot="modal-close" type="button" aria-label="Close newsletter signup" onClick={props.onClose}>
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M4.44 4.44L11.56 11.56M11.56 4.44L4.44 11.56" stroke="currentColor" />
+            </svg>
           </button>
         </div>
+        <div data-slot="modal-body">
+          <div data-slot="modal-intro">
+            <h2 id="subscribe-title">OpenCode Newsletter</h2>
+            <p>
+              Be the first to know
+              <br />
+              about new releases.
+            </p>
+          </div>
+          <form
+            data-slot="subscribe-form"
+            method="post"
+            onSubmit={(event) => {
+              event.preventDefault()
+              setStatus("pending")
+              setMessage("")
+              fetch("/api/newsletter", {
+                method: "POST",
+                body: new FormData(event.currentTarget),
+              }).then(
+                async (response) => {
+                  if (response.ok) {
+                    event.currentTarget.reset()
+                    setStatus("success")
+                    return
+                  }
+                  setMessage(await newsletterErrorMessage(response))
+                  setStatus("error")
+                },
+                () => {
+                  setMessage("Failed to subscribe")
+                  setStatus("error")
+                },
+              )
+            }}
+          >
+            <input ref={input} type="email" name="email" placeholder="Email address" required />
+            <button type="submit" disabled={status() === "pending"}>
+              {status() === "pending" ? "Subscribing..." : "Subscribe"}
+            </button>
+          </form>
+          <div data-slot="subscribe-feedback" aria-live="polite">
+            <Show when={status() === "success"}>
+              <p data-state="success">You're subscribed.</p>
+            </Show>
+            <Show when={status() === "error"}>
+              <p data-state="error">{message()}</p>
+            </Show>
+          </div>
+        </div>
       </div>
-    </footer>
+    </div>
+  )
+}
+
+function newsletterErrorMessage(response: Response) {
+  return response.json().then(
+    (body: unknown) =>
+      body && typeof body === "object" && "error" in body && typeof body.error === "string"
+        ? body.error
+        : "Failed to subscribe",
+    () => "Failed to subscribe",
   )
 }
 
@@ -1392,34 +1499,5 @@ function FooterColumn(props: { title: string; links: { href: string; label: stri
         </For>
       </nav>
     </div>
-  )
-}
-
-function MoonIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M8.8 7.9A4.3 4.3 0 0 1 4.1 3.2A3.9 3.9 0 1 0 8.8 7.9Z" stroke="currentColor" />
-    </svg>
-  )
-}
-
-function SunIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path
-        d="M6 3.5V2M6 10V8.5M8.5 6H10M2 6H3.5M7.75 4.25L8.8 3.2M3.2 8.8L4.25 7.75M4.25 4.25L3.2 3.2M8.8 8.8L7.75 7.75"
-        stroke="currentColor"
-      />
-      <circle cx="6" cy="6" r="1.7" stroke="currentColor" />
-    </svg>
-  )
-}
-
-function MonitorIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M2 3H10V8H2V3Z" stroke="currentColor" />
-      <path d="M4.5 10H7.5M6 8V10" stroke="currentColor" />
-    </svg>
   )
 }
