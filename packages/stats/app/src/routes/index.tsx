@@ -14,14 +14,19 @@ import {
 import { runtime } from "@opencode-ai/stats-core/runtime"
 import { createAsync, query } from "@solidjs/router"
 import { scaleBand, scaleLinear } from "d3-scale"
-import { createMemo, createSignal, For, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, Show, type JSX } from "solid-js"
 import { getRequestEvent } from "solid-js/web"
-import logoDark from "../asset/logo-ornate-dark.svg"
-import logoLight from "../asset/logo-ornate-light.svg"
 
 const products = ["All Users", "Zen", "Go", "Enterprise"] as const
 const tokenProducts = ["Zen", "Go", "Enterprise"] as const
 const ranges = ["1D", "1W", "1M", "3M", "YTD", "ALL"] as const
+const headerLinks = [
+  { href: "#top-models", label: "Top Models" },
+  { href: "#leaderboard", label: "Leaderboard" },
+  { href: "#market-share", label: "Market Share" },
+  { href: "#token-cost", label: "Token Cost" },
+  { href: "#session-cost", label: "Session Cost" },
+] as const
 const usageColors = ["#ff5d64", "#ff8a00", "#8bef00", "#12c8b3", "#18c7dc", "#6c7dff", "#9d73f7"]
 const marketColors = ["#ed6aff", "#a684ff", "#7c86ff", "#51a2ff", "#00d3f2", "#00d5be", "#00bc7d", "#9ae600", "#ffb900"]
 const countryPositions = [
@@ -115,9 +120,9 @@ function StatsLoading() {
   )
 }
 
-function ChartSection(props: { title: string; description?: string; controls?: JSX.Element; children: JSX.Element }) {
+function ChartSection(props: { id?: string; title: string; description?: string; controls?: JSX.Element; children: JSX.Element }) {
   return (
-    <section data-section="chart">
+    <section id={props.id} data-section="chart">
       <div data-slot="section-header">
         <div>
           <h2>{props.title}</h2>
@@ -158,7 +163,7 @@ function UsageSection(props: { data: StatsHomeData["usage"] }) {
   const data = createMemo(() => props.data[product()][range()])
 
   return (
-    <ChartSection title="Usage">
+    <ChartSection id="top-models" title="Usage">
       <Show
         when={data().some((item) => usageTotal(item) > 0)}
         fallback={<EmptyState title="No usage data" description="No model_stat rows matched this product and range." />}
@@ -394,6 +399,7 @@ function LeaderboardSection(props: { data: StatsHomeData["leaderboard"] }) {
 
   return (
     <ChartSection
+      id="leaderboard"
       title="Leaderboard"
       description="Shown are the sum of prompt and completion tokens per model, including reasoning tokens."
     >
@@ -476,7 +482,7 @@ function MarketShareSection(props: { data: StatsHomeData["market"] }) {
   const activeDay = createMemo(() => data()[selectedIndex()])
 
   return (
-    <ChartSection title="Market Share" description="Compare token share by model author.">
+    <ChartSection id="market-share" title="Market Share" description="Compare token share by model author.">
       <Show
         when={activeDay()}
         fallback={<EmptyState title="No market data" description="No model_stat rows matched this range." />}
@@ -572,7 +578,7 @@ function TokenCostSection(props: { data: StatsHomeData["tokenCost"] }) {
   const selectedIndex = createMemo(() => Math.min(activeIndex(), Math.max(data().length - 1, 0)))
 
   return (
-    <ChartSection title="Token Cost" description="Price per 1M tokens.">
+    <ChartSection id="token-cost" title="Token Cost" description="Price per 1M tokens.">
       <Show
         when={data().length > 0}
         fallback={
@@ -661,7 +667,7 @@ function SessionCostSection(props: { data: StatsHomeData["sessionCost"] }) {
   const selectedIndex = createMemo(() => Math.min(activeIndex(), Math.max(data().length - 1, 0)))
 
   return (
-    <ChartSection title="Session Cost" description="Average cost per session.">
+    <ChartSection id="session-cost" title="Session Cost" description="Average cost per session.">
       <Show
         when={data().length > 0}
         fallback={
@@ -886,47 +892,122 @@ function Newsletter() {
 }
 
 function Header() {
+  const [menuOpen, setMenuOpen] = createSignal(false)
+  const [menuViewport, setMenuViewport] = createSignal(false)
+
+  createEffect(() => {
+    if (typeof window === "undefined") return
+    const media = window.matchMedia("(max-width: 74.999rem)")
+    const update = () => setMenuViewport(media.matches)
+    update()
+    media.addEventListener("change", update)
+    onCleanup(() => media.removeEventListener("change", update))
+  })
+
+  createEffect(() => {
+    if (!menuOpen()) return
+    if (!menuViewport()) return
+    if (typeof document === "undefined") return
+    const page = document.querySelector<HTMLElement>('[data-page="stats"]')
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth
+    const htmlOverflow = document.documentElement.style.overflow
+    const pagePaddingRight = page?.style.paddingRight
+    const bodyOverflow = document.body.style.overflow
+    document.documentElement.style.overflow = "hidden"
+    if (scrollbarWidth > 0 && page) page.style.paddingRight = `${scrollbarWidth}px`
+    document.body.style.overflow = "hidden"
+    onCleanup(() => {
+      document.documentElement.style.overflow = htmlOverflow
+      if (page && pagePaddingRight !== undefined) page.style.paddingRight = pagePaddingRight
+      document.body.style.overflow = bodyOverflow
+    })
+  })
+
   return (
-    <section data-component="top">
-      <a data-slot="brand" href="https://opencode.ai/" aria-label="OpenCode home">
-        <img data-slot="logo light" src={logoLight} alt="OpenCode" width="234" height="42" />
-        <img data-slot="logo dark" src={logoDark} alt="OpenCode" width="234" height="42" />
-      </a>
-      <nav data-component="nav-desktop" aria-label="Main navigation">
-        <ul>
-          <li>
-            <a href="https://github.com/sst/opencode" target="_blank" rel="noreferrer">
-              GitHub
+    <header data-component="top" data-menu-open={menuOpen() ? "true" : undefined}>
+      <div data-slot="header-bar">
+        <a data-slot="brand" href="/" aria-label="OpenCode home">
+          <StatsWordmark />
+        </a>
+        <nav data-component="section-nav" aria-label="Stats sections">
+          <ul>
+            <For each={headerLinks}>
+              {(link) => (
+                <li>
+                  <a href={link.href}>{link.label}</a>
+                </li>
+              )}
+            </For>
+          </ul>
+        </nav>
+        <div data-slot="header-actions">
+          <a
+            data-slot="header-button"
+            data-variant="neutral"
+            href="https://github.com/sst/opencode"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <strong>GitHub</strong>
+            <span>[150K]</span>
+          </a>
+          <a data-slot="header-button" data-variant="contrast" href="https://opencode.ai/">
+            <strong>Try OpenCode</strong>
+          </a>
+          <button
+            data-slot="menu-button"
+            type="button"
+            aria-controls="stats-mobile-nav"
+            aria-expanded={menuOpen() ? "true" : "false"}
+            aria-label={menuOpen() ? "Close navigation" : "Open navigation"}
+          onClick={() => setMenuOpen((value) => !value)}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <Show when={menuOpen()} fallback={<path d="M2 4.72H14M2 8.5H14M2 12.28H14" stroke="currentColor" />}>
+              <path d="M4.44 4.44L11.56 11.56M11.56 4.44L4.44 11.56" stroke="currentColor" />
+            </Show>
+          </svg>
+        </button>
+        </div>
+      </div>
+      <nav id="stats-mobile-nav" data-slot="mobile-menu" aria-label="Stats sections" hidden={!menuOpen()}>
+        <a
+          data-slot="mobile-menu-item"
+          data-variant="github"
+          href="https://github.com/sst/opencode"
+          target="_blank"
+          rel="noreferrer"
+        >
+          <strong>GitHub</strong>
+          <span>[150K]</span>
+        </a>
+        <For each={headerLinks}>
+          {(link) => (
+            <a data-slot="mobile-menu-item" href={link.href} onClick={() => setMenuOpen(false)}>
+              {link.label}
             </a>
-          </li>
-          <li>
-            <a href="https://opencode.ai/docs">Docs</a>
-          </li>
-          <li>
-            <a href="https://opencode.ai/zen">Zen</a>
-          </li>
-          <li>
-            <a href="https://opencode.ai/go">Go</a>
-          </li>
-          <li>
-            <a href="https://opencode.ai/enterprise">Enterprise</a>
-          </li>
-          <li>
-            <a href="https://opencode.ai/download" data-slot="cta-button">
-              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true">
-                <path
-                  d="M12.1875 9.75L9.00001 12.9375L5.8125 9.75M9.00001 2.0625L9 12.375M14.4375 15.9375H3.5625"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="square"
-                />
-              </svg>
-              Download
-            </a>
-          </li>
-        </ul>
+          )}
+        </For>
       </nav>
-    </section>
+    </header>
+  )
+}
+
+function StatsWordmark() {
+  return (
+    <span data-slot="stats-wordmark" aria-hidden="true">
+      <svg data-slot="brand-mark" width="19" height="24" viewBox="0 0 19 24" fill="none">
+        <path opacity="0.2" d="M14.25 19.2H4.75V9.6H14.25V19.2Z" fill="currentColor" />
+        <path d="M14.25 4.8H4.75V19.2H14.25V4.8ZM19 24H0V0H19V24Z" fill="currentColor" />
+      </svg>
+      <svg data-slot="brand-label" width="51" height="14" viewBox="0 0 50.8509 14" fill="none">
+        <path d="M46.2359 14C45.2276 14 44.3356 13.819 43.56 13.4571C42.7973 13.0822 42.138 12.5328 41.5822 11.8089L43.1722 10.277C43.56 10.807 44.0124 11.2142 44.5295 11.4986C45.0466 11.7701 45.6283 11.9058 46.2747 11.9058C47.7225 11.9058 48.4464 11.2465 48.4464 9.92798C48.4464 9.38504 48.3172 8.97138 48.0586 8.68698C47.8001 8.40259 47.3735 8.19575 46.7788 8.06648L45.596 7.8338C44.3679 7.57525 43.463 7.13573 42.8813 6.51524C42.2996 5.89474 42.0088 5.02862 42.0088 3.9169C42.0088 2.62419 42.3901 1.6482 43.1528 0.98892C43.9284 0.32964 45.0272 0 46.4492 0C47.4187 0 48.2461 0.161588 48.9312 0.484764C49.6293 0.795014 50.2239 1.28624 50.7151 1.95845L49.1251 3.45152C48.789 2.99908 48.4076 2.66297 47.9811 2.44321C47.5545 2.21053 47.0309 2.09418 46.4104 2.09418C45.7253 2.09418 45.2211 2.22992 44.898 2.50139C44.5748 2.77285 44.4132 3.21237 44.4132 3.81995C44.4132 4.3241 44.536 4.71191 44.7816 4.98338C45.0401 5.25485 45.4538 5.45522 46.0226 5.58449L47.2054 5.83656C47.8647 5.97876 48.4206 6.15328 48.873 6.36011C49.3384 6.56694 49.7133 6.82548 49.9977 7.13573C50.295 7.44598 50.5083 7.8144 50.6376 8.241C50.7798 8.65466 50.8509 9.14589 50.8509 9.71468C50.8509 11.1108 50.4501 12.1773 49.6486 12.9141C48.8601 13.638 47.7225 14 46.2359 14Z" fill="currentColor" />
+        <path d="M36.9543 2.34643V13.7675H34.5305V2.34643H31.1371V0.232856H40.367V2.34643H36.9543Z" fill="currentColor" />
+        <path d="M28.6196 13.7675L27.6695 10.2384H23.3066L22.3565 13.7675H20.0296L23.9853 0.232856H27.049L31.0047 13.7675H28.6196ZM26.0407 4.57635L25.6141 2.42399H25.3426L24.916 4.57635L23.8883 8.27995H27.0878L26.0407 4.57635Z" fill="currentColor" />
+        <path d="M16.4849 2.34643V13.7675H14.0611V2.34643H10.6678V0.232856H19.8977V2.34643H16.4849Z" fill="currentColor" />
+        <path d="M4.65374 14C3.64543 14 2.75346 13.819 1.97784 13.4571C1.21514 13.0822 0.555863 12.5328 0 11.8089L1.59003 10.277C1.97784 10.807 2.43029 11.2142 2.94737 11.4986C3.46445 11.7701 4.04617 11.9058 4.69252 11.9058C6.14035 11.9058 6.86427 11.2465 6.86427 9.92798C6.86427 9.38504 6.735 8.97138 6.47646 8.68698C6.21791 8.40259 5.79132 8.19575 5.19668 8.06648L4.01385 7.8338C2.78578 7.57525 1.88089 7.13573 1.29917 6.51524C0.717452 5.89474 0.426593 5.02862 0.426593 3.9169C0.426593 2.62419 0.807941 1.6482 1.57064 0.98892C2.34626 0.32964 3.44506 0 4.86704 0C5.83657 0 6.6639 0.161588 7.34903 0.484764C8.04709 0.795014 8.64174 1.28624 9.13297 1.95845L7.54294 3.45152C7.20683 2.99908 6.82549 2.66297 6.39889 2.44321C5.9723 2.21053 5.44875 2.09418 4.82826 2.09418C4.14312 2.09418 3.63897 2.22992 3.31579 2.50139C2.99261 2.77285 2.83103 3.21237 2.83103 3.81995C2.83103 4.3241 2.95383 4.71191 3.19945 4.98338C3.45799 5.25485 3.87165 5.45522 4.44044 5.58449L5.62327 5.83656C6.28255 5.97876 6.83841 6.15328 7.29086 6.36011C7.75623 6.56694 8.13112 6.82548 8.41551 7.13573C8.71284 7.44598 8.92613 7.8144 9.0554 8.241C9.1976 8.65466 9.2687 9.14589 9.2687 9.71468C9.2687 11.1108 8.86796 12.1773 8.06648 12.9141C7.27793 13.638 6.14035 14 4.65374 14Z" fill="currentColor" />
+      </svg>
+    </span>
   )
 }
 
