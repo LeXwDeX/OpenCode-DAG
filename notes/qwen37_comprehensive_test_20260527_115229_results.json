@@ -1,0 +1,23 @@
+[
+  {
+    "depth": "low",
+    "total_calls": 17,
+    "anomaly_count": 0,
+    "analysis_summary_count": 0,
+    "anomaly_rate": 0.0
+  },
+  {
+    "depth": "medium",
+    "total_calls": 9,
+    "anomaly_count": 0,
+    "analysis_summary_count": 0,
+    "anomaly_rate": 0.0
+  },
+  {
+    "depth": "high",
+    "total_calls": 1,
+    "anomaly_count": 0,
+    "analysis_summary_count": 0,
+    "anomaly_rate": 0.0
+  }
+]

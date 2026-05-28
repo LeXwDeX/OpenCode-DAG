@@ -1,0 +1,396 @@
+#!/usr/bin/env python3
+"""
+Qwen3.7-Max + 原始 DCP 提示词复现脚本
+
+使用阿里云百炼直接 API 和原始英文 DCP 提示词，尝试复现 <analysis>/<summary> 标签生成问题。
+"""
+
+import json
+import time
+from datetime import datetime
+from openai import OpenAI
+
+# 阿里云百炼直接 API 配置
+BASE_URL = "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
+API_KEY = "sk-sp-D.HLRDY.TjBE.MEYCIQCyDCJh4Z7kqX2BNPUkeHW088HzROsf6sXswz11jpgC9QIhAOoqfYa6goD/iIv7k1llSt+14urtC9fZJvW3o2iahK+9"
+MODEL = "qwen3.7-max"
+
+# 初始化客户端
+client = OpenAI(
+    base_url=BASE_URL,
+    api_key=API_KEY
+)
+
+# 日志文件
+LOG_FILE = f"qwen37_original_dcp_reproduction_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+def log(message, data=None):
+    """记录日志"""
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    log_entry = f"[{timestamp}] {message}"
+    if data:
+        log_entry += f"\n{json.dumps(data, indent=2, ensure_ascii=False)}"
+    
+    print(log_entry)
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        f.write(log_entry + "\n\n")
+
+def get_original_dcp_system_prompt():
+    """获取原始英文 DCP 系统提示词"""
+    return """You operate in a context-constrained environment. Manage context continuously to avoid buildup and preserve retrieval quality. Efficient context management is paramount for your agentic performance.
+
+The ONLY tool you have for context management is `compress`. It replaces older conversation content with technical summaries you produce.
+
+`<dcp-message-id>` and `<dcp-system-reminder>` tags are environment-injected metadata. Do not output them.
+
+THE PHILOSOPHY OF COMPRESS
+`compress` transforms conversation content into dense, high-fidelity summaries. This is not cleanup - it is crystallization. Your summary becomes the authoritative record of what transpired.
+
+Think of compression as phase transitions: raw exploration becomes refined understanding. The original context served its purpose; your summary now carries that understanding forward.
+
+COMPRESS WHEN
+
+A section is genuinely closed and the raw conversation has served its purpose:
+
+- Research concluded and findings are clear
+- Implementation finished and verified
+- Exploration exhausted and patterns understood
+- Dead-end noise can be discarded without waiting for a whole chapter to close
+
+DO NOT COMPRESS IF
+
+- Raw context is still relevant and needed for edits or precise references
+- The target content is still actively in progress
+- You may need exact code, error messages, or file contents in the immediate next steps
+
+Before compressing, ask: _"Is this section closed enough to become summary-only right now?"_
+
+Evaluate conversation signal-to-noise REGULARLY. Use `compress` deliberately with quality-first summaries. Prioritize stale content intelligently to maintain a high-signal context window that supports your agency.
+
+It is of your responsibility to keep a sharp, high-quality context window for optimal performance."""
+
+def get_original_compress_range_prompt():
+    """获取原始英文 compress-range 提示词"""
+    return """Collapse a range in the conversation into a detailed summary.
+
+THE SUMMARY
+Your summary must be EXHAUSTIVE. Capture file paths, function signatures, decisions made, constraints discovered, key findings... EVERYTHING that maintains context integrity. This is not a brief note - it is an authoritative record so faithful that the original conversation adds no value.
+
+USER INTENT FIDELITY
+When the compressed range includes user messages, preserve the user's intent with extra care. Do not change scope, constraints, priorities, acceptance criteria, or requested outcomes.
+Directly quote user messages when they are short enough to include safely. Direct quotes are preferred when they best preserve exact meaning.
+
+Yet be LEAN. Strip away the noise: failed attempts that led nowhere, verbose tool outputs, back-and-forth exploration. What remains should be pure signal - golden nuggets of detail that preserve full understanding with zero ambiguity.
+
+COMPRESSED BLOCK PLACEHOLDERS
+When the selected range includes previously compressed blocks, use this exact placeholder format when referencing one:
+
+- `(bN)`
+
+Compressed block sections in context are clearly marked with a header:
+
+- `[Compressed conversation section]`
+
+Compressed block IDs always use the `bN` form (never `mNNNN`) and are represented in the same XML metadata tag format.
+
+Rules:
+
+- Include every required block placeholder exactly once.
+- Do not invent placeholders for blocks outside the selected range.
+- Treat `(bN)` placeholders as RESERVED TOKENS. Do not emit `(bN)` text anywhere except intentional placeholders.
+- If you need to mention a block in prose, use plain text like `compressed bN` (not as a placeholder).
+- Preflight check before finalizing: the set of `(bN)` placeholders in your summary must exactly match the required set, with no duplicates.
+
+These placeholders are semantic references. They will be replaced with the full stored compressed block content when the tool processes your output.
+
+FLOW PRESERVATION WITH PLACEHOLDERS
+When you use compressed block placeholders, write the surrounding summary text so it still reads correctly AFTER placeholder expansion.
+
+- Treat each placeholder as a stand-in for a full conversation segment, not as a short label.
+- Ensure transitions before and after each placeholder preserve chronology and causality.
+- Do not write text that depends on the placeholder staying literal (for example, "as noted in `(b2)`").
+- Your final meaning must be coherent once each placeholder is replaced with its full compressed block content.
+
+BOUNDARY IDS
+You specify boundaries by ID using the injected IDs visible in the conversation:
+
+- `mNNNN` IDs identify raw messages
+- `bN` IDs identify previously compressed blocks
+
+Each message has an ID inside XML metadata tags like `<dcp-message-id>...</dcp-message-id>`.
+The same ID tag appears in every tool output of the message it belongs to — each unique ID identifies one complete message.
+Treat these tags as boundary metadata only, not as tool result content.
+
+Rules:
+
+- Pick `startId` and `endId` directly from injected IDs in context.
+- IDs must exist in the current visible context.
+- `startId` must appear before `endId`.
+- Do not invent IDs. Use only IDs that are present in context.
+
+BATCHING
+When multiple independent ranges are ready and their boundaries do not overlap, include all of them as separate entries in the `content` array of a single tool call. Each entry should have its own `startId`, `endId`, and `summary`."""
+
+def simulate_original_dcp_conversation():
+    """模拟原始 DCP 场景的多轮对话"""
+    
+    system_prompt = get_original_dcp_system_prompt()
+    
+    # 模拟工具定义（包含 compress）
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file from the filesystem",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "Write content to a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"}
+                    },
+                    "required": ["path", "content"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "compress",
+                "description": get_original_compress_range_prompt(),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string"},
+                        "content": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "startId": {"type": "string"},
+                                    "endId": {"type": "string"},
+                                    "summary": {"type": "string"}
+                                }
+                            }
+                        }
+                    },
+                    "required": ["topic", "content"]
+                }
+            }
+        }
+    ]
+
+    # 对话历史
+    messages = [
+        {"role": "system", "content": system_prompt}
+    ]
+
+    # 多轮对话任务（30 轮，模拟周末长时间对话）
+    tasks = [
+        "Let's start by analyzing the project structure. Read the root directory.",
+        "Now read the README.md file and summarize it.",
+        "Search for all Python files in the project.",
+        "Read the main.py file if it exists.",
+        "Create a file called 'analysis_step1.md' with your findings.",
+        "Read the analysis_step1.md file to verify.",
+        "Now let's look at the configuration files. Read package.json.",
+        "Read pyproject.toml if it exists.",
+        "Create a file called 'config_analysis.md' with configuration details.",
+        "Read the config_analysis.md file.",
+        "Search for all test files in the project.",
+        "List all test files and their purposes.",
+        "Create a file called 'test_inventory.md'.",
+        "Read the test_inventory.md file.",
+        "Now let's examine the documentation. Read all .md files.",
+        "Create a comprehensive documentation index in 'docs_index.md'.",
+        "Read the docs_index.md file.",
+        "Let's review what we've done so far. Summarize the first 10 steps.",
+        "Create a progress report in 'progress_report.md'.",
+        "Read the progress_report.md file.",
+        "Now I think we should compress the earlier conversation to save context.",
+        "Please use the compress tool to summarize messages 1-15.",
+        "After compression, create a final summary in 'final_summary.md'.",
+        "Read the final_summary.md file.",
+        "Let's compress one more time. Summarize the remaining conversation.",
+        "Now let's do some more analysis. Read the src directory.",
+        "Create a detailed code structure analysis in 'code_structure.md'.",
+        "Read the code_structure.md file.",
+        "Let's compress everything we've done in the last 10 steps.",
+        "Create a final comprehensive report in 'comprehensive_report.md'."
+    ]
+
+    log("=" * 80)
+    log(f"开始原始 DCP 复现测试 - 使用英文提示词")
+    log(f"模型: {MODEL}")
+    log(f"API: {BASE_URL}")
+    log(f"总轮次: {len(tasks)}")
+    log("=" * 80)
+
+    anomaly_count = 0
+    total_calls = 0
+    analysis_summary_count = 0
+
+    for i, task in enumerate(tasks, 1):
+        log(f"\n{'='*80}")
+        log(f"轮次 {i}/{len(tasks)}")
+        log(f"用户消息: {task}")
+        log(f"当前对话历史长度: {len(messages)} 条消息")
+        log(f"{'='*80}")
+
+        messages.append({"role": "user", "content": task})
+
+        try:
+            total_calls += 1
+            start_time = time.time()
+            
+            # 调用 API
+            response = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                temperature=0.7,
+                max_tokens=4096
+            )
+            
+            elapsed_time = time.time() - start_time
+
+            # 解析响应
+            choice = response.choices[0]
+            message = choice.message
+            finish_reason = choice.finish_reason
+            
+            # 统计 token
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+            total_tokens = usage.total_tokens if usage else 0
+
+            # 检查是否有工具调用
+            has_tool_calls = message.tool_calls is not None and len(message.tool_calls or []) > 0
+            tool_calls_count = len(message.tool_calls or []) if has_tool_calls else 0
+
+            # 记录响应
+            response_data = {
+                "finish_reason": finish_reason,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "has_tool_calls": has_tool_calls,
+                "tool_calls_count": tool_calls_count,
+                "elapsed_time": f"{elapsed_time:.2f}s",
+                "content_length": len(message.content) if message.content else 0
+            }
+
+            log(f"API 响应:", response_data)
+
+            # 检测异常
+            is_anomaly = False
+            anomaly_reasons = []
+
+            # 检测 <analysis> 或 <summary> 标签
+            if message.content:
+                if "<analysis>" in message.content or "<summary>" in message.content:
+                    is_anomaly = True
+                    anomaly_reasons.append("检测到 <analysis> 或 <summary> 标签")
+                    analysis_summary_count += 1
+                    log(f"⚠️ 检测到 XML 标签!", {"content": message.content[:500]})
+
+            # 检测异常停止
+            if finish_reason == "stop" and not has_tool_calls and output_tokens <= 10:
+                is_anomaly = True
+                anomaly_reasons.append(f"异常停止: output_tokens={output_tokens}")
+
+            if is_anomaly:
+                anomaly_count += 1
+                log(f"⚠️ 检测到异常!", {"reasons": anomaly_reasons})
+
+            # 处理工具调用
+            if has_tool_calls and message.tool_calls:
+                log(f"工具调用: {tool_calls_count} 个")
+                messages.append(message)
+                
+                for tool_call in message.tool_calls:
+                    func_name = tool_call.function.name
+                    func_args = tool_call.function.arguments
+                    log(f"  - {func_name}({func_args[:100]}...)")
+                    
+                    # 模拟工具执行
+                    if func_name == "read_file":
+                        args = json.loads(func_args)
+                        tool_response = f"File content: {args['path']}\n\nThis is simulated file content for testing purposes." * 20
+                    elif func_name == "write_file":
+                        args = json.loads(func_args)
+                        tool_response = f"Successfully wrote file: {args['path']} ({len(args['content'])} bytes)"
+                    elif func_name == "compress":
+                        tool_response = "Compression completed. Context has been successfully compressed."
+                    else:
+                        tool_response = "Tool execution completed"
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": tool_response
+                    })
+            else:
+                # 没有工具调用，添加助手响应
+                messages.append(message)
+                if message.content:
+                    log(f"助手响应: {message.content[:200]}...")
+
+        except Exception as e:
+            log(f"❌ API 调用失败: {str(e)}")
+            break
+
+        # 短暂延迟
+        time.sleep(0.5)
+
+    # 总结
+    log(f"\n{'='*80}")
+    log("测试完成")
+    log(f"{'='*80}")
+    log(f"总调用次数: {total_calls}")
+    log(f"异常次数: {anomaly_count}")
+    log(f"<analysis>/<summary> 标签出现次数: {analysis_summary_count}")
+    log(f"异常率: {anomaly_count/total_calls*100:.1f}%" if total_calls > 0 else "N/A")
+    log(f"最终对话历史长度: {len(messages)} 条消息")
+    log(f"日志文件: {LOG_FILE}")
+    log(f"{'='*80}")
+
+    return anomaly_count, total_calls, analysis_summary_count
+
+def main():
+    """主函数"""
+    print("Qwen3.7-Max + 原始 DCP 提示词复现脚本")
+    print("=" * 80)
+    print("此脚本将执行 30 轮多轮对话，使用原始英文 DCP 提示词")
+    print("尝试触发 <analysis>/<summary> 标签生成问题")
+    print("=" * 80)
+    
+    anomaly, total, tags = simulate_original_dcp_conversation()
+    
+    print("\n" + "=" * 80)
+    print("最终结果")
+    print("=" * 80)
+    print(f"总调用次数: {total}")
+    print(f"异常次数: {anomaly}")
+    print(f"<analysis>/<summary> 标签出现次数: {tags}")
+    print(f"异常率: {anomaly/total*100:.1f}%" if total > 0 else "N/A")
+    print("=" * 80)
+
+if __name__ == "__main__":
+    main()
