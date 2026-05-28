@@ -3,14 +3,19 @@ import { readdir } from "node:fs/promises"
 import path from "node:path"
 import { drizzle } from "drizzle-orm/planetscale-serverless"
 import { geoStat, modelStat, providerStat } from "./database/schema"
+import { modelAuthor, normalizeInferenceModel } from "./domain/model-normalization"
 import {
   chunks,
   collapseRows,
   inserted,
+  isoWeekId,
   normalizeCountry,
   normalizeTier,
+  periodKeyFor,
   rankBy,
   rankRowsWithMarketShare,
+  startOfIsoWeek,
+  startOfUtcDay,
   statPeriodKey,
   synthesizeAllTierRows,
   toStatBaseRow,
@@ -23,10 +28,9 @@ const DEFAULT_TIERS = ["Go", "Free", "Paid"]
 const FREE_MODELS = new Set(["gpt-5-nano", "grok-code", "big-pickle"])
 
 type Grain = "day" | "week"
-type MetricDimension = "model" | "provider" | "geo"
+type MetricDimension = "model" | "provider" | "geo" | "geo-model"
 type LookupDimension = "model-provider-model" | "geo-continent"
 type ImportKey = `${MetricDimension | LookupDimension}-${Grain}`
-type GeneratedImportKey = `${MetricDimension}-${Grain}`
 type QuerySpec = {
   name: string
   importKey: ImportKey
@@ -34,19 +38,17 @@ type QuerySpec = {
   query: ReturnType<typeof metricQuery>
 }
 type RawRow = Record<string, string>
-type Period = { start: Date; end: Date }
 type ImportOptions = {
   dataset: string
   databaseUrl: string | undefined
   directories: string[]
   dryRun: boolean
-  periodEnd: Date | undefined
   periodStart: Date | undefined
   files: Partial<Record<ImportKey, string[]>>
 }
 type ModelAggregate = StatBaseAggregate & { provider: string; model: string; provider_model: string }
 type ProviderAggregate = StatBaseAggregate & { provider: string }
-type GeoAggregate = StatBaseAggregate & { country: string; continent: string }
+type GeoAggregate = StatBaseAggregate & { provider: string; model: string; country: string; continent: string }
 type ModelStatRow = typeof modelStat.$inferInsert
 type ProviderStatRow = typeof providerStat.$inferInsert
 type GeoStatRow = typeof geoStat.$inferInsert
@@ -60,6 +62,8 @@ const inputKeys = [
   "provider-week",
   "geo-day",
   "geo-week",
+  "geo-model-day",
+  "geo-model-week",
   "geo-continent-day",
   "geo-continent-week",
 ] as const satisfies ImportKey[]
@@ -77,7 +81,7 @@ function printQueries(args: string[]) {
   const flags = parseFlags(args)
   const limit = parseIntegerFlag(flags, "limit") ?? 1000
   const tiers = parseListFlag(flags, "tiers") ?? DEFAULT_TIERS
-  const queries = buildQueries(limit, tiers, flags.has("include-weekly"))
+  const queries = buildQueries(limit, tiers)
   const only = flags.get("only")?.[0]
 
   if (only) {
@@ -112,41 +116,46 @@ async function importFiles(args: string[]) {
     ...(await lookupRows(opts.files["geo-continent-day"], "day", opts, geoContinentLookup)),
     ...(await lookupRows(opts.files["geo-continent-week"], "week", opts, geoContinentLookup)),
   ])
-  const modelRows = modelRowsFromAggregates([
-    ...(await metricRows(opts.files["model-day"], "day", opts, (row, base) => ({
-      ...base,
-      provider: provider(row),
-      model: model(row),
-      provider_model: providerModelLookup.get(lookupKey(base, provider(row), model(row))) ?? providerModel(row),
-    }))),
-    ...(await metricRows(opts.files["model-week"], "week", opts, (row, base) => ({
-      ...base,
-      provider: provider(row),
-      model: model(row),
-      provider_model: providerModelLookup.get(lookupKey(base, provider(row), model(row))) ?? providerModel(row),
-    }))),
-  ])
+  const modelAggregates = [
+    ...(await metricRows(opts.files["model-day"], "day", opts, (row, base) =>
+      modelAggregate(row, base, providerModelLookup),
+    )),
+    ...(await metricRows(opts.files["model-week"], "week", opts, (row, base) =>
+      modelAggregate(row, base, providerModelLookup),
+    )),
+  ]
+  const modelRows = modelRowsFromAggregates(modelAggregates)
   const providerRows = providerRowsFromAggregates([
     ...(await metricRows(opts.files["provider-day"], "day", opts, (row, base) => ({
       ...base,
-      provider: provider(row),
+      provider: provider(row) ?? "unknown",
     }))),
     ...(await metricRows(opts.files["provider-week"], "week", opts, (row, base) => ({
       ...base,
-      provider: provider(row),
+      provider: provider(row) ?? "unknown",
     }))),
   ])
   const geoRows = geoRowsFromAggregates([
     ...(await metricRows(opts.files["geo-day"], "day", opts, (row, base) => ({
       ...base,
+      provider: "all",
+      model: "all",
       country: country(row),
       continent: continentLookup.get(lookupKey(base, country(row))) ?? continent(row),
     }))),
     ...(await metricRows(opts.files["geo-week"], "week", opts, (row, base) => ({
       ...base,
+      provider: "all",
+      model: "all",
       country: country(row),
       continent: continentLookup.get(lookupKey(base, country(row))) ?? continent(row),
     }))),
+    ...(await metricRows(opts.files["geo-model-day"], "day", opts, (row, base) =>
+      geoModelAggregate(row, base, continentLookup),
+    )),
+    ...(await metricRows(opts.files["geo-model-week"], "week", opts, (row, base) =>
+      geoModelAggregate(row, base, continentLookup),
+    )),
   ])
 
   console.log(
@@ -174,36 +183,40 @@ async function importFiles(args: string[]) {
   await upsertGeoRows(db, geoRows)
 }
 
-function buildQueries(limit: number, tiers: string[], includeWeekly: boolean): QuerySpec[] {
+function buildQueries(limit: number, tiers: string[]): QuerySpec[] {
   const daily = tiers.flatMap((tier) => [
     querySpec(
       "model-day",
       tier,
-      metricQuery(["date", "tier", "provider.normalized", "model", "provider.model"], limit, tierFilters(tier)),
+      metricQuery(["date", "tier", "stat_provider", "stat_model"], limit, tierFilters(tier)),
     ),
     querySpec(
       "provider-day",
       tier,
-      metricQuery(["date", "tier", "provider.normalized"], limit, tierFilters(tier)),
+      metricQuery(["date", "tier", "stat_provider"], limit, tierFilters(tier)),
     ),
     querySpec("geo-day", tier, metricQuery(["date", "tier", "country", "continent"], limit, tierFilters(tier))),
+    querySpec(
+      "geo-model-day",
+      tier,
+      metricQuery(["date", "tier", "stat_provider", "stat_model", "country", "continent"], limit, tierFilters(tier)),
+    ),
   ])
-  const weekly = includeWeekly
-    ? tiers.flatMap((tier) => [
-        querySpec(
-          "model-week",
-          tier,
-          metricQuery(["tier", "provider.normalized", "model", "provider.model"], limit, tierFilters(tier)),
-        ),
-        querySpec("provider-week", tier, metricQuery(["tier", "provider.normalized"], limit, tierFilters(tier))),
-        querySpec("geo-week", tier, metricQuery(["tier", "country", "continent"], limit, tierFilters(tier))),
-      ])
-    : []
+  const weekly = tiers.flatMap((tier) => [
+    querySpec("model-week", tier, metricQuery(["week", "tier", "stat_provider", "stat_model"], limit, tierFilters(tier))),
+    querySpec("provider-week", tier, metricQuery(["week", "tier", "stat_provider"], limit, tierFilters(tier))),
+    querySpec("geo-week", tier, metricQuery(["week", "tier", "country", "continent"], limit, tierFilters(tier))),
+    querySpec(
+      "geo-model-week",
+      tier,
+      metricQuery(["week", "tier", "stat_provider", "stat_model", "country", "continent"], limit, tierFilters(tier)),
+    ),
+  ])
 
   return [...daily, ...weekly]
 }
 
-function querySpec(importKey: GeneratedImportKey, tier: string, query: ReturnType<typeof metricQuery>) {
+function querySpec(importKey: ImportKey, tier: string, query: ReturnType<typeof metricQuery>) {
   return {
     name: `${importKey}-${queryNameSegment(tier)}`,
     importKey,
@@ -238,8 +251,6 @@ function metricQuery(
       { op: "P50", column: "time_to_first_byte" },
       { op: "P95", column: "time_to_first_byte" },
       { op: "AVG", column: "tps.output" },
-      { op: "SUM", column: "success" },
-      { op: "SUM", column: "error" },
     ],
     filters: [...commonFilters(), ...filters],
     filter_combination: "AND",
@@ -269,6 +280,7 @@ function commonFilters() {
     { column: "event_type", op: "=", value: "completions" },
     { column: "model", op: "exists" },
     { column: "model", op: "!=", value: "" },
+    { column: "model", op: "!=", value: "alpha-gpt-next" },
   ]
 }
 
@@ -276,10 +288,10 @@ function metricRows<T extends StatBaseAggregate>(
   files: string[] | undefined,
   grain: Grain,
   opts: ImportOptions,
-  map: (row: RawRow, base: StatBaseAggregate) => T,
+  map: (row: RawRow, base: StatBaseAggregate) => T | T[],
 ) {
   if (!files) return Promise.resolve([])
-  return readFiles(files).then((rows) => rows.map((row) => map(row, baseAggregate(row, grain, opts))))
+  return readFiles(files).then((rows) => rows.flatMap((row) => map(row, baseAggregate(row, grain, opts))))
 }
 
 function lookupRows(
@@ -334,10 +346,13 @@ function classifyRows(file: string, rows: RawRow[]): ImportKey {
   if (rows.length === 0) fail(`Cannot classify empty export: ${file}`)
   const headers = new Set(rows.flatMap((row) => Object.keys(row).map(normalizeHeader)))
   const grain: Grain = headers.has("date") ? "day" : "week"
-  if (headers.has("model")) return hasMetricHeaders(headers) ? `model-${grain}` : `model-provider-model-${grain}`
-  if (hasHeader(headers, ["country", "cf.country"]))
+  if (hasHeader(headers, ["country", "cf.country"])) {
+    if (hasHeader(headers, ["model", "stat_model"]) && hasMetricHeaders(headers)) return `geo-model-${grain}`
     return hasMetricHeaders(headers) ? `geo-${grain}` : `geo-continent-${grain}`
-  if (hasHeader(headers, ["provider", "provider.normalized"])) return `provider-${grain}`
+  }
+  if (hasHeader(headers, ["model", "stat_model"]))
+    return hasMetricHeaders(headers) ? `model-${grain}` : `model-provider-model-${grain}`
+  if (hasHeader(headers, ["provider", "provider.normalized", "stat_provider"])) return `provider-${grain}`
   fail(`Cannot classify export from columns in ${file}`)
 }
 
@@ -362,8 +377,27 @@ function mergeFiles(left: Partial<Record<ImportKey, string[]>>, right: Partial<R
 function modelProviderModelLookup(row: RawRow, grain: Grain, opts: ImportOptions): [string, string][] {
   const base = basePeriod(row, grain, opts)
   const value = providerModel(row)
-  if (!value) return []
-  return [[lookupKey({ ...base, dataset: opts.dataset, tier: tier(row), grain }, provider(row), model(row)), value]]
+  const author = provider(row)
+  if (!value || !author) return []
+  return [[lookupKey({ ...base, dataset: opts.dataset, tier: tier(row), grain }, author, model(row)), value]]
+}
+
+function modelAggregate(
+  row: RawRow,
+  base: StatBaseAggregate,
+  providerModelLookup: Map<string, string>,
+): ModelAggregate[] {
+  const author = provider(row)
+  if (!author) return []
+
+  return [
+    {
+      ...base,
+      provider: author,
+      model: model(row),
+      provider_model: providerModelLookup.get(lookupKey(base, author, model(row))) ?? providerModel(row),
+    },
+  ]
 }
 
 function geoContinentLookup(row: RawRow, grain: Grain, opts: ImportOptions): [string, string][] {
@@ -371,6 +405,25 @@ function geoContinentLookup(row: RawRow, grain: Grain, opts: ImportOptions): [st
   const value = continent(row)
   if (!value) return []
   return [[lookupKey({ ...base, dataset: opts.dataset, tier: tier(row), grain }, country(row)), value]]
+}
+
+function geoModelAggregate(
+  row: RawRow,
+  base: StatBaseAggregate,
+  continentLookup: Map<string, string>,
+): GeoAggregate[] {
+  const author = provider(row)
+  if (!author) return []
+
+  return [
+    {
+      ...base,
+      provider: author,
+      model: model(row),
+      country: country(row),
+      continent: continentLookup.get(lookupKey(base, country(row))) ?? continent(row),
+    },
+  ]
 }
 
 function baseAggregate(row: RawRow, grain: Grain, opts: ImportOptions): StatBaseAggregate {
@@ -412,24 +465,20 @@ function baseAggregate(row: RawRow, grain: Grain, opts: ImportOptions): StatBase
 }
 
 function basePeriod(row: RawRow, grain: Grain, opts: ImportOptions) {
-  const period = periodFor(row, grain, opts)
-  return { period_start: period.start, period_end: period.end }
+  return { period_key: periodKey(row, grain, opts) }
 }
 
-function periodFor(row: RawRow, grain: Grain, opts: ImportOptions): Period {
+function periodKey(row: RawRow, grain: Grain, opts: ImportOptions) {
   if (grain === "week") {
-    const end = opts.periodEnd ?? parseTime(row)
-    if (!end) fail("--period-end is required for week imports")
-    return { start: opts.periodStart ?? syncWeekStart(end), end }
+    const week = parseWeek(row)
+    if (week) return week
+    fail("weekly imports require a week or period_key column")
   }
 
   const time = parseTime(row)
   const start = time ? startOfUtcDay(time) : opts.periodStart
   if (!start) fail("daily imports require a time column or --period-start")
-  return {
-    start,
-    end: opts.periodEnd && sameUtcDay(start, opts.periodEnd) ? opts.periodEnd : new Date(start.getTime() + DAY_MS),
-  }
+  return periodKeyFor("day", start)
 }
 
 function modelRowsFromAggregates(aggregates: ModelAggregate[]) {
@@ -459,16 +508,19 @@ function providerRowsFromAggregates(aggregates: ProviderAggregate[]) {
 }
 
 function geoRowsFromAggregates(aggregates: GeoAggregate[]) {
-  return rankRowsWithMarketShare([
-    ...synthesizeAllTierRows(
-      collapseRows(aggregates.filter((item) => item.grain === "week").map(toGeoRow), geoDimensionKey),
-      geoDimensionKey,
-    ),
-    ...synthesizeAllTierRows(
-      collapseRows(aggregates.filter((item) => item.grain === "day").map(toGeoRow), geoDimensionKey),
-      geoDimensionKey,
-    ),
-  ])
+  return rankRowsWithMarketShare(
+    [
+      ...synthesizeAllTierRows(
+        collapseRows(aggregates.filter((item) => item.grain === "week").map(toGeoRow), geoDimensionKey),
+        geoDimensionKey,
+      ),
+      ...synthesizeAllTierRows(
+        collapseRows(aggregates.filter((item) => item.grain === "day").map(toGeoRow), geoDimensionKey),
+        geoDimensionKey,
+      ),
+    ],
+    geoMarketShareKey,
+  )
 }
 
 function toModelRow(data: ModelAggregate): ModelStatRow {
@@ -480,7 +532,13 @@ function toProviderRow(data: ProviderAggregate): ProviderStatRow {
 }
 
 function toGeoRow(data: GeoAggregate): GeoStatRow {
-  return { ...toStatBaseRow(data), country: data.country, continent: data.continent }
+  return {
+    ...toStatBaseRow(data),
+    provider: data.provider,
+    model: data.model,
+    country: data.country,
+    continent: data.continent,
+  }
 }
 
 function rankModelRows(rows: ModelStatRow[]) {
@@ -512,11 +570,15 @@ function providerDimensionKey(row: ProviderStatRow) {
 }
 
 function geoDimensionKey(row: GeoStatRow) {
-  return row.country
+  return [row.provider, row.model, row.country].join("\u0000")
 }
 
-function lookupKey(base: { grain: string; period_start: Date; dataset: string; tier: string }, ...dimension: string[]) {
-  return [base.grain, base.period_start.toISOString(), base.dataset, base.tier, ...dimension].join("\u0000")
+function geoMarketShareKey(row: GeoStatRow) {
+  return [statPeriodKey(row), row.provider, row.model].join("\u0000")
+}
+
+function lookupKey(base: { grain: string; period_key: string; dataset: string; tier: string }, ...dimension: string[]) {
+  return [base.grain, base.period_key, base.dataset, base.tier, ...dimension].join("\u0000")
 }
 
 function tier(row: RawRow) {
@@ -527,23 +589,19 @@ function deriveTier(row: RawRow) {
   const source = cell(row, ["source"])
   const value = model(row)
   if (source === "lite") return "Go"
-  if (FREE_MODELS.has(value) || value.endsWith("-free")) return "Free"
+  if (FREE_MODELS.has(value) || /-free(:global)?$/.test(rawModel(row))) return "Free"
   return "Zen"
 }
 
 function provider(row: RawRow) {
-  return normalizeProvider(cell(row, ["provider.normalized", "stat_provider", "provider"]) || "unknown")
-}
-
-function normalizeProvider(value: string) {
-  if (value.startsWith("minimax-plan")) return "minimax-plan"
-  if (value.startsWith("zai-plan")) return "zai-plan"
-  if (value.startsWith("azure-databricks")) return "azure-databricks"
-  if (/^azure[0-9]+/.test(value)) return "azure-openai"
-  return value || "unknown"
+  return cell(row, ["stat_provider"]) || modelAuthor(model(row))
 }
 
 function model(row: RawRow) {
+  return normalizeInferenceModel(cell(row, ["stat_model"]) || rawModel(row))
+}
+
+function rawModel(row: RawRow) {
   return cell(row, ["model"]) || "unknown"
 }
 
@@ -609,20 +667,21 @@ function parseTime(row: RawRow) {
   return date
 }
 
-function startOfUtcDay(value: Date) {
-  return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()))
-}
+function parseWeek(row: RawRow) {
+  const value = cell(row, ["period_key", "week", "stat_week"])
+  if (!value) return undefined
 
-function syncWeekStart(periodEnd: Date) {
-  return new Date(Date.UTC(periodEnd.getUTCFullYear(), periodEnd.getUTCMonth(), periodEnd.getUTCDate() - 6))
-}
+  const match = /^(\d{4})-W(\d{1,2})$/.exec(value)
+  if (!match) fail(`Invalid week value: ${value}`)
 
-function sameUtcDay(left: Date, right: Date) {
-  return (
-    left.getUTCFullYear() === right.getUTCFullYear() &&
-    left.getUTCMonth() === right.getUTCMonth() &&
-    left.getUTCDate() === right.getUTCDate()
-  )
+  const year = Number(match[1])
+  const week = Number(match[2])
+  if (week < 1 || week > 53) fail(`Invalid week value: ${value}`)
+
+  const start = new Date(startOfIsoWeek(new Date(Date.UTC(year, 0, 4))).getTime() + (week - 1) * 7 * DAY_MS)
+  const id = `${year}-W${String(week).padStart(2, "0")}`
+  if (isoWeekId(start) !== id) fail(`Invalid week value: ${value}`)
+  return id
 }
 
 async function readRows(file: string) {
@@ -732,7 +791,6 @@ async function upsertModelRows(db: ReturnType<typeof drizzle>, rows: ModelStatRo
         .values(chunk)
         .onDuplicateKeyUpdate({
           set: {
-            period_end: inserted("period_end"),
             provider_model: inserted("provider_model"),
             sessions: inserted("sessions"),
             requests: inserted("requests"),
@@ -771,7 +829,6 @@ async function upsertProviderRows(db: ReturnType<typeof drizzle>, rows: Provider
         .values(chunk)
         .onDuplicateKeyUpdate({
           set: {
-            period_end: inserted("period_end"),
             sessions: inserted("sessions"),
             requests: inserted("requests"),
             input_tokens: inserted("input_tokens"),
@@ -813,7 +870,6 @@ async function upsertGeoRows(db: ReturnType<typeof drizzle>, rows: GeoStatRow[])
         .values(chunk)
         .onDuplicateKeyUpdate({
           set: {
-            period_end: inserted("period_end"),
             continent: inserted("continent"),
             sessions: inserted("sessions"),
             requests: inserted("requests"),
@@ -860,7 +916,6 @@ function parseImportOptions(args: string[]): ImportOptions {
     databaseUrl: flags.get("database-url")?.[0] ?? process.env.DATABASE_URL,
     directories: flags.get("dir") ?? flags.get("directory") ?? [],
     dryRun: flags.has("dry-run"),
-    periodEnd: parseDateFlag(flags, "period-end"),
     periodStart: parseDateFlag(flags, "period-start"),
     files,
   }
@@ -913,9 +968,9 @@ function parseListFlag(flags: Map<string, string[]>, name: string) {
 
 function usage(): never {
   fail(`Usage:
-  bun src/honeycomb-backfill.ts queries [--tiers Go,Free,Paid] [--limit 1000] [--include-weekly]
-  bun src/honeycomb-backfill.ts import [--period-end ISO for weekly files] [--dry-run] [--database-url URL] --dir downloads
-  bun src/honeycomb-backfill.ts import [--period-end ISO for weekly files] [--dry-run] [--database-url URL] --model-day file.csv [--model-day more.csv] ...`)
+  bun src/honeycomb-backfill.ts queries [--tiers Go,Free,Paid] [--limit 1000]
+  bun src/honeycomb-backfill.ts import [--dry-run] [--database-url URL] --dir downloads
+  bun src/honeycomb-backfill.ts import [--dry-run] [--database-url URL] --model-day file.csv [--model-day more.csv] ...`)
 }
 
 function fail(message: string): never {
