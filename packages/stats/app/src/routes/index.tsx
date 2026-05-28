@@ -1406,7 +1406,10 @@ function MoonIcon() {
 function SunIcon() {
   return (
     <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-      <path d="M6 3.5V2M6 10V8.5M8.5 6H10M2 6H3.5M7.75 4.25L8.8 3.2M3.2 8.8L4.25 7.75M4.25 4.25L3.2 3.2M8.8 8.8L7.75 7.75" stroke="currentColor" />
+      <path
+        d="M6 3.5V2M6 10V8.5M8.5 6H10M2 6H3.5M7.75 4.25L8.8 3.2M3.2 8.8L4.25 7.75M4.25 4.25L3.2 3.2M8.8 8.8L7.75 7.75"
+        stroke="currentColor"
+      />
       <circle cx="6" cy="6" r="1.7" stroke="currentColor" />
     </svg>
   )

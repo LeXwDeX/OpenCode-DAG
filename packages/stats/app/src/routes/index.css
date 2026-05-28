@@ -1318,7 +1318,13 @@
   font-weight: 500;
 }
 
-[data-page="stats"] :is([data-section="leaderboard"], [data-section="market-share"], [data-section="token-cost"], [data-section="session-cost"]) {
+[data-page="stats"]
+  :is(
+    [data-section="leaderboard"],
+    [data-section="market-share"],
+    [data-section="token-cost"],
+    [data-section="session-cost"]
+  ) {
   position: relative;
   box-sizing: border-box;
   box-shadow:
