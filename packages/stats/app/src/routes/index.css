@@ -1103,9 +1103,7 @@
   gap: var(--market-gap);
 }
 
-[data-page="stats"] [data-component="top-models-chart"][data-dense-labels="true"]
-  [data-slot="top-models-axis"]
-  > div {
+[data-page="stats"] [data-component="top-models-chart"][data-dense-labels="true"] [data-slot="top-models-axis"] > div {
   position: relative;
   display: flex;
   align-items: center;
