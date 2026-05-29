@@ -731,7 +731,9 @@ function TopModelsChart(props: {
                         >
                           <span data-slot="tooltip-label">
                             <i
-                              style={{ background: getRankColor(item.segment.model, item.index, segmentOrder(), usageColors) }}
+                              style={{
+                                background: getRankColor(item.segment.model, item.index, segmentOrder(), usageColors),
+                              }}
                             />{" "}
                             {item.segment.model}
                           </span>
@@ -782,7 +784,9 @@ function stackedTopModelsSegments(point: UsagePoint, order: Map<string, number>)
 
 function getTopModelsSegmentOrder(data: UsagePoint[]) {
   return getRankOrder(
-    data.flatMap((point) => point.segments.map((segment, index) => ({ key: segment.model, value: segment.value, index }))),
+    data.flatMap((point) =>
+      point.segments.map((segment, index) => ({ key: segment.model, value: segment.value, index })),
+    ),
   )
 }
 
