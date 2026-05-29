@@ -1,0 +1,5 @@
+Check on, or wait for, a sandbox run that was started with `background: true`.
+
+Pass the `sandbox_id` returned by the sandbox tool. By default it returns the current status and any output so far. Set `wait: true` to block until the run reaches a terminal state (completed/error/cancelled) or the timeout elapses.
+
+Use this to collect the result of a long build or run you launched in the background, before reviewing its output and diagnostics and merging verified code into real project files.

@@ -21,6 +21,7 @@ refs
 Session.vim
 /opencode.json
 a.out
+.opencode/sandboxes/
 target
 .scripts
 .direnv/

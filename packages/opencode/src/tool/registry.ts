@@ -28,6 +28,8 @@ import { RepoOverviewTool } from "./repo_overview"
 import { RepositoryCache } from "@/reference/repository-cache"
 import * as Log from "@opencode-ai/core/util/log"
 import { LspTool } from "./lsp"
+import { SandboxTool, SandboxStatusTool } from "./sandbox"
+import { SandboxManager } from "./sandbox/manager"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
@@ -108,6 +110,7 @@ export const layer: Layer.Layer<
   | Format.Service
   | Truncate.Service
   | RuntimeFlags.Service
+  | SandboxManager.Service
   | SettingsHook.Service
 > = Layer.effect(
   Service,
@@ -126,6 +129,8 @@ export const layer: Layer.Layer<
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
     const lsptool = yield* LspTool
+    const sandbox = yield* SandboxTool
+    const sandboxStatus = yield* SandboxStatusTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
     const websearch = yield* WebSearchTool
@@ -247,6 +252,8 @@ export const layer: Layer.Layer<
           patch: Tool.init(patchtool),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
+          sandbox: Tool.init(sandbox),
+          sandbox_status: Tool.init(sandboxStatus),
           plan: Tool.init(plan),
         })
 
@@ -270,6 +277,7 @@ export const layer: Layer.Layer<
             tool.skill,
             tool.patch,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
+            ...(flags.experimentalSandbox ? [tool.sandbox, tool.sandbox_status] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
           task: tool.task,
@@ -399,7 +407,13 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(Format.defaultLayer),
       Layer.provide(CrossSpawnSpawner.defaultLayer),
       Layer.provide(Ripgrep.defaultLayer),
-      Layer.provide(Layer.mergeAll(Truncate.defaultLayer, SettingsHook.defaultLayer)),
+      Layer.provide(
+        Layer.mergeAll(
+          Truncate.defaultLayer,
+          SettingsHook.defaultLayer,
+          SandboxManager.defaultLayer.pipe(Layer.provide(AppFileSystem.defaultLayer)),
+        ),
+      ),
     )
     .pipe(Layer.provide(RuntimeFlags.defaultLayer)),
 )

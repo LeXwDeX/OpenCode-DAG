@@ -1,0 +1,44 @@
+Run, compile, and debug code in an isolated, throwaway workspace, then read real diagnostics — without touching the user's project files.
+
+Each sandbox is a private scratch directory with its own files and toolchain working directory. A sandbox is a DRAFT / TRIAL zone: code you run here does NOT enter the project. Once code is verified, you must copy it into real project files yourself with the write/edit tools.
+
+# When to use this tool
+- Trying out an implementation, algorithm, or API before committing it to the project.
+- Reproducing a bug or verifying a fix in isolation.
+- Compiling/running code across languages (python, node, ts, bash, go, rust, c, cpp) to check it actually works and is type-correct.
+- Spinning up many independent code-writing workers in parallel for a large, multi-file task.
+
+# When NOT to use this tool
+- A small, single-file edit to existing project code -> use edit/write directly.
+- Running ordinary shell commands in the project -> use the bash tool.
+- Multi-step research or reasoning that is not about running code -> use the task tool.
+
+# Orchestrator-workers discipline (READ THIS)
+You are the ORCHESTRATOR. For any task that spans multiple files or modules you MUST decompose it and fan the pieces out to sandbox workers that run CONCURRENTLY:
+- Emit MULTIPLE sandbox tool calls in a SINGLE message so they run in parallel. Do not write large multi-file work serially.
+- Give each worker one cohesive slice (a module, a component, a layer).
+- Then INSPECT every worker's output and <lsp_diagnostics>. Treat a sandbox result as a proposal, not as done.
+- Only after a slice runs cleanly and is diagnostic-clean do you MERGE it into real project files with write/edit.
+- Sandbox code is never automatically added to the project. Merging is an explicit step you perform.
+
+# Workspaces and state
+- Omit `sandbox_id` to create a fresh sandbox. The response reports the new `sandbox_id`.
+- Pass that `sandbox_id` back on later calls to REUSE the same workspace: its files, installed dependencies (venv / node_modules), and build artifacts persist between calls.
+- Use `setup` for one-time environment initialization (it runs only on the first call for a sandbox, before `command`): create a venv and pip install, `npm init -y && npm i ...`, `go mod init`, `cargo init`, etc. You decide what each sandbox needs.
+- Set `ephemeral: true` for a one-shot experiment you will not reuse; the workspace is deleted after the call.
+
+# Files and commands
+- `files` are written by RELATIVE path into the workspace root before `command` runs; the command's working directory is the workspace root.
+- For compiled languages, create the usual project marker via `setup` (e.g. `go.mod`, `Cargo.toml`, `tsconfig.json`) so diagnostics are accurate.
+- `command` both builds and runs as you see fit, e.g. `go run .`, `python main.py`, `cargo run`, `gcc main.c -o main && ./main`.
+
+# Diagnostics
+- By default the tool runs LSP diagnostics on the files you wrote and appends an `<lsp_diagnostics>` block listing type errors and warnings. Read it: a clean run with errors in diagnostics is NOT ready to merge.
+
+# Long-running work
+- Set `background: true` for long builds/runs to return immediately with the `sandbox_id`; poll with the `sandbox_status` tool.
+
+Usage notes:
+- The `language`, `command` arguments are required.
+- Quote file paths that contain spaces in `command`.
+- If output is large it is truncated and the full log saved to a file you can Read.

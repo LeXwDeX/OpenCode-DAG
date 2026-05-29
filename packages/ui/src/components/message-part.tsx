@@ -445,6 +445,20 @@ export function getToolInfo(
         icon: "brain",
         title: input.name || i18n.t("ui.tool.skill"),
       }
+    case "sandbox":
+      return {
+        icon: "console",
+        title: "Sandbox",
+        subtitle: input.language
+          ? `${input.language}${input.sandbox_id ? ` · ${input.sandbox_id}` : ""}`
+          : undefined,
+      }
+    case "sandbox_status":
+      return {
+        icon: "console",
+        title: "Sandbox status",
+        subtitle: typeof input.sandbox_id === "string" ? input.sandbox_id : undefined,
+      }
     default:
       return {
         icon: "mcp",
