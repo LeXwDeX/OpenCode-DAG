@@ -105,7 +105,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: 30, entitlement: 300 } },
       }),
-    ).toEqual({ used: 270, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru" })
+    ).toEqual({ used: 270, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru", unlimited: false })
   })
 
   test("overage（remaining 为负数）→ used > entitlement", () => {
@@ -113,7 +113,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: -51, entitlement: 300 } },
       }),
-    ).toEqual({ used: 351, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru" })
+    ).toEqual({ used: 351, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru", unlimited: false })
   })
 
   test("remaining 0 时 used = entitlement（全部用完）", () => {
@@ -121,7 +121,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: 0, entitlement: 100 } },
       }),
-    ).toEqual({ used: 100, entitlement: 100, accounts_active: 0, accounts_total: 0, billing: "pru" })
+    ).toEqual({ used: 100, entitlement: 100, accounts_active: 0, accounts_total: 0, billing: "pru", unlimited: false })
   })
 
   test("缺 quota_snapshots → null", () => {
@@ -140,31 +140,32 @@ describe("parseCopilotOfficial", () => {
     ).toBeNull()
   })
 
-  test("ai_credits schema → billing=credits, used = entitlement - remaining", () => {
+  test("unlimited business 账户 → billing=credits, unlimited=true", () => {
     expect(
       parseCopilotOfficial({
-        quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
-      }),
-    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
-  })
-
-  test("ai_credits 优先于 premium_interactions（双 schema 共存时取 credits）", () => {
-    expect(
-      parseCopilotOfficial({
+        token_based_billing: true,
         quota_snapshots: {
-          ai_credits: { remaining: 1000, entitlement: 1500 },
-          premium_interactions: { remaining: 30, entitlement: 300 },
+          premium_interactions: {
+            percent_remaining: 100,
+            unlimited: true,
+            token_based_billing: true,
+            remaining: 0,
+            entitlement: 0,
+          },
         },
       }),
-    ).toEqual({ used: 500, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+    ).toEqual({ used: 0, entitlement: 0, accounts_active: 0, accounts_total: 0, billing: "credits", unlimited: true })
   })
 
-  test("ai_credits overage（remaining 负数）→ used > entitlement", () => {
+  test("token_based_billing 个人账户 → billing=credits", () => {
     expect(
       parseCopilotOfficial({
-        quota_snapshots: { ai_credits: { remaining: -200, entitlement: 1500 } },
+        token_based_billing: true,
+        quota_snapshots: {
+          premium_interactions: { remaining: 1200, entitlement: 1500, token_based_billing: true },
+        },
       }),
-    ).toEqual({ used: 1700, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits", unlimited: false })
   })
 })
 
@@ -172,7 +173,7 @@ describe("parseProxyAggregate", () => {
   test("扁平 schema 解析 → used + accounts_active/total", () => {
     expect(
       parseProxyAggregate({ remaining: 133, entitlement: 300, accounts_active: 1, accounts_total: 2 }),
-    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru" })
+    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru", unlimited: false })
   })
 
   test("缺 accounts_* 时默认 0（向后兼容老代理）", () => {
@@ -182,13 +183,14 @@ describe("parseProxyAggregate", () => {
       accounts_active: 0,
       accounts_total: 0,
       billing: "pru",
+      unlimited: false,
     })
   })
 
   test("overage（remaining 负数）→ used > entitlement", () => {
     expect(
       parseProxyAggregate({ remaining: -10, entitlement: 100, accounts_active: 1, accounts_total: 1 }),
-    ).toEqual({ used: 110, entitlement: 100, accounts_active: 1, accounts_total: 1, billing: "pru" })
+    ).toEqual({ used: 110, entitlement: 100, accounts_active: 1, accounts_total: 1, billing: "pru", unlimited: false })
   })
 
   test("缺 remaining → null", () => {
@@ -206,19 +208,19 @@ describe("parseProxyAggregate", () => {
   test("显式 billing=credits → billing=credits", () => {
     expect(
       parseProxyAggregate({ remaining: 1200, entitlement: 1500, billing: "credits" }),
-    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits", unlimited: false })
   })
 
   test("entitlement > 1500 无显式 billing → 启发式 billing=credits", () => {
     expect(
       parseProxyAggregate({ remaining: 5000, entitlement: 7000 }),
-    ).toEqual({ used: 2000, entitlement: 7000, accounts_active: 0, accounts_total: 0, billing: "credits" })
+    ).toEqual({ used: 2000, entitlement: 7000, accounts_active: 0, accounts_total: 0, billing: "credits", unlimited: false })
   })
 
   test("entitlement ≤ 1500 无显式 billing → 启发式 billing=pru", () => {
     expect(
       parseProxyAggregate({ remaining: 133, entitlement: 300, accounts_active: 1, accounts_total: 2 }),
-    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru" })
+    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru", unlimited: false })
   })
 })
 
@@ -248,15 +250,17 @@ describe("fetchQuota", () => {
       accounts_total: 0,
       mode: "official",
       billing: "pru",
+      unlimited: false,
     })
     expect(captured.Authorization).toBe("Bearer gho_test")
   })
 
-  test("official 200 + ai_credits schema → billing=credits", async () => {
+  test("official 200 + token_based_billing → billing=credits", async () => {
     globalThis.fetch = mock(async () =>
       new Response(
         JSON.stringify({
-          quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
+          token_based_billing: true,
+          quota_snapshots: { premium_interactions: { remaining: 1200, entitlement: 1500, token_based_billing: true } },
         }),
         { status: 200 },
       ),
@@ -268,6 +272,7 @@ describe("fetchQuota", () => {
       accounts_total: 0,
       mode: "official",
       billing: "credits",
+      unlimited: false,
     })
   })
 
@@ -301,7 +306,8 @@ describe("fetchQuota", () => {
       capturedAuth = ((init?.headers ?? {}) as Record<string, string>).Authorization ?? ""
       return new Response(
         JSON.stringify({
-          quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
+          token_based_billing: true,
+          quota_snapshots: { premium_interactions: { remaining: 1200, entitlement: 1500, token_based_billing: true } },
         }),
         { status: 200 },
       )
@@ -313,6 +319,7 @@ describe("fetchQuota", () => {
       accounts_total: 0,
       mode: "proxy",
       billing: "credits",
+      unlimited: false,
     })
     expect(capturedUrl).toBe("http://192.168.33.110:8000/copilot/quota")
     expect(capturedAuth).toBe("Bearer sk-proxy")
@@ -337,6 +344,7 @@ describe("fetchQuota", () => {
       accounts_total: 3,
       mode: "proxy",
       billing: "pru",
+      unlimited: false,
     })
   })
 

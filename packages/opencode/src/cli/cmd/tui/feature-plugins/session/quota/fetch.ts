@@ -1,7 +1,7 @@
 // fetch.ts — 按解析好的 EndpointDecision 取 quota + 解析响应。
-// 两种 schema（按优先级）：
-//   1. GitHub 原厂 schema：quota_snapshots.ai_credits | premium_interactions（proxy 透传 + official 均使用）
-//   2. 旧版 proxy 聚合 schema：{remaining, entitlement, accounts_active, accounts_total}（兼容老 proxy）
+// GitHub 始终使用 quota_snapshots.premium_interactions 字段名，
+// 通过 token_based_billing: true 标记区分 token 计费模式（2026-06-01 后）。
+// 回退到旧 proxy 聚合 schema（兼容老版本 proxy）。
 // 保持原 2s timeout、status!=200 返 null、catch 静默返 null 的语义。
 import type { EndpointDecision } from "./endpoint"
 
@@ -13,26 +13,18 @@ export interface QuotaInfo {
   accounts_active: number
   accounts_total: number
   mode: "proxy" | "official"
-  /** "credits" for new AI Credits billing (post June 2026), "pru" for legacy Premium Request Units */
+  /** "credits" for token-based billing (post June 2026), "pru" for legacy Premium Request Units */
   billing: "credits" | "pru"
+  /** true when GitHub reports unlimited usage (Business/Enterprise plans) */
+  unlimited: boolean
 }
 
-/** 原厂 schema：GitHub /copilot_internal/user → data.quota_snapshots.premium_interactions */
+/** 原厂 schema：GitHub /copilot_internal/user → quota_snapshots.premium_interactions
+ *  GitHub 始终使用 premium_interactions 字段名，通过 token_based_billing 标记区分计费模式。 */
 export function parseCopilotOfficial(data: Record<string, unknown>): Omit<QuotaInfo, "mode"> | null {
   const snapshots = data.quota_snapshots as Record<string, unknown> | undefined
   if (!snapshots) return null
 
-  // Try new AI Credits schema first (post June 2026)
-  const credits = snapshots.ai_credits as Record<string, unknown> | undefined
-  if (credits) {
-    const remaining = typeof credits.remaining === "number" ? credits.remaining : null
-    const entitlement = typeof credits.entitlement === "number" ? credits.entitlement : null
-    if (remaining !== null && entitlement !== null) {
-      return { used: entitlement - remaining, entitlement, accounts_active: 0, accounts_total: 0, billing: "credits" }
-    }
-  }
-
-  // Fall back to legacy PRU schema (annual plan users)
   const premium = snapshots.premium_interactions as Record<string, unknown> | undefined
   if (!premium) return null
 
@@ -40,7 +32,12 @@ export function parseCopilotOfficial(data: Record<string, unknown>): Omit<QuotaI
   const entitlement = typeof premium.entitlement === "number" ? premium.entitlement : null
   if (remaining === null || entitlement === null) return null
 
-  return { used: entitlement - remaining, entitlement, accounts_active: 0, accounts_total: 0, billing: "pru" }
+  const unlimited = premium.unlimited === true
+  // GitHub 通过 token_based_billing 标记区分计费模式（而非字段名）
+  const tokenBilling = premium.token_based_billing === true || data.token_based_billing === true
+  const billing = tokenBilling ? "credits" : "pru"
+
+  return { used: entitlement - remaining, entitlement, accounts_active: 0, accounts_total: 0, billing, unlimited }
 }
 
 /** 代理聚合 schema：LLMS-proxy /copilot/quota → 扁平 {remaining, entitlement, accounts_active, accounts_total} */
@@ -51,14 +48,13 @@ export function parseProxyAggregate(data: Record<string, unknown>): Omit<QuotaIn
 
   const active = typeof data.accounts_active === "number" ? data.accounts_active : 0
   const total = typeof data.accounts_total === "number" ? data.accounts_total : 0
+  const unlimited = data.unlimited === true
 
-  // Detect billing model: explicit field from proxy, or heuristic based on entitlement scale
-  // PRU entitlements are typically 300-1500; AI credits are 1500-20000
   const billingModel = typeof data.billing === "string" && (data.billing === "credits" || data.billing === "pru")
     ? data.billing
     : entitlement > 1500 ? "credits" : "pru"
 
-  return { used: entitlement - remaining, entitlement, accounts_active: active, accounts_total: total, billing: billingModel }
+  return { used: entitlement - remaining, entitlement, accounts_active: active, accounts_total: total, billing: billingModel, unlimited }
 }
 
 export async function fetchQuota(endpoint: EndpointDecision): Promise<QuotaInfo | null> {

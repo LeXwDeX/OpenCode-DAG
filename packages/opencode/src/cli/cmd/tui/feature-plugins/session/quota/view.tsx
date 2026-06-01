@@ -10,10 +10,12 @@
 //   否则走 GitHub 原厂 /copilot_internal/user（嵌套 schema）
 //
 // 颜色规则（按已用量百分比）：
+//   unlimited → success（绿）+ "∞"
 //   used/entitlement ≤ 50% → success（绿）；≤ 80% → warning（黄）；> 80% → error（红）
 // 显示格式：
 //   credits 模式：$X.XX/$Y.YY（1 credit = $0.01）
 //   pru 模式：used/entitlement（原格式）
+//   unlimited：∞ credits 或 ∞
 //
 // 重要：opentui Slot 在初始渲染时若返回空内容，会永久跳过本插件。
 // 因此组件在数据就绪前显示 "⊘ …" 占位。
@@ -77,6 +79,17 @@ export function QuotaView(props: { api: TuiPluginApi }) {
   }
 
   function applyQuota(q: QuotaInfo) {
+    if (q.unlimited) {
+      setTone("success")
+      const label = q.billing === "credits" ? "∞ credits" : "∞"
+      if (q.accounts_total > 0) {
+        setLabel(`[${q.accounts_active}/${q.accounts_total} | ${label}]`)
+      } else {
+        setLabel(`⊘ ${label}`)
+      }
+      return
+    }
+
     const pct = q.entitlement > 0 ? q.used / q.entitlement : 1
     setTone(pct <= 0.5 ? "success" : pct <= 0.8 ? "warning" : "error")
 
