@@ -71,6 +71,7 @@ export function createOpenaiCompatible(options: OpenaiCompatibleProviderSettings
       headers: getHeaders,
       url: ({ path }) => `${baseURL}${path}`,
       fetch: options.fetch,
+      includeUsage: true,
     })
   }
 

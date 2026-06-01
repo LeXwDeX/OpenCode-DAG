@@ -215,6 +215,95 @@ test("clears existing variants so refreshed models calculate provider-specific v
   expect(models["claude-opus-4.7"].variants).toBeUndefined()
 })
 
+test("populates model costs from GitHub Copilot pricing table", async () => {
+  globalThis.fetch = mock(() =>
+    Promise.resolve(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              model_picker_enabled: true,
+              id: "gpt-4.1",
+              name: "GPT-4.1",
+              version: "gpt-4.1-2025-04-14",
+              capabilities: {
+                family: "gpt",
+                limits: {
+                  max_context_window_tokens: 1000000,
+                  max_output_tokens: 32768,
+                  max_prompt_tokens: 1000000,
+                },
+                supports: {
+                  streaming: true,
+                  tool_calls: true,
+                },
+              },
+            },
+            {
+              model_picker_enabled: true,
+              id: "claude-sonnet-4.5",
+              name: "Claude Sonnet 4.5",
+              version: "claude-sonnet-4.5-2025-05-14",
+              supported_endpoints: ["/v1/messages"],
+              capabilities: {
+                family: "claude-sonnet",
+                limits: {
+                  max_context_window_tokens: 200000,
+                  max_output_tokens: 8192,
+                  max_prompt_tokens: 200000,
+                },
+                supports: {
+                  streaming: true,
+                  tool_calls: true,
+                },
+              },
+            },
+            {
+              model_picker_enabled: true,
+              id: "unknown-model",
+              name: "Unknown Model",
+              version: "unknown-model-2025-01-01",
+              capabilities: {
+                family: "unknown",
+                limits: {
+                  max_context_window_tokens: 8000,
+                  max_output_tokens: 4096,
+                  max_prompt_tokens: 8000,
+                },
+                supports: {
+                  streaming: true,
+                  tool_calls: false,
+                },
+              },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    ),
+  ) as unknown as typeof fetch
+
+  const models = await CopilotModels.get("https://api.githubcopilot.com", {}, {})
+
+  // GPT-4.1 should have pricing from table
+  expect(models["gpt-4.1"].cost.input).toBe(2.0)
+  expect(models["gpt-4.1"].cost.output).toBe(8.0)
+  expect(models["gpt-4.1"].cost.cache.read).toBe(0.5)
+  expect(models["gpt-4.1"].cost.cache.write).toBe(0)
+
+  // Claude Sonnet 4.5 should have pricing with cache_write
+  expect(models["claude-sonnet-4.5"].cost.input).toBe(3.0)
+  expect(models["claude-sonnet-4.5"].cost.output).toBe(15.0)
+  expect(models["claude-sonnet-4.5"].cost.cache.read).toBe(0.3)
+  expect(models["claude-sonnet-4.5"].cost.cache.write).toBe(3.75)
+
+  // Unknown model should fall back to 0
+  expect(models["unknown-model"].cost.input).toBe(0)
+  expect(models["unknown-model"].cost.output).toBe(0)
+  expect(models["unknown-model"].cost.cache.read).toBe(0)
+  expect(models["unknown-model"].cost.cache.write).toBe(0)
+})
+
 test("remaps fallback oauth model urls to the enterprise host", async () => {
   globalThis.fetch = mock(() => Promise.reject(new Error("timeout"))) as unknown as typeof fetch
 

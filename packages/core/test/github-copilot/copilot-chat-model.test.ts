@@ -100,6 +100,46 @@ function createModel(fetchFn: ReturnType<typeof mock>) {
   })
 }
 
+test("createChatModel includes usage tracking in streaming requests", async () => {
+  const fetchMock = mock(async (url: string, options: any) => {
+    const body = JSON.parse(options.body)
+    expect(body.stream_options?.include_usage).toBe(true)
+    
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: {"id":"chatcmpl-123","object":"chat.completion.chunk","created":1677652288,"model":"test-model","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}\n\n`,
+            ),
+          )
+          controller.enqueue(new TextEncoder().encode(`data: [DONE]\n\n`))
+          controller.close()
+        },
+      }),
+      {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      },
+    )
+  })
+
+  const model = new OpenAICompatibleChatLanguageModel("test-model", {
+    provider: "copilot.chat",
+    url: () => "https://api.test.com/chat/completions",
+    headers: () => ({ Authorization: "Bearer test-token" }),
+    fetch: fetchMock as any,
+    includeUsage: true,
+  })
+
+  await model.doStream({
+    prompt: TEST_PROMPT,
+    includeRawChunks: false,
+  })
+
+  expect(fetchMock).toHaveBeenCalled()
+})
+
 describe("doStream", () => {
   test("should stream text deltas", async () => {
     const mockFetch = createMockFetch(FIXTURES.basicText)

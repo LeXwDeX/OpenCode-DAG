@@ -105,7 +105,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: 30, entitlement: 300 } },
       }),
-    ).toEqual({ used: 270, entitlement: 300, accounts_active: 0, accounts_total: 0 })
+    ).toEqual({ used: 270, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru" })
   })
 
   test("overage（remaining 为负数）→ used > entitlement", () => {
@@ -113,7 +113,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: -51, entitlement: 300 } },
       }),
-    ).toEqual({ used: 351, entitlement: 300, accounts_active: 0, accounts_total: 0 })
+    ).toEqual({ used: 351, entitlement: 300, accounts_active: 0, accounts_total: 0, billing: "pru" })
   })
 
   test("remaining 0 时 used = entitlement（全部用完）", () => {
@@ -121,7 +121,7 @@ describe("parseCopilotOfficial", () => {
       parseCopilotOfficial({
         quota_snapshots: { premium_interactions: { remaining: 0, entitlement: 100 } },
       }),
-    ).toEqual({ used: 100, entitlement: 100, accounts_active: 0, accounts_total: 0 })
+    ).toEqual({ used: 100, entitlement: 100, accounts_active: 0, accounts_total: 0, billing: "pru" })
   })
 
   test("缺 quota_snapshots → null", () => {
@@ -139,13 +139,40 @@ describe("parseCopilotOfficial", () => {
       }),
     ).toBeNull()
   })
+
+  test("ai_credits schema → billing=credits, used = entitlement - remaining", () => {
+    expect(
+      parseCopilotOfficial({
+        quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
+      }),
+    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+  })
+
+  test("ai_credits 优先于 premium_interactions（双 schema 共存时取 credits）", () => {
+    expect(
+      parseCopilotOfficial({
+        quota_snapshots: {
+          ai_credits: { remaining: 1000, entitlement: 1500 },
+          premium_interactions: { remaining: 30, entitlement: 300 },
+        },
+      }),
+    ).toEqual({ used: 500, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+  })
+
+  test("ai_credits overage（remaining 负数）→ used > entitlement", () => {
+    expect(
+      parseCopilotOfficial({
+        quota_snapshots: { ai_credits: { remaining: -200, entitlement: 1500 } },
+      }),
+    ).toEqual({ used: 1700, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+  })
 })
 
 describe("parseProxyAggregate", () => {
   test("扁平 schema 解析 → used + accounts_active/total", () => {
     expect(
       parseProxyAggregate({ remaining: 133, entitlement: 300, accounts_active: 1, accounts_total: 2 }),
-    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2 })
+    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru" })
   })
 
   test("缺 accounts_* 时默认 0（向后兼容老代理）", () => {
@@ -154,13 +181,14 @@ describe("parseProxyAggregate", () => {
       entitlement: 100,
       accounts_active: 0,
       accounts_total: 0,
+      billing: "pru",
     })
   })
 
   test("overage（remaining 负数）→ used > entitlement", () => {
     expect(
       parseProxyAggregate({ remaining: -10, entitlement: 100, accounts_active: 1, accounts_total: 1 }),
-    ).toEqual({ used: 110, entitlement: 100, accounts_active: 1, accounts_total: 1 })
+    ).toEqual({ used: 110, entitlement: 100, accounts_active: 1, accounts_total: 1, billing: "pru" })
   })
 
   test("缺 remaining → null", () => {
@@ -173,6 +201,24 @@ describe("parseProxyAggregate", () => {
 
   test("remaining 非 number → null", () => {
     expect(parseProxyAggregate({ remaining: "50", entitlement: 100 })).toBeNull()
+  })
+
+  test("显式 billing=credits → billing=credits", () => {
+    expect(
+      parseProxyAggregate({ remaining: 1200, entitlement: 1500, billing: "credits" }),
+    ).toEqual({ used: 300, entitlement: 1500, accounts_active: 0, accounts_total: 0, billing: "credits" })
+  })
+
+  test("entitlement > 1500 无显式 billing → 启发式 billing=credits", () => {
+    expect(
+      parseProxyAggregate({ remaining: 5000, entitlement: 7000 }),
+    ).toEqual({ used: 2000, entitlement: 7000, accounts_active: 0, accounts_total: 0, billing: "credits" })
+  })
+
+  test("entitlement ≤ 1500 无显式 billing → 启发式 billing=pru", () => {
+    expect(
+      parseProxyAggregate({ remaining: 133, entitlement: 300, accounts_active: 1, accounts_total: 2 }),
+    ).toEqual({ used: 167, entitlement: 300, accounts_active: 1, accounts_total: 2, billing: "pru" })
   })
 })
 
@@ -201,8 +247,28 @@ describe("fetchQuota", () => {
       accounts_active: 0,
       accounts_total: 0,
       mode: "official",
+      billing: "pru",
     })
     expect(captured.Authorization).toBe("Bearer gho_test")
+  })
+
+  test("official 200 + ai_credits schema → billing=credits", async () => {
+    globalThis.fetch = mock(async () =>
+      new Response(
+        JSON.stringify({
+          quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
+        }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch
+    expect(await fetchQuota(officialEndpoint)).toEqual({
+      used: 300,
+      entitlement: 1500,
+      accounts_active: 0,
+      accounts_total: 0,
+      mode: "official",
+      billing: "credits",
+    })
   })
 
   test("非 200 响应 → null", async () => {
@@ -222,7 +288,7 @@ describe("fetchQuota", () => {
     expect(await fetchQuota(officialEndpoint)).toBeNull()
   })
 
-  test("proxy mode → 走 parseProxyAggregate，URL=/copilot/quota，mode=proxy", async () => {
+  test("proxy mode + GitHub 透传响应 → parseCopilotOfficial 解析", async () => {
     const proxyEndpoint: EndpointDecision = {
       url: "http://192.168.33.110:8000/copilot/quota",
       token: "sk-proxy",
@@ -234,19 +300,44 @@ describe("fetchQuota", () => {
       capturedUrl = url
       capturedAuth = ((init?.headers ?? {}) as Record<string, string>).Authorization ?? ""
       return new Response(
-        JSON.stringify({ remaining: 90, entitlement: 100, accounts_active: 2, accounts_total: 3 }),
+        JSON.stringify({
+          quota_snapshots: { ai_credits: { remaining: 1200, entitlement: 1500 } },
+        }),
         { status: 200 },
       )
     }) as unknown as typeof fetch
+    expect(await fetchQuota(proxyEndpoint)).toEqual({
+      used: 300,
+      entitlement: 1500,
+      accounts_active: 0,
+      accounts_total: 0,
+      mode: "proxy",
+      billing: "credits",
+    })
+    expect(capturedUrl).toBe("http://192.168.33.110:8000/copilot/quota")
+    expect(capturedAuth).toBe("Bearer sk-proxy")
+  })
+
+  test("proxy mode + 旧版聚合响应 → parseProxyAggregate fallback", async () => {
+    const proxyEndpoint: EndpointDecision = {
+      url: "http://192.168.33.110:8000/copilot/quota",
+      token: "sk-proxy",
+      mode: "proxy",
+    }
+    globalThis.fetch = mock(async () =>
+      new Response(
+        JSON.stringify({ remaining: 90, entitlement: 100, accounts_active: 2, accounts_total: 3 }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch
     expect(await fetchQuota(proxyEndpoint)).toEqual({
       used: 10,
       entitlement: 100,
       accounts_active: 2,
       accounts_total: 3,
       mode: "proxy",
+      billing: "pru",
     })
-    expect(capturedUrl).toBe("http://192.168.33.110:8000/copilot/quota")
-    expect(capturedAuth).toBe("Bearer sk-proxy")
   })
 
   test("proxy 响应缺字段 → null", async () => {
