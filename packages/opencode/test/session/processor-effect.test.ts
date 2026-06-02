@@ -864,6 +864,71 @@ it.live("session.processor effect tests record aborted errors and idle state", (
   ),
 )
 
+it.live("session.processor effect tests set finish to tool-calls when tools aborted on cleanup", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+
+        // 使用正常的工具调用（stream 会正常结束），但工具执行时间长于 cleanup 超时
+        yield* llm.tool("slow", { cmd: "pwd" })
+
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "slow tool")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({
+          assistantMessage: msg,
+          sessionID: chat.id,
+          model: mdl,
+        })
+
+        const result = yield* handle.process({
+          user: {
+            id: parent.id,
+            sessionID: chat.id,
+            role: "user",
+            time: parent.time,
+            agent: parent.agent,
+            model: { providerID: ref.providerID, modelID: ref.modelID },
+          } satisfies MessageV2.User,
+          sessionID: chat.id,
+          model: mdl,
+          agent: agent(),
+          system: [],
+          messages: [{ role: "user", content: "slow tool" }],
+          tools: {
+            // 工具执行时间超过 cleanup 超时（250ms），触发 abort
+            slow: tool({
+              description: "Slow operation",
+              inputSchema: z.object({ cmd: z.string() }),
+              execute: async (input) => {
+                await new Promise(resolve => setTimeout(resolve, 500))
+                return {
+                  title: "Slow op",
+                  output: `result:${input.cmd}`,
+                  metadata: { slow: true },
+                }
+              },
+            }),
+          },
+        })
+
+        const stored = yield* MessageV2.get({ sessionID: chat.id, messageID: msg.id })
+
+        expect(yield* llm.calls).toBe(1)
+        // 关键验证：finish 应该被设为 "tool-calls"，让 prompt 循环继续
+        // 这是 processor.ts:758 修复的核心 - 即使工具被 abort，也要让 LLM 看到结果
+        expect(result).toBe("continue")
+        if (stored.info.role === "assistant") {
+          expect(stored.info.finish).toBe("tool-calls")
+          expect(stored.info.error).toBeUndefined()
+        }
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor effect tests mark interruptions aborted without manual abort", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

@@ -4,7 +4,7 @@
 
 ## 简介
 
-本项目是opencode官方版本的改版，内部有 ClaudeCode Hooks API的超集实现，Goal指令支持。可以hooks挂载memplace，gitnexus等插件。
+本项目是opencode官方版本的改版，内部有 ClaudeCode Hooks API的超集实现，Goal指令支持。
 
 ### 安装
 

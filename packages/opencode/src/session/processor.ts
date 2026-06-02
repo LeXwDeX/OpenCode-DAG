@@ -752,17 +752,22 @@ export const layer = Layer.effect(
         }
         ctx.toolcalls = {}
 
-        // If tool calls were aborted due to a stream error (not user cancellation),
-        // clear the message error so the loop can continue and the LLM sees the
-        // tool error results instead of the session stopping entirely.
-        if (abortedToolCallIDs.length > 0 && !aborted && ctx.assistantMessage.error) {
-          slog.info("clearing message error to let aborted tool results flow back to LLM", {
-            abortedToolCallCount: abortedToolCallIDs.length,
-            abortedToolCallIDs,
-            originalFinish: ctx.assistantMessage.finish,
-            errorName: (ctx.assistantMessage.error as { name?: string } | undefined)?.name,
-          })
-          ctx.assistantMessage.error = undefined
+        // If tool calls were aborted (due to cleanup timeout or stream error, not user cancellation),
+        // ensure the loop continues and the LLM sees the tool error results instead of the session
+        // stopping entirely or getting stuck in busy state.
+        if (abortedToolCallIDs.length > 0 && !aborted) {
+          // Clear any message error that might have been set during the stream error
+          if (ctx.assistantMessage.error) {
+            slog.info("clearing message error to let aborted tool results flow back to LLM", {
+              abortedToolCallCount: abortedToolCallIDs.length,
+              abortedToolCallIDs,
+              originalFinish: ctx.assistantMessage.finish,
+              errorName: (ctx.assistantMessage.error as { name?: string } | undefined)?.name,
+            })
+            ctx.assistantMessage.error = undefined
+          }
+          // Always set finish to "tool-calls" when tools were aborted, so the prompt loop
+          // continues and the LLM can see the abort results and decide what to do next.
           ctx.assistantMessage.finish = "tool-calls"
           yield* session.updateMessage(ctx.assistantMessage)
         }
