@@ -55,6 +55,10 @@ import { reply, TestLLMServer } from "../lib/llm-server"
 import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { SettingsHook } from "../../src/hook/settings"
+import { Goal } from "../../src/goal/goal"
+import { HookStartContext } from "../../src/hook/start-context"
+import { SandboxManager } from "../../src/tool/sandbox/manager"
 
 void Log.init({ print: false })
 
@@ -183,6 +187,9 @@ function makePrompt(input?: { processor?: "blocking" }) {
     status,
     SyncEvent.defaultLayer,
     EventV2Bridge.defaultLayer,
+    SettingsHook.defaultLayer,
+    Goal.defaultLayer,
+    HookStartContext.defaultLayer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -196,6 +203,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(SandboxManager.defaultLayer.pipe(Layer.provide(AppFileSystem.defaultLayer))),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),

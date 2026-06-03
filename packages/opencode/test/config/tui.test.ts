@@ -489,7 +489,7 @@ it.instance("resolves keybind lookup from canonical keybinds", () =>
       expect(config.keybinds.get("which-key.pending.toggle")?.[0]?.key).toBe("ctrl+alt+shift+p")
       expect(config.keybinds.get("which-key.group.next")?.[0]?.key).toBe("ctrl+alt+right,ctrl+alt+]")
       expect((config.keybinds.get("which-key.toggle")?.[0] as { desc?: unknown } | undefined)?.desc).toBe(
-        "Toggle which-key panel",
+        "切换快捷键面板",
       )
       expect(config.keybinds.get("prompt.editor")?.[0]?.key).toBe("ctrl+e")
       expect(config.keybinds.get("prompt.autocomplete.next")?.[0]?.key).toBe("ctrl+j")
@@ -520,7 +520,7 @@ it.instance("keybinds accept OpenTUI binding specs", () =>
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.keybinds.get("command.palette.show")).toEqual([
-        { key: "alt+p", cmd: "command.palette.show", preventDefault: false, desc: "List available commands" },
+        { key: "alt+p", cmd: "command.palette.show", preventDefault: false, desc: "列出可用命令" },
       ])
       expect(config.keybinds.get("prompt.editor")?.[0]).toMatchObject({
         key: { name: "e", ctrl: true },
