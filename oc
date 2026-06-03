@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.2.0"
+OC_VERSION="1.2.1"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -702,7 +702,7 @@ _refresh_npm_package() {
 # 环境变量: DRY_RUN=1 跳过真实网络/磁盘 (用于测试/预览)
 plugins_refresh_cache() {
     echo
-    echo "${C_BOLD}刷新插件缓存${C_RESET}"
+    echo "${C_BOLD}刷新所有 NPM 包缓存${C_RESET}"
     echo
 
     if [ ! -f "$OC_CONFIG_FILE" ]; then
@@ -848,7 +848,7 @@ plugins_tui() {
             *"安装 DCP plugin"*)
                 plugins_install_dcp
                 ;;
-            *"刷新插件缓存"*)
+            *"刷新所有 NPM 包缓存"*)
                 plugins_refresh_cache
                 ;;
             *)
