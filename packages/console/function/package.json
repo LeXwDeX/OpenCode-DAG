@@ -17,9 +17,9 @@
     "typescript": "catalog:"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "3.0.64",
-    "@ai-sdk/openai": "3.0.48",
-    "@ai-sdk/openai-compatible": "2.0.37",
+    "@ai-sdk/anthropic": "3.0.81",
+    "@ai-sdk/openai": "3.0.67",
+    "@ai-sdk/openai-compatible": "2.0.48",
     "@hono/zod-validator": "catalog:",
     "@openauthjs/openauth": "0.0.0-20250322224806",
     "@opencode-ai/console-core": "workspace:*",
