@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.2.1"
+OC_VERSION="1.2.2"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -828,7 +828,34 @@ plugins_tui() {
         fi
 
         if [ "$bun_status" = "ok" ] && [ "$think_status" = "found" ]; then
-            options+=("🔄 刷新所有 NPM 包缓存")
+            # 动态扫描当前要刷的 NPM 包名 (MCP local + plugin), 列在菜单里
+            local all_pkgs
+            all_pkgs=$(python3 - "$OC_CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        cfg = json.load(f)
+    names = []
+    for ename, mcp in cfg.get("mcp", {}).items():
+        if mcp.get("type") != "local":
+            continue
+        cmd = mcp.get("command", []) or []
+        if len(cmd) < 2 or cmd[0] not in ("bunx", "npx"):
+            continue
+        names.append(ename)
+    for pkg in cfg.get("plugin", []):
+        if pkg and pkg not in names:
+            names.append(pkg)
+    print(" / ".join(names))
+except Exception:
+    pass
+PYEOF
+)
+            if [ -n "$all_pkgs" ]; then
+                options+=("🔄 刷新 NPM 缓存: ${all_pkgs}")
+            else
+                options+=("🔄 刷新所有 NPM 包缓存")
+            fi
         fi
 
         options+=("⬅  返回主菜单")
@@ -848,7 +875,7 @@ plugins_tui() {
             *"安装 DCP plugin"*)
                 plugins_install_dcp
                 ;;
-            *"刷新所有 NPM 包缓存"*)
+            *"刷新 NPM 缓存"*|*"刷新所有 NPM 包缓存"*)
                 plugins_refresh_cache
                 ;;
             *)
@@ -998,7 +1025,7 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc plugins install-think   安装 think MCP
   oc plugins install-dcp     安装 DCP plugin
   oc plugins switch-bunx     切换 think MCP 到 bunx
-  oc plugins refresh         刷新所有 NPM 包缓存
+  oc plugins refresh         刷新 MCP/plugin 的 NPM 包缓存 (动态扫描 opencode.json)
   oc update           自更新本脚本
   oc -h | --help      显示本帮助
 
