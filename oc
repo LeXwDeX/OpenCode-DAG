@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.2.2"
+OC_VERSION="1.2.3"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -290,7 +290,7 @@ choose_action() {
         "🚀 升级到最新版本 (${latest})" \
         "📋 手工选择具体版本号..." \
         "👁  仅查看已发布版本（不安装）" \
-        "🔌 插件管理（think MCP + DCP）" \
+        "🔌 插件管理 (MCP / plugin / NPM 缓存)" \
         "🔄 自更新 oc 脚本" \
         "❌ 退出")
     printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
@@ -1020,7 +1020,7 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc <tag>            升级到指定 tag（如 oc v1.14.30-fork-2）
   oc list             列出所有 release
   oc current          显示当前已安装版本
-  oc plugins          插件管理（think MCP + DCP）
+  oc plugins          插件管理 (MCP / plugin / NPM 缓存)
   oc plugins check    检查插件状态
   oc plugins install-think   安装 think MCP
   oc plugins install-dcp     安装 DCP plugin
