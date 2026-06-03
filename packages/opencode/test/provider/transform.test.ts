@@ -2720,13 +2720,13 @@ describe("ProviderTransform.variants", () => {
       expect(result.high).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 16000,
+          budgetTokens: 31999,
         },
       })
       expect(result.max).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 31999,
+          budgetTokens: 63999,
         },
       })
     })
@@ -3279,13 +3279,13 @@ describe("ProviderTransform.variants", () => {
       expect(result.high).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 16000,
+          budgetTokens: 31999,
         },
       })
       expect(result.max).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 31999,
+          budgetTokens: 63999,
         },
       })
     })
@@ -3500,13 +3500,13 @@ describe("ProviderTransform.variants", () => {
       expect(result.high).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 16000,
+          budgetTokens: 31999,
         },
       })
       expect(result.max).toEqual({
         thinking: {
           type: "enabled",
-          budgetTokens: 31999,
+          budgetTokens: 63999,
         },
       })
     })

@@ -66,6 +66,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { SettingsHook } from "../../src/hook/settings"
 import { Goal } from "../../src/goal/goal"
 import { HookStartContext } from "../../src/hook/start-context"
+import { SandboxManager } from "../../src/tool/sandbox/manager"
 
 void Log.init({ print: false })
 
@@ -151,6 +152,7 @@ function makeHttp() {
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
     Layer.provide(RuntimeFlags.layer({ experimentalEventSystem: true })),
+    Layer.provide(SandboxManager.defaultLayer.pipe(Layer.provide(AppFileSystem.defaultLayer))),
     Layer.provideMerge(todo),
     Layer.provideMerge(question),
     Layer.provideMerge(deps),

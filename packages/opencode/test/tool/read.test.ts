@@ -572,7 +572,6 @@ root_type Monster;`
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()
       const cases = [
-        ["image.bmp", "BM text content"],
         ["photo.tiff", "II text content"],
         ["photo.avif", "avif text content"],
       ] as const

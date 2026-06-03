@@ -6,7 +6,12 @@
     "provider": "opencode",
     "protocol": "openai-responses",
     "route": "openai-responses",
-    "tags": ["opencode", "zen", "native", "tool-loop"]
+    "tags": [
+      "opencode",
+      "zen",
+      "native",
+      "tool-loop"
+    ]
   },
   "interactions": [
     {
@@ -17,7 +22,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"gpt-5.2-codex\",\"input\":[{\"role\":\"system\",\"content\":\"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\"},{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"What is the weather in Paris?\"}]}],\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false}}],\"store\":false,\"prompt_cache_key\":\"session-recorded-opencode-loop\",\"reasoning\":{\"effort\":\"medium\",\"summary\":\"auto\"},\"max_output_tokens\":32000,\"stream\":true}"
+        "body": "{\"model\": \"gpt-5.2-codex\", \"input\": [{\"role\": \"system\", \"content\": \"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\"}, {\"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"What is the weather in Paris?\"}]}], \"tools\": [{\"type\": \"function\", \"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"additionalProperties\": false}}], \"store\": false, \"prompt_cache_key\": \"session-recorded-opencode-loop\", \"reasoning\": {\"effort\": \"medium\", \"summary\": \"auto\"}, \"max_output_tokens\": 128000, \"stream\": true}"
       },
       "response": {
         "status": 200,
@@ -35,7 +40,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"gpt-5.2-codex\",\"input\":[{\"role\":\"system\",\"content\":\"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\"},{\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"What is the weather in Paris?\"}]},{\"type\":\"function_call\",\"call_id\":\"call_DfI0RwTrlaizfnQ9zkJC8rks\",\"name\":\"get_weather\",\"arguments\":\"{\\\"city\\\":{}}\"},{\"type\":\"function_call_output\",\"call_id\":\"call_DfI0RwTrlaizfnQ9zkJC8rks\",\"output\":\"{\\\"temperature\\\":22,\\\"condition\\\":\\\"sunny\\\"}\"}],\"tools\":[{\"type\":\"function\",\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"parameters\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false}}],\"store\":false,\"prompt_cache_key\":\"session-recorded-opencode-loop\",\"reasoning\":{\"effort\":\"medium\",\"summary\":\"auto\"},\"max_output_tokens\":32000,\"stream\":true}"
+        "body": "{\"model\": \"gpt-5.2-codex\", \"input\": [{\"role\": \"system\", \"content\": \"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\"}, {\"role\": \"user\", \"content\": [{\"type\": \"input_text\", \"text\": \"What is the weather in Paris?\"}]}, {\"type\": \"function_call\", \"call_id\": \"call_DfI0RwTrlaizfnQ9zkJC8rks\", \"name\": \"get_weather\", \"arguments\": \"{\\\"city\\\":{}}\"}, {\"type\": \"function_call_output\", \"call_id\": \"call_DfI0RwTrlaizfnQ9zkJC8rks\", \"output\": \"{\\\"temperature\\\":22,\\\"condition\\\":\\\"sunny\\\"}\"}], \"tools\": [{\"type\": \"function\", \"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"parameters\": {\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"additionalProperties\": false}}], \"store\": false, \"prompt_cache_key\": \"session-recorded-opencode-loop\", \"reasoning\": {\"effort\": \"medium\", \"summary\": \"auto\"}, \"max_output_tokens\": 128000, \"stream\": true}"
       },
       "response": {
         "status": 200,

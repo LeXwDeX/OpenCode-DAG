@@ -157,6 +157,23 @@ export const layer = Layer.effect(
       questions: ReadonlyArray<Info>
       tool?: Tool
     }) {
+      // Validate input at runtime so malformed payloads surface as a friendly
+      // defect rather than hanging forever or crashing.
+      const AskInput = Schema.Struct({
+        sessionID: SessionID,
+        questions: Schema.Array(Info),
+        tool: Schema.optional(Tool),
+      })
+      yield* Schema.decodeUnknown(AskInput)(input).pipe(
+        Effect.mapError(
+          (e) =>
+            new Error(
+              `invalid arguments: Please rewrite the input.\n${String(e)}`,
+            ),
+        ),
+        Effect.orDie,
+      )
+
       const pending = (yield* InstanceState.get(state)).pending
       const id = QuestionID.ascending()
       log.info("asking", { id, questions: input.questions.length })

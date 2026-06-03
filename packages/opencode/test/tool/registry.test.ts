@@ -34,6 +34,8 @@ import { ProviderID, ModelID } from "@/provider/schema"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { MessageID, SessionID } from "@/session/schema"
 import { RuntimeFlags } from "@/effect/runtime-flags"
+import { SettingsHook } from "@/hook/settings"
+import { SandboxManager } from "@/tool/sandbox/manager"
 
 const node = CrossSpawnSpawner.defaultLayer
 const configLayer = TestConfig.layer({
@@ -68,6 +70,8 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(node),
       Layer.provide(Ripgrep.defaultLayer),
       Layer.provide(Truncate.defaultLayer),
+      Layer.provide(SettingsHook.defaultLayer),
+      Layer.provide(SandboxManager.defaultLayer.pipe(Layer.provide(AppFileSystem.defaultLayer))),
     )
     .pipe(Layer.provide(RuntimeFlags.layer(opts.flags ?? {})))
 
