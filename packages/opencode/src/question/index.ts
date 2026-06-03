@@ -164,7 +164,7 @@ export const layer = Layer.effect(
         questions: Schema.Array(Info),
         tool: Schema.optional(Tool),
       })
-      yield* Schema.decodeUnknown(AskInput)(input).pipe(
+      yield* Schema.decodeUnknownEffect(AskInput)(input).pipe(
         Effect.mapError(
           (e) =>
             new Error(

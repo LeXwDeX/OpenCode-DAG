@@ -568,19 +568,20 @@ root_type Monster;`
     }),
   )
 
-  it.live("falls through unsupported image mime types to text", () =>
+  it.live("attaches image files for tiff and avif extensions", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdirScoped()
       const cases = [
-        ["photo.tiff", "II text content"],
-        ["photo.avif", "avif text content"],
+        ["photo.tiff", "II text content", "image/tiff"],
+        ["photo.avif", "avif text content", "image/avif"],
       ] as const
 
       for (const item of cases) {
         yield* put(path.join(dir, item[0]), item[1])
         const result = yield* exec(dir, { filePath: path.join(dir, item[0]) })
-        expect(result.attachments).toBeUndefined()
-        expect(result.output).toContain(item[1])
+        expect(result.attachments?.length).toBe(1)
+        expect(result.attachments?.[0].mime).toBe(item[2])
+        expect(result.attachments?.[0].url.startsWith(`data:${item[2]};base64,`)).toBe(true)
       }
     }),
   )

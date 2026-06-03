@@ -65,6 +65,8 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(Instruction.defaultLayer),
       Layer.provide(AppFileSystem.defaultLayer),
       Layer.provide(Bus.layer),
+    )
+    .pipe(
       Layer.provide(FetchHttpClient.layer),
       Layer.provide(Format.defaultLayer),
       Layer.provide(node),
