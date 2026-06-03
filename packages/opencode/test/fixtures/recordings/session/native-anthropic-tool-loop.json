@@ -6,7 +6,11 @@
     "provider": "anthropic",
     "protocol": "anthropic-messages",
     "route": "anthropic-messages",
-    "tags": ["opencode", "native", "tool-loop"]
+    "tags": [
+      "opencode",
+      "native",
+      "tool-loop"
+    ]
   },
   "interactions": [
     {
@@ -17,7 +21,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"claude-haiku-4-5-20251001\",\"system\":[{\"type\":\"text\",\"text\":\"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What is the weather in Paris?\",\"cache_control\":{\"type\":\"ephemeral\"}}]}],\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"input_schema\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false},\"cache_control\":{\"type\":\"ephemeral\"}}],\"stream\":true,\"max_tokens\":32000,\"temperature\":0}"
+        "body": "{\"model\": \"claude-haiku-4-5-20251001\", \"system\": [{\"type\": \"text\", \"text\": \"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\", \"cache_control\": {\"type\": \"ephemeral\"}}], \"messages\": [{\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"What is the weather in Paris?\", \"cache_control\": {\"type\": \"ephemeral\"}}]}], \"tools\": [{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"input_schema\": {\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"additionalProperties\": false}, \"cache_control\": {\"type\": \"ephemeral\"}}], \"stream\": true, \"max_tokens\": 64000, \"temperature\": 0}"
       },
       "response": {
         "status": 200,
@@ -35,7 +39,7 @@
         "headers": {
           "content-type": "application/json"
         },
-        "body": "{\"model\":\"claude-haiku-4-5-20251001\",\"system\":[{\"type\":\"text\",\"text\":\"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\",\"cache_control\":{\"type\":\"ephemeral\"}}],\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"What is the weather in Paris?\",\"cache_control\":{\"type\":\"ephemeral\"}}]},{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"id\":\"toolu_01A8pEqifk2HVQfq1ZDNP6iY\",\"name\":\"get_weather\",\"input\":{\"city\":{}}}]},{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_01A8pEqifk2HVQfq1ZDNP6iY\",\"content\":\"{\\\"temperature\\\":22,\\\"condition\\\":\\\"sunny\\\"}\"}]}],\"tools\":[{\"name\":\"get_weather\",\"description\":\"Get the current weather for a city.\",\"input_schema\":{\"$schema\":\"http://json-schema.org/draft-07/schema#\",\"type\":\"object\",\"properties\":{\"city\":{\"type\":\"string\"}},\"required\":[\"city\"],\"additionalProperties\":false},\"cache_control\":{\"type\":\"ephemeral\"}}],\"stream\":true,\"max_tokens\":32000,\"temperature\":0}"
+        "body": "{\"model\": \"claude-haiku-4-5-20251001\", \"system\": [{\"type\": \"text\", \"text\": \"Answer using tools when appropriate.\\nUse the get_weather tool exactly once to look up Paris, then reply with exactly: Paris is sunny.\", \"cache_control\": {\"type\": \"ephemeral\"}}], \"messages\": [{\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"What is the weather in Paris?\", \"cache_control\": {\"type\": \"ephemeral\"}}]}, {\"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"toolu_01A8pEqifk2HVQfq1ZDNP6iY\", \"name\": \"get_weather\", \"input\": {\"city\": {}}}]}, {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"toolu_01A8pEqifk2HVQfq1ZDNP6iY\", \"content\": \"{\\\"temperature\\\":22,\\\"condition\\\":\\\"sunny\\\"}\"}]}], \"tools\": [{\"name\": \"get_weather\", \"description\": \"Get the current weather for a city.\", \"input_schema\": {\"$schema\": \"http://json-schema.org/draft-07/schema#\", \"type\": \"object\", \"properties\": {\"city\": {\"type\": \"string\"}}, \"required\": [\"city\"], \"additionalProperties\": false}, \"cache_control\": {\"type\": \"ephemeral\"}}], \"stream\": true, \"max_tokens\": 64000, \"temperature\": 0}"
       },
       "response": {
         "status": 200,
