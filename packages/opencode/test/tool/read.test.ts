@@ -15,6 +15,7 @@ import { ReadTool } from "../../src/tool/read"
 import { Truncate } from "@/tool/truncate"
 import { Tool } from "@/tool/tool"
 import { Filesystem } from "@/util/filesystem"
+import { SettingsHook } from "../../src/hook/settings"
 import { disposeAllInstances, provideInstance, TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { Reference } from "@/reference/reference"
@@ -52,6 +53,7 @@ const readLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Instruction.defaultLayer,
     LSP.defaultLayer,
     referenceLayer(flags),
+    SettingsHook.defaultLayer,
     Truncate.defaultLayer,
   )
 

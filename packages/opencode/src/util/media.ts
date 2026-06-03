@@ -9,7 +9,10 @@ export function isMedia(mime: string) {
 }
 
 export function isImageAttachment(mime: string) {
-  return mime.startsWith("image/") && mime !== "image/svg+xml" && mime !== "image/vnd.fastbidsheet"
+  // Only treat formats that LLM providers can actually render as image attachments.
+  // Unsupported formats (bmp, tiff, avif, etc.) should fall through to text.
+  const supported = ["image/png", "image/jpeg", "image/gif", "image/webp"]
+  return supported.includes(mime)
 }
 
 export function sniffAttachmentMime(bytes: Uint8Array, fallback: string) {
