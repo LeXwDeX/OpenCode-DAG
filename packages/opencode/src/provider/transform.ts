@@ -17,6 +17,7 @@ function mimeToModality(mime: string): Modality | undefined {
   return undefined
 }
 
+/** @deprecated Retained only for backward-compatible re-export from llm.ts; not used as a default. */
 export const OUTPUT_TOKEN_MAX = 32_000
 
 // Replace unpaired UTF-16 surrogates with U+FFFD. The AI SDK / providers
@@ -768,13 +769,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           high: {
             thinking: {
               type: "enabled",
-              budgetTokens: 16000,
+              budgetTokens: Math.floor(model.limit.output / 2 - 1),
             },
           },
           max: {
             thinking: {
               type: "enabled",
-              budgetTokens: 31999,
+              budgetTokens: model.limit.output - 1,
             },
           },
         }
@@ -944,13 +945,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
         high: {
           thinking: {
             type: "enabled",
-            budgetTokens: Math.min(16_000, Math.floor(model.limit.output / 2 - 1)),
+            budgetTokens: Math.floor(model.limit.output / 2 - 1),
           },
         },
         max: {
           thinking: {
             type: "enabled",
-            budgetTokens: Math.min(31_999, model.limit.output - 1),
+            budgetTokens: model.limit.output - 1,
           },
         },
       }
@@ -979,13 +980,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           high: {
             reasoningConfig: {
               type: "enabled",
-              budgetTokens: 16000,
+              budgetTokens: Math.floor(model.limit.output / 2 - 1),
             },
           },
           max: {
             reasoningConfig: {
               type: "enabled",
-              budgetTokens: 31999,
+              budgetTokens: model.limit.output - 1,
             },
           },
         }
@@ -1093,13 +1094,13 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
           high: {
             thinking: {
               type: "enabled",
-              budgetTokens: 16000,
+              budgetTokens: Math.floor(model.limit.output / 2 - 1),
             },
           },
           max: {
             thinking: {
               type: "enabled",
-              budgetTokens: 31999,
+              budgetTokens: model.limit.output - 1,
             },
           },
         }
@@ -1205,7 +1206,7 @@ export function options(input: {
   ) {
     result["thinking"] = {
       type: "enabled",
-      budgetTokens: Math.min(16_000, Math.floor(input.model.limit.output / 2 - 1)),
+      budgetTokens: Math.floor(input.model.limit.output / 2 - 1),
     }
   }
 
@@ -1348,8 +1349,9 @@ export function providerOptions(model: Provider.Model, options: { [x: string]: a
   return { [key]: options }
 }
 
-export function maxOutputTokens(model: Provider.Model, outputTokenMax = OUTPUT_TOKEN_MAX): number {
-  return Math.min(model.limit.output, outputTokenMax) || outputTokenMax
+export function maxOutputTokens(model: Provider.Model, outputTokenMax?: number): number {
+  if (outputTokenMax && outputTokenMax > 0) return Math.min(model.limit.output, outputTokenMax) || model.limit.output
+  return model.limit.output
 }
 
 export function schema(model: Provider.Model, schema: JSONSchema7): JSONSchema7 {

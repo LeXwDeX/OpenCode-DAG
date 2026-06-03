@@ -281,6 +281,7 @@ const live: Layer.Layer<
       return {
         type: "ai-sdk" as const,
         result: streamText({
+          allowSystemInMessages: true,
           onError(error) {
             l.error("stream error", {
               error,

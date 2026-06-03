@@ -1252,6 +1252,7 @@ function makeAgentHandler(
                   toolChoice: "auto",
                   abortSignal: ac.signal,
                   maxOutputTokens: 4096,
+                  allowSystemInMessages: true,
                 })
                 if (captured.value) return captured.value
                 messages.push(...result.response.messages)
