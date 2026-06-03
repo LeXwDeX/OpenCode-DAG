@@ -74,6 +74,63 @@ OpenCode 内置两种 Agent，可用 `Tab` 键快速切换：
 
 了解更多 [Agents](https://opencode.ai/docs/agents) 相关信息。
 
+### Hooks API
+
+本项目实现了 ClaudeCode Hooks API 的超集，共支持 **27 个 Hook 事件**。其中 **22 个**在运行时存在具体的触发点，**5 个**仅在类型系统/配置解析层面被定义（已注册的 Hook 会被加载，但当前不会被触发）。
+
+Hook 在配置文件的 `hooks` 字段中按事件名注册，支持 `command`、`mcp`、`http`、`prompt`、`agent` 五种执行类型，并通过 stdin/stdout 的 JSON 信封进行通信。完整协议（信封字段、stdout 控制 JSON、退出码语义、环境变量、聚合规则等）参见 [`packages/opencode/src/session/prompt/hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)。
+
+#### 运行时触发的事件（22 个）
+
+这些事件在运行时存在具体的 `settingsHook.trigger()` 调用点：
+
+| 事件 | 触发时机 | 负载字段 |
+| --- | --- | --- |
+| `PreToolUse` | 任意工具执行之前 | `toolName`、`toolInput`、`toolUseID?` |
+| `PostToolUse` | 工具成功执行之后 | `toolName`、`toolInput`、`toolResponse`、`toolUseID?` |
+| `PostToolUseFailure` | 工具执行失败之后 | `toolName`、`toolInput`、`error`、`isInterrupt?` |
+| `FileChanged` | 文件被 edit/write 创建或修改 | `path`、`changeType` |
+| `UserPromptSubmit` | 用户提交提示词 | `prompt` |
+| `Stop` | Agent 完成一轮回合 | `stopHookActive`、`lastAssistantMessage?` |
+| `StopFailure` | Agent 循环失败 | `stopHookActive`、`error`、`lastAssistantMessage?` |
+| `InstructionsLoaded` | 加载 AGENTS.md/CLAUDE.md | `path`、`content` |
+| `SessionStart` | 会话开始 | `source`（`startup`\|`resume`\|`clear`\|`compact`）、`model?`、`agentType?` |
+| `SessionEnd` | 会话结束 | `reason`（`clear`\|`logout`\|`prompt_input_exit`\|`other`） |
+| `PermissionRequest` | 请求工具权限 | `toolName`、`toolInput`、`permissionSuggestions?` |
+| `PermissionDenied` | 工具权限被拒绝 | `toolName`、`toolInput`、`reason` |
+| `SubagentStart` | 子 Agent 启动 | `agentID`、`agentType` |
+| `SubagentStop` | 子 Agent 结束 | `stopHookActive`、`agentID?`、`agentTranscriptPath?`、`agentType?`、`lastAssistantMessage?` |
+| `TaskCreated` | Task 工具创建子任务 | `taskID?`、`taskTitle?`、`taskDescription?` |
+| `TaskCompleted` | Task 工具完成 | `taskID?`、`taskTitle?`、`result?` |
+| `TeammateIdle` | 队友进入空闲状态 | `teammateID?`、`teammateName?` |
+| `PreCompact` | 上下文压缩之前 | `trigger`（`auto`\|`manual`）、`customInstructions?` |
+| `PostCompact` | 上下文压缩之后 | `trigger?`、`compactSummary?`、`customInstructions?` |
+| `WorktreeCreate` | 创建 Git worktree | `path`、`branch` |
+| `WorktreeRemove` | 移除 Git worktree | `path`、`branch` |
+| `ConfigChange` | 配置文件变更 | `configPath`、`changes` |
+
+#### 仅在 Schema 中定义的事件（5 个）
+
+这些事件已在类型系统中定义并被设置解析器接受，但当前没有运行时触发点；为其注册的 Hook 会被加载但不会触发：
+
+| 事件 | 说明 |
+| --- | --- |
+| `Notification` | 通知事件（预留） |
+| `Setup` | 初始化/安装阶段（预留） |
+| `Elicitation` | 信息征询（预留） |
+| `ElicitationResult` | 信息征询结果（预留） |
+| `CwdChanged` | 工作目录变更（预留） |
+
+#### Hook 执行类型
+
+| 类型 | 说明 | 关键字段 |
+| --- | --- | --- |
+| `command` | 通过 stdin/stdout JSON 信封执行 shell 命令 | `command`、`timeout?` |
+| `mcp` | 调用 MCP 工具（`mcp__<server>__<tool>`） | `command`（MCP 工具名） |
+| `http` | 向 URL POST JSON 信封 | `url`（或旧版回退 `command`）、`headers?`、`timeout?` |
+| `prompt` | 单轮、带结构化输出的 LLM 调用 | `prompt`（系统提示词）、`timeout?` |
+| `agent` | 多轮、具备只读工具的 LLM Agent | `prompt`（系统提示词）、`timeout?` |
+
 ### 文档
 
 更多配置说明请查看我们的 [**官方文档**](https://opencode.ai/docs)。
