@@ -88,6 +88,99 @@ $ARGUMENTS
 - 未经验证的自定义参数
 - 可能导致死锁或无限循环的依赖关系
 
+## 非法 DAG 流程（绝对禁止创建）
+
+以下流程在测试中被验证为绝对非法，任何情况下都不能创建：
+
+### 1. 循环依赖（Circular Dependencies）
+
+```yaml
+# ❌ 非法：A → B → C → A 形成循环
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        depends_on: [step-c]  # ❌ 循环：C 依赖 B，B 依赖 A，A 又依赖 C
+      - name: step-b
+        depends_on: [step-a]
+      - name: step-c
+        depends_on: [step-b]
+```
+
+**为什么非法**：DAG 必须是无环图，循环依赖会导致无限等待和死锁。
+
+### 2. 非法状态转移（Invalid State Transitions）
+
+```yaml
+# ❌ 非法：尝试从终态逆转到运行态
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        status: completed
+        transition_to: running  # ❌ 非法：终态不可逆转
+```
+
+**非法转移示例**（以下转移绝对禁止）：
+- `RUNNING → PENDING`（只能向前，不能回退）
+- `COMPLETED → RUNNING`（终态不可逆转）
+- `FAILED → RUNNING`（终态不可逆转）
+- `CANCELLED → RUNNING`（终态不可逆转）
+
+**为什么非法**：状态机铁律 #16 要求终态（COMPLETED/FAILED/CANCELLED）不可逆转。
+
+### 3. 缺失必需节点（Missing Required Nodes）
+
+```yaml
+# ❌ 非法：缺少必需的 workflow 步骤
+branches:
+  - name: main
+    nodes:
+      - name: implement  # ❌ 缺少 skeleton, tdd, review
+        task: "直接实现"
+```
+
+**为什么非法**：workflow 必须包含所有 required_nodes（skeleton, tdd, implementation, review），这是铁律 #22 的要求。
+
+### 4. 引用不存在的依赖（Non-existent Dependencies）
+
+```yaml
+# ❌ 非法：引用不存在的节点
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        task: "第一个步骤"
+      - name: step-b
+        depends_on: [step-x]  # ❌ 非法：step-x 不存在
+        task: "依赖不存在的节点"
+```
+
+**为什么非法**：所有 depends_on 必须引用已定义的节点，这会导致调度器无法正确处理依赖关系。
+
+### 5. 非法转移参数（Invalid Transition Parameters）
+
+```yaml
+# ❌ 非法：错误的 transition 名称
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        from_status: pending
+        to_status: running
+        transition: invalid_transition  # ❌ 非法：不存在的 transition 类型
+```
+
+**合法 transition 类型**：
+- `ENGINE_START`（pending → running）
+- `ENGINE_PAUSE`（running → paused）
+- `ENGINE_RESUME`（paused → running）
+- `ENGINE_COMPLETE`（running → completed）
+- `ENGINE_FAIL`（running → failed）
+- `ENGINE_CANCEL`（任意 → cancelled）
+
+**为什么非法**：必须使用预定义的 transition 类型，这确保状态转换的合法性和可追踪性。
+
 ## Validation rules
 
 所有生成的配置必须通过以下验证：

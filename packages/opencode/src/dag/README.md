@@ -160,6 +160,109 @@ await manager.list()
 - **最大 Fallback 链**: 3
 - **Worktree 隔离**: 默认启用
 
+## ⛔ 非法 DAG 流程（绝对禁止创建）
+
+以下模式在测试中被验证为绝对非法，任何情况下都不能创建：
+
+### 1. 循环依赖（Circular Dependencies）
+
+```yaml
+# ❌ 非法：A → B → C → A 形成循环
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        depends_on: [step-c]  # ❌ 循环
+      - name: step-b
+        depends_on: [step-a]
+      - name: step-c
+        depends_on: [step-b]
+```
+
+**为什么非法**：DAG 必须是无环图。循环依赖会导致无限等待和死锁，调度器无法确定执行顺序。
+
+**验证规则**：调度器使用拓扑排序检测循环依赖。
+
+### 2. 非法状态转移（Invalid State Transitions）
+
+```yaml
+# ❌ 非法：尝试从终态逆转到运行态
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        status: completed
+        transition_to: running  # ❌ 终态不可逆转
+```
+
+**以下转移绝对禁止**：
+- `RUNNING → PENDING`（只能向前，不能回退）
+- `COMPLETED → RUNNING`（终态不可逆转）
+- `FAILED → RUNNING`（终态不可逆转）
+- `CANCELLED → RUNNING`（终态不可逆转）
+
+**为什么非法**：状态机铁律 #16 要求终态（COMPLETED/FAILED/CANCELLED）不可逆转。这是系统的核心保证。
+
+**验证规则**：状态机使用 `getValidNextStatuses()` 验证每次转移的合法性。
+
+### 3. 缺失必需节点（Missing Required Nodes）
+
+```yaml
+# ❌ 非法：缺少必需的 workflow 步骤
+branches:
+  - name: main
+    nodes:
+      - name: implement  # ❌ 缺少 skeleton, tdd, review
+        task: "直接实现"
+```
+
+**为什么非法**：workflow 必须包含所有 `required_nodes`（skeleton, tdd, implementation, review），这是铁律 #22 的要求，确保工作流的完整性和质量。
+
+**验证规则**：验证器检查所有 required_nodes 是否存在于 DAG 定义中。
+
+### 4. 引用不存在的依赖（Non-existent Dependencies）
+
+```yaml
+# ❌ 非法：引用不存在的节点
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        task: "第一个步骤"
+      - name: step-b
+        depends_on: [step-x]  # ❌ step-x 不存在
+        task: "依赖不存在的节点"
+```
+
+**为什么非法**：所有 `depends_on` 必须引用已定义的节点。引用不存在的节点会导致调度器无法正确处理依赖关系。
+
+**验证规则**：验证器检查所有 depends_on 引用的节点是否都存在于 DAG 定义中。
+
+### 5. 非法转移参数（Invalid Transition Parameters）
+
+```yaml
+# ❌ 非法：错误的 transition 名称
+branches:
+  - name: main
+    nodes:
+      - name: step-a
+        from_status: pending
+        to_status: running
+        transition: invalid_transition  # ❌ 不存在的 transition
+```
+
+**合法 transition 类型**：
+- `ENGINE_START`（pending → running）
+- `ENGINE_PAUSE`（running → paused）
+- `ENGINE_RESUME`（paused → running）
+- `ENGINE_COMPLETE`（running → completed）
+- `ENGINE_FAIL`（running → failed）
+- `ENGINE_CANCEL`（任意 → cancelled）
+
+**为什么非法**：必须使用预定义的 transition 类型，这确保状态转换的合法性和可追踪性。
+
+**验证规则**：状态机使用 `isValidTransition()` 验证 transition 类型的合法性。
+
 ## 故障排查
 
 ### 常见问题

@@ -37,6 +37,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git worktree operations
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
@@ -67,3 +69,68 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
           path: packages/*/.artifacts/unit/junit.xml
+
+  dag:
+    name: dag-tests (${{ matrix.settings.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        settings:
+          - name: linux
+            host: ubuntu-latest
+          - name: macos
+            host: macos-latest
+    runs-on: ${{ matrix.settings.host }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git worktree operations
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Configure git identity
+        run: |
+          git config --global user.email "bot@opencode.ai"
+          git config --global user.name "opencode"
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: node_modules/.cache/turbo
+          key: turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
+            turbo-${{ runner.os }}-
+
+      - name: Run DAG smoke tests (mock)
+        run: cd packages/opencode && bun test src/dag/__tests__/dag-smoke.test.ts --reporter=junit --reporter-outfile=.artifacts/dag-smoke.xml
+
+      - name: Run DAG integration tests (real implementations)
+        run: cd packages/opencode && bun test src/dag/__tests__/dag-integration.test.ts --reporter=junit --reporter-outfile=.artifacts/dag-integration.xml
+
+      - name: Run DAG module unit tests
+        run: cd packages/opencode && bun test src/dag --reporter=junit --reporter-outfile=.artifacts/dag-unit.xml
+
+      - name: Generate DAG coverage report
+        run: |
+          cd packages/opencode
+          bun test src/dag --coverage
+          mkdir -p .artifacts/dag-coverage
+          cp -r coverage .artifacts/dag-coverage/ || true
+
+      - name: Upload DAG test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dag-${{ matrix.settings.name }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            packages/opencode/.artifacts/dag-*.xml
+            packages/opencode/.artifacts/dag-coverage/
