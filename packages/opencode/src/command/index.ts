@@ -9,6 +9,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
+import PROMPT_DAGWORKER from "./template/dagworker.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -55,6 +56,7 @@ export const Default = {
   REVIEW: "review",
   GOAL: "goal",
   SUBGOAL: "subgoal",
+  DAGWORKER: "dagworker",
 } as const
 
 export interface Interface {
@@ -108,6 +110,15 @@ export const layer = Layer.effect(
         source: "command",
         template: "",
         hints: ["$ARGUMENTS"],
+      }
+      commands[Default.DAGWORKER] = {
+        name: Default.DAGWORKER,
+        description: "创建、调整、校验 DAG 工作流配置 [list|create|update|validate|preview|diff|inherit|register]",
+        source: "command",
+        get template() {
+          return PROMPT_DAGWORKER.replace("${path}", ctx.worktree)
+        },
+        hints: hints(PROMPT_DAGWORKER),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

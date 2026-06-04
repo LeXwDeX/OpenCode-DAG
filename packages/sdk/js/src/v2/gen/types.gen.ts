@@ -9,6 +9,12 @@ export type Event =
   | EventTuiCommandExecute
   | EventTuiToastShow1
   | EventTuiSessionSelect
+  | EventGoalSet1
+  | EventGoalUpdated1
+  | EventGoalContinued1
+  | EventGoalAchieved
+  | EventGoalPaused
+  | EventGoalCleared
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -17,6 +23,8 @@ export type Event =
   | EventLspClientDiagnostics
   | EventLspUpdated
   | EventMessagePartDelta
+  | EventMcpToolsChanged
+  | EventMcpBrowserOpenFailed
   | EventPermissionAsked
   | EventPermissionReplied
   | EventSessionDiff
@@ -27,8 +35,6 @@ export type Event =
   | EventTodoUpdated
   | EventSessionStatus
   | EventSessionIdle
-  | EventMcpToolsChanged
-  | EventMcpBrowserOpenFailed
   | EventCommandExecuted
   | EventProjectUpdated
   | EventSessionCompacted
@@ -333,6 +339,7 @@ export type Todo = {
 export type SessionStatus =
   | {
       type: "idle"
+      cause?: "complete" | "abort" | "error"
     }
   | {
       type: "retry"
@@ -752,6 +759,9 @@ export type Session = {
   directory: string
   path?: string
   parentID?: string
+  sessionType?: "chat" | "workflow" | "workflow_node"
+  sourceSessionID?: string
+  context?: unknown
   summary?: {
     additions: number
     deletions: number
@@ -810,6 +820,12 @@ export type GlobalEvent = {
     | EventTuiCommandExecute
     | EventTuiToastShow
     | EventTuiSessionSelect
+    | EventGoalSet
+    | EventGoalUpdated
+    | EventGoalContinued
+    | EventGoalAchieved
+    | EventGoalPaused
+    | EventGoalCleared
     | EventServerConnected
     | EventGlobalDisposed
     | EventServerInstanceDisposed
@@ -818,6 +834,8 @@ export type GlobalEvent = {
     | EventLspClientDiagnostics
     | EventLspUpdated
     | EventMessagePartDelta
+    | EventMcpToolsChanged
+    | EventMcpBrowserOpenFailed
     | EventPermissionAsked
     | EventPermissionReplied
     | EventSessionDiff
@@ -828,8 +846,6 @@ export type GlobalEvent = {
     | EventTodoUpdated
     | EventSessionStatus
     | EventSessionIdle
-    | EventMcpToolsChanged
-    | EventMcpBrowserOpenFailed
     | EventCommandExecuted
     | EventProjectUpdated
     | EventSessionCompacted
@@ -1008,6 +1024,11 @@ export type AgentConfig = {
   steps?: number
   maxSteps?: number
   permission?: PermissionConfig
+  todo_reminder?: boolean
+  /**
+   * Control explicit prompt caching (cache_control markers) for this agent. true = always cache, false = never cache, 'auto' = heuristic decision based on conversation length and agent type (default: 'auto').
+   */
+  cache?: boolean | "auto"
   [key: string]:
     | unknown
     | string
@@ -1032,6 +1053,8 @@ export type AgentConfig = {
     | "info"
     | number
     | PermissionConfig
+    | boolean
+    | "auto"
     | undefined
 }
 
@@ -1482,6 +1505,9 @@ export type GlobalSession = {
   directory: string
   path?: string
   parentID?: string
+  sessionType?: "chat" | "workflow" | "workflow_node"
+  sourceSessionID?: string
+  context?: unknown
   summary?: {
     additions: number
     deletions: number
@@ -1646,6 +1672,8 @@ export type Agent = {
     [key: string]: unknown
   }
   steps?: number
+  todo_reminder?: boolean
+  cache?: boolean | "auto"
 }
 
 export type LspStatus = {
@@ -2045,6 +2073,9 @@ export type SyncEventSessionUpdated = {
       directory?: string | null
       path?: string | null
       parentID?: string | null
+      sessionType?: "chat" | "workflow" | "workflow_node" | null
+      sourceSessionID?: string | null
+      context?: unknown | null
       summary?: {
         additions: number
         deletions: number
@@ -2499,6 +2530,65 @@ export type SyncEventSessionNextCompactionEnded = {
   }
 }
 
+export type EventGoalSet = {
+  id: string
+  type: "goal.set"
+  properties: {
+    sessionID: string
+    goal: string
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventGoalUpdated = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: string
+    status: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventGoalContinued = {
+  id: string
+  type: "goal.continued"
+  properties: {
+    sessionID: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    reason: string
+  }
+}
+
+export type EventGoalAchieved = {
+  id: string
+  type: "goal.achieved"
+  properties: {
+    sessionID: string
+    reason: string
+  }
+}
+
+export type EventGoalPaused = {
+  id: string
+  type: "goal.paused"
+  properties: {
+    sessionID: string
+    reason: string
+  }
+}
+
+export type EventGoalCleared = {
+  id: string
+  type: "goal.cleared"
+  properties: {
+    sessionID: string
+  }
+}
+
 export type EventServerConnected = {
   id: string
   type: "server.connected"
@@ -2566,6 +2656,23 @@ export type EventMessagePartDelta = {
     partID: string
     field: string
     delta: string
+  }
+}
+
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
   }
 }
 
@@ -2651,23 +2758,6 @@ export type EventSessionIdle = {
   type: "session.idle"
   properties: {
     sessionID: string
-  }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
   }
 }
 
@@ -3408,6 +3498,9 @@ export type EventAccountSwitched = {
 export type SessionInfo = {
   id: string
   parentID?: string
+  sessionType?: "chat" | "workflow" | "workflow_node"
+  sourceSessionID?: string
+  context?: unknown
   projectID: string
   workspaceID?: string
   path?: string
@@ -3715,6 +3808,39 @@ export type EventTuiToastShow1 = {
     message: string
     variant: "info" | "success" | "warning" | "error"
     duration?: number
+  }
+}
+
+export type EventGoalSet1 = {
+  id: string
+  type: "goal.set"
+  properties: {
+    sessionID: string
+    goal: string
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventGoalUpdated1 = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: string
+    status: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventGoalContinued1 = {
+  id: string
+  type: "goal.continued"
+  properties: {
+    sessionID: string
+    turnsUsed: number | "NaN" | "Infinity" | "-Infinity"
+    maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+    reason: string
   }
 }
 
@@ -6065,6 +6191,9 @@ export type SessionCreateData = {
     }
     permission?: PermissionRuleset
     workspaceID?: string
+    sessionType?: "chat" | "workflow" | "workflow_node"
+    sourceSessionID?: string
+    context?: unknown
   }
   path?: never
   query?: {

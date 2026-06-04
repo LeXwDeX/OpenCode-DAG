@@ -3098,6 +3098,9 @@ export class Session2 extends HeyApiClient {
       }
       permission?: PermissionRuleset
       workspaceID?: string
+      sessionType?: "chat" | "workflow" | "workflow_node"
+      sourceSessionID?: string
+      context?: unknown
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3114,6 +3117,9 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "model" },
             { in: "body", key: "permission" },
             { in: "body", key: "workspaceID" },
+            { in: "body", key: "sessionType" },
+            { in: "body", key: "sourceSessionID" },
+            { in: "body", key: "context" },
           ],
         },
       ],

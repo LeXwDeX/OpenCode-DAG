@@ -41,6 +41,9 @@ export const SessionTable = sqliteTable(
     tokens_cache_write: integer().notNull().default(0),
     revert: text({ mode: "json" }).$type<{ messageID: MessageID; partID?: PartID; snapshot?: string; diff?: string }>(),
     permission: text({ mode: "json" }).$type<Permission.Ruleset>(),
+    session_type: text(),
+    source_session_id: text().$type<SessionID>(),
+    context_json: text({ mode: "json" }).$type<unknown>(),
     agent: text(),
     model: text({ mode: "json" }).$type<{
       id: string
@@ -55,6 +58,7 @@ export const SessionTable = sqliteTable(
     index("session_project_idx").on(table.project_id),
     index("session_workspace_idx").on(table.workspace_id),
     index("session_parent_idx").on(table.parent_id),
+    index("session_source_idx").on(table.source_session_id),
   ],
 )
 

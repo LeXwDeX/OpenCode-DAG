@@ -79,6 +79,9 @@ export function fromRow(row: SessionRow): Info {
     directory: row.directory,
     path: row.path ?? undefined,
     parentID: row.parent_id ?? undefined,
+    sessionType: (row.session_type as Info["sessionType"]) ?? undefined,
+    sourceSessionID: row.source_session_id ?? undefined,
+    context: row.context_json ?? undefined,
     title: row.title,
     agent: row.agent ?? undefined,
     model: row.model
@@ -118,6 +121,9 @@ export function toRow(info: Info) {
     project_id: info.projectID,
     workspace_id: info.workspaceID,
     parent_id: info.parentID,
+    session_type: info.sessionType,
+    source_session_id: info.sourceSessionID,
+    context_json: info.context,
     slug: info.slug,
     directory: info.directory,
     path: info.path,
@@ -214,6 +220,9 @@ export const Info = Schema.Struct({
   directory: Schema.String,
   path: optionalOmitUndefined(Schema.String),
   parentID: optionalOmitUndefined(SessionID),
+  sessionType: optionalOmitUndefined(Schema.Literals(["chat", "workflow", "workflow_node"])),
+  sourceSessionID: optionalOmitUndefined(SessionID),
+  context: optionalOmitUndefined(Schema.Unknown),
   summary: optionalOmitUndefined(Summary),
   cost: optionalOmitUndefined(Schema.Finite),
   tokens: optionalOmitUndefined(Tokens),
@@ -249,6 +258,9 @@ export const CreateInput = Schema.optional(
     model: Schema.optional(Model),
     permission: Schema.optional(Permission.Ruleset),
     workspaceID: Schema.optional(WorkspaceID),
+    sessionType: Schema.optional(Schema.Literals(["chat", "workflow", "workflow_node"])),
+    sourceSessionID: Schema.optional(SessionID),
+    context: Schema.optional(Schema.Any),
   }),
 )
 export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInput>>
@@ -313,6 +325,9 @@ const UpdatedInfo = Schema.Struct({
   directory: Schema.optional(Schema.NullOr(Schema.String)),
   path: Schema.optional(Schema.NullOr(Schema.String)),
   parentID: Schema.optional(Schema.NullOr(SessionID)),
+  sessionType: Schema.optional(Schema.NullOr(Schema.Literals(["chat", "workflow", "workflow_node"]))),
+  sourceSessionID: Schema.optional(Schema.NullOr(SessionID)),
+  context: Schema.optional(Schema.NullOr(Schema.Unknown)),
   summary: Schema.optional(Schema.NullOr(Summary)),
   cost: Schema.optional(Schema.Finite),
   tokens: Schema.optional(Tokens),
@@ -458,6 +473,9 @@ export interface Interface {
     model?: Schema.Schema.Type<typeof Model>
     permission?: Permission.Ruleset
     workspaceID?: WorkspaceID
+    sessionType?: "chat" | "workflow" | "workflow_node"
+    sourceSessionID?: SessionID
+    context?: Info["context"]
   }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
@@ -497,6 +515,10 @@ export interface Interface {
     sessionID: SessionID,
     predicate: (msg: MessageV2.WithParts) => boolean,
   ) => Effect.Effect<Option.Option<MessageV2.WithParts>, NotFound>
+  readonly saveContext: (sessionID: SessionID, context: unknown) => Effect.Effect<void, NotFound>
+  readonly loadContext: (sessionID: SessionID) => Effect.Effect<unknown, NotFound>
+  readonly getSessionChain: (sessionID: SessionID) => Effect.Effect<Info[]>
+  readonly getRootSession: (sessionID: SessionID) => Effect.Effect<Info | null>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Session") {}
@@ -537,6 +559,9 @@ const layerBase: Layer.Layer<
       directory: string
       path?: string
       permission?: Permission.Ruleset
+      sessionType?: "chat" | "workflow" | "workflow_node"
+      sourceSessionID?: SessionID
+      context?: Info["context"]
     }) {
       const ctx = yield* InstanceState.context
       const result: Info = {
@@ -548,6 +573,9 @@ const layerBase: Layer.Layer<
         path: input.path,
         workspaceID: input.workspaceID,
         parentID: input.parentID,
+        sessionType: input.sessionType,
+        sourceSessionID: input.sourceSessionID,
+        context: input.context,
         title: input.title ?? createDefaultTitle(!!input.parentID),
         agent: input.agent,
         model: input.model,
@@ -677,6 +705,9 @@ const layerBase: Layer.Layer<
       model?: Schema.Schema.Type<typeof Model>
       permission?: Permission.Ruleset
       workspaceID?: WorkspaceID
+      sessionType?: "chat" | "workflow" | "workflow_node"
+      sourceSessionID?: SessionID
+      context?: Info["context"]
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
@@ -689,6 +720,9 @@ const layerBase: Layer.Layer<
         model: input?.model,
         permission: input?.permission,
         workspaceID: input?.workspaceID ?? workspace,
+        sessionType: input?.sessionType,
+        sourceSessionID: input?.sourceSessionID,
+        context: input?.context,
       })
     })
 
@@ -852,6 +886,36 @@ const layerBase: Layer.Layer<
       return Option.none<MessageV2.WithParts>()
     })
 
+    const saveContext: Interface["saveContext"] = Effect.fn("Session.saveContext")(function* (sessionID, context) {
+      yield* get(sessionID)
+      yield* patch(sessionID, { context: context as Patch["context"], time: { updated: Date.now() } })
+    })
+
+    const loadContext: Interface["loadContext"] = Effect.fn("Session.loadContext")(function* (sessionID) {
+      const session = yield* get(sessionID)
+      return session.context ?? null
+    })
+
+    const getSessionChain: Interface["getSessionChain"] = Effect.fn("Session.getSessionChain")(function* (sessionID) {
+      const chain: Info[] = []
+      let current: SessionID | undefined = sessionID
+      while (current) {
+        const session: Info | null = yield* get(current).pipe(
+          Effect.orElseSucceed(() => null),
+        )
+        if (!session) break
+        chain.push(session)
+        current = session.sourceSessionID
+        if (chain.length > 20) break
+      }
+      return chain
+    })
+
+    const getRootSession: Interface["getRootSession"] = Effect.fn("Session.getRootSession")(function* (sessionID) {
+      const chain = yield* getSessionChain(sessionID)
+      return chain[chain.length - 1] ?? null
+    })
+
     return Service.of({
       list,
       create,
@@ -875,6 +939,10 @@ const layerBase: Layer.Layer<
       getPart,
       updatePartDelta,
       findMessage,
+      saveContext,
+      loadContext,
+      getSessionChain,
+      getRootSession,
     })
   }),
 )

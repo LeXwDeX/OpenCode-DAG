@@ -25,6 +25,9 @@ export const DefaultDelivery = "immediate" satisfies Delivery
 export class Info extends Schema.Class<Info>("Session.Info")({
   id: SessionID,
   parentID: optionalOmitUndefined(SessionID),
+  sessionType: optionalOmitUndefined(Schema.NullOr(Schema.Literals(["chat", "workflow", "workflow_node"]))),
+  sourceSessionID: optionalOmitUndefined(SessionID),
+  context: optionalOmitUndefined(Schema.Unknown),
   projectID: ProjectID,
   workspaceID: optionalOmitUndefined(WorkspaceID),
   path: optionalOmitUndefined(Schema.String),
@@ -160,6 +163,9 @@ export const layer = Layer.effect(
         workspaceID: row.workspace_id ? WorkspaceID.make(row.workspace_id) : undefined,
         title: row.title,
         parentID: row.parent_id ? SessionID.make(row.parent_id) : undefined,
+        sessionType: (row.session_type as Info["sessionType"]) ?? undefined,
+        sourceSessionID: row.source_session_id ? SessionID.make(row.source_session_id) : undefined,
+        context: row.context_json ?? undefined,
         path: row.path ?? "",
         agent: row.agent ?? undefined,
         model: row.model

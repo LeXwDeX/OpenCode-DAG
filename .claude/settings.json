@@ -1,0 +1,34 @@
+{
+  "_comment": "Project-level hooks: hindsight (semantic memory) + think (deep reasoning) + codegraph (code structure). DCP plugin runs automatically.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Glob|Grep|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"[hindsight] Semantic memory available: hindsight_recall (search history), hindsight_retain (save findings). bank_id auto-managed.\"}}'"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"[think] Deep reasoning available: use think tool for complex analysis, multi-step planning, or when stuck on hard problems.\"}}'"
+          }
+        ]
+      },
+      {
+        "matcher": "Glob|Grep|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"[codegraph] Code structure available: codegraph_search (find symbols), codegraph_context (understand dependencies), codegraph_impact (analyze change radius).\"}}'"
+          }
+        ]
+      }
+    ]
+  }
+}

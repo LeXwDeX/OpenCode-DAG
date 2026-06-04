@@ -1,0 +1,103 @@
+DAG 工作流配置的创建、调整、校验命令。
+
+所有对 DAG YAML 的读写操作必须通过本命令完成，遵守铁律 #22 和 #28（SYSTEM.yaml 不可改、配置必须合规）。
+
+用户提供的操作或约束（honoring these）:
+$ARGUMENTS
+
+## How to investigate
+
+根据用户请求的操作类型，执行相应逻辑：
+
+### list 操作
+列出所有可用的 DAG 工作流模板和已创建的配置。
+
+### create 操作
+1. 解析用户输入的参数（namespace/name, extends, overrides 等）
+2. 验证目标路径是否在允许的范围内
+3. 如果指定了 extends，验证基础模板是否存在
+4. 合并基础模板和覆盖参数
+5. 验证合并结果是否符合 SYSTEM.yaml
+6. 写入目标路径
+7. 如果 auto_validate=true，自动调用 dag_validate
+
+### update 操作
+1. 解析用户输入的修改内容
+2. 验证现有配置是否存在
+3. 应用修改
+4. 验证修改结果是否合规
+5. 写入更新后的配置
+
+### validate 操作
+1. 读取指定路径的 YAML 配置
+2. 执行完整验证：
+   - required_nodes 完整性
+   - max_agents 限制
+   - max_concurrency 限制
+   - max_pushes 限制
+   - shadow 路由终止检查
+   - fallback 链循环检查
+   - worktree 隔离策略检查
+   - merge 策略兼容性检查
+3. 返回验证报告（errors + warnings）
+
+### preview 操作
+1. 读取配置
+2. 模拟 DAG 执行流程
+3. 生成执行计划（节点顺序、依赖关系、并发度）
+4. 输出预览结果
+
+### diff 操作
+1. 读取两个配置文件
+2. 对比差异（节点、依赖、参数等）
+3. 输出差异报告
+
+### inherit 操作
+1. 读取基础配置
+2. 应用用户指定的覆盖参数
+3. 生成新配置
+4. 验证新配置合规性
+
+### register hook 操作
+1. 验证 hook 名称和定义
+2. 追加到项目级配置的 registry.hooks
+
+### register mcp 操作
+1. 验证 mcp 名称和 URL
+2. 追加到项目级配置的 registry.mcp_servers
+
+## Questions
+
+仅在缺少必要信息时询问用户：
+- 未指定模板时，询问继承哪个基础模板
+- 未指定覆盖参数时，询问需要修改的字段
+- 验证失败时，询问是否自动修复或手动调整
+
+使用 `question` tool 进行一次性批量询问（最多 5 个问题）。
+
+## Writing rules
+
+生成的 YAML 配置必须：
+- 符合 SYSTEM.yaml 的铁律约束
+- 使用清晰的命名（kebab-case）
+- 包含必要的注释说明关键决策
+- 遵循 YAML 格式规范（缩进、对齐）
+
+排除：
+- 违反铁律的配置（required_nodes、max_* 限制等）
+- 未经验证的自定义参数
+- 可能导致死锁或无限循环的依赖关系
+
+## Validation rules
+
+所有生成的配置必须通过以下验证：
+1. required_nodes 完整性（skeleton, tdd, implementation, review）
+2. 节点数量不超过 max_agents
+3. 并发度不超过 max_concurrency
+4. push 次数不超过 max_pushes
+5. shadow 路由必须能终止
+6. fallback 链不能有循环
+7. worktree 隔离策略正确配置
+8. merge 策略与 worktree 配置兼容
+
+如果验证失败，输出详细的错误信息和修复建议。

@@ -185,3 +185,48 @@ describe("Session", () => {
     }),
   )
 })
+
+describe("create with new optional fields", () => {
+  it.instance("should accept and persist sessionType, sourceSessionID, and context", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+
+      // Create a source session that will be referenced
+      const source = yield* session.create({ title: "source-session" })
+
+      const ctxPayload = { key: "value", nested: { arr: [1, 2, 3] } }
+      const info = yield* session.create({
+        title: "with-new-fields",
+        sessionType: "workflow",
+        sourceSessionID: source.id,
+        context: ctxPayload,
+      })
+
+      expect(info.sessionType).toBe("workflow")
+      expect(info.sourceSessionID).toBe(source.id)
+      expect(info.context).toEqual(ctxPayload)
+
+      // Verify persistence by re-fetching from storage
+      const fetched = yield* session.get(info.id)
+      expect(fetched.sessionType).toBe("workflow")
+      expect(fetched.sourceSessionID).toBe(source.id)
+      expect(fetched.context).toEqual(ctxPayload)
+
+      yield* session.remove(info.id)
+      yield* session.remove(source.id)
+    }),
+  )
+
+  it.instance("should default new fields to undefined when omitted", () =>
+    Effect.gen(function* () {
+      const session = yield* SessionNs.Service
+      const info = yield* session.create({ title: "no-new-fields" })
+
+      expect(info.sessionType).toBeUndefined()
+      expect(info.sourceSessionID).toBeUndefined()
+      expect(info.context).toBeUndefined()
+
+      yield* session.remove(info.id)
+    }),
+  )
+})

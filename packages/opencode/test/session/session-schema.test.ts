@@ -11,6 +11,9 @@ const info = {
   workspaceID: undefined,
   directory: "/tmp/opencode",
   parentID: undefined,
+  sessionType: undefined,
+  sourceSessionID: undefined,
+  context: undefined,
   summary: undefined,
   cost: 0,
   tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
@@ -31,7 +34,7 @@ describe("Session schema", () => {
   test("encodes undefined optional session fields as omitted keys", () => {
     const encoded = Schema.encodeUnknownSync(Session.Info)(info) as Record<string, unknown>
 
-    for (const key of ["workspaceID", "parentID", "summary", "share", "permission", "revert"]) {
+    for (const key of ["workspaceID", "parentID", "sessionType", "sourceSessionID", "context", "summary", "share", "permission", "revert"]) {
       expect(Object.hasOwn(encoded, key)).toBe(false)
     }
     expect(Object.hasOwn(encoded.time as Record<string, unknown>, "compacting")).toBe(false)
@@ -74,5 +77,59 @@ describe("Session schema", () => {
     for (const key of ["partID", "snapshot", "diff"]) {
       expect(Object.hasOwn(encoded.revert as Record<string, unknown>, key)).toBe(false)
     }
+  })
+
+  test("encodes sessionType 'workflow' correctly", () => {
+    const encoded = Schema.encodeUnknownSync(Session.Info)({
+      ...info,
+      sessionType: "workflow",
+    }) as Record<string, unknown>
+
+    expect(encoded.sessionType).toBe("workflow")
+  })
+
+  test("encodes sessionType 'workflow_node' correctly", () => {
+    const encoded = Schema.encodeUnknownSync(Session.Info)({
+      ...info,
+      sessionType: "workflow_node",
+    }) as Record<string, unknown>
+
+    expect(encoded.sessionType).toBe("workflow_node")
+  })
+
+  test("encodes sourceSessionID reference correctly", () => {
+    const sourceID = SessionID.descending()
+    const encoded = Schema.encodeUnknownSync(Session.Info)({
+      ...info,
+      sourceSessionID: sourceID,
+    }) as Record<string, unknown>
+
+    expect(encoded.sourceSessionID).toBe(sourceID)
+  })
+
+  test("encodes context JSON correctly", () => {
+    const ctx = { imported: true, source: "chat", messages: [1, 2, 3] }
+    const encoded = Schema.encodeUnknownSync(Session.Info)({
+      ...info,
+      context: ctx,
+    }) as Record<string, unknown>
+
+    expect(encoded.context).toEqual(ctx)
+  })
+
+  test("round-trips session with all new fields", () => {
+    const sourceID = SessionID.descending()
+    const full: Session.Info = {
+      ...info,
+      sessionType: "workflow",
+      sourceSessionID: sourceID,
+      context: { key: "value" },
+    }
+    const encoded = Schema.encodeUnknownSync(Session.Info)(full)
+    const decoded = Schema.decodeUnknownSync(Session.Info)(encoded)
+
+    expect(decoded.sessionType).toBe("workflow")
+    expect(decoded.sourceSessionID).toBe(sourceID)
+    expect(decoded.context).toEqual({ key: "value" })
   })
 })
