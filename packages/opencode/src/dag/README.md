@@ -35,19 +35,10 @@ src/dag/
 │   ├── manager.ts       # Worktree 管理器实现
 │   └── __tests__/       # 单元测试（14个，全部通过）
 │
-├── scheduler/           # 调度器模块
-│   ├── types.ts         # 调度器类型定义
-│   ├── scheduler.ts     # 调度器实现
-│   └── __tests__/       # 单元测试（17个，全部通过）
-│
-├── e2e/                 # 端到端测试
-│   ├── linear-dag.test.ts              # 线性 DAG 测试（4个）
-│   ├── parallel-dag.test.ts            # 并行 DAG 测试（4个）
-│   ├── fallback-mechanism.test.ts      # Fallback 机制测试（5个）
-│   ├── interrupt-recovery.test.ts      # 中断恢复测试（5个）
-│   ├── worktree-isolation.test.ts      # Worktree 隔离测试（6个）
-│   ├── node-timeout-cancel.test.ts     # 超时取消测试（6个）
-│   └── complete-flow.test.ts           # 完整流程测试（7个）
+└── scheduler/           # 调度器模块
+    ├── types.ts         # 调度器类型定义
+    ├── scheduler.ts     # 调度器实现
+    └── __tests__/       # 单元测试（35个，包括铁律合规测试）
 ```
 
 ## 快速开始

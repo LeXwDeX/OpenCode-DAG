@@ -66,21 +66,23 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
   - 有限状态机 (FSM) 确保状态转换的确定性
   - 状态持久化到 SQLite
   - 支持断点恢复
-- **测试覆盖**: 34 个单元测试
+  - 铁律 #17/#18/#19 合规(事件广播、持久化优先、终态保护)
+- **测试覆盖**: 64 个单元测试(含铁律合规测试)
 
 #### 模块 2: Group Manager (分组管理器)
 **实现路径**: `src/dag/group-manager/`
 - **核心职责**: 管理 DAG 的拓扑结构和节点依赖关系
 - **核心概念**:
-  - **Group**: 节点集合，支持嵌套形成树状结构
-  - **Branch**: 执行分支，支持多分支并行
-  - **Dependency**: 节点间的依赖关系，形成有向无环图 (DAG)
-  - **Fallback**: 备用方案，节点失败时自动触发
+  - **Group**: 节点集合,支持嵌套形成树状结构
+  - **Branch**: 执行分支,支持多分支并行
+  - **Dependency**: 节点间的依赖关系,形成有向无环图 (DAG)
+  - **Fallback**: 备用方案,节点失败时自动触发
 - **关键特性**:
-  - 邻接表表示 DAG 结构，优化依赖查询性能
+  - 邻接表表示 DAG 结构,优化依赖查询性能
   - 拓扑排序确定执行顺序
   - 循环依赖自动检测
-- **测试覆盖**: 21 个单元测试
+  - 铁律 #17/#18/#19 合规(事件广播、持久化优先、终态保护)
+- **测试覆盖**: 118 个单元测试(含铁律合规测试)
 
 #### 模块 3: Scheduler (调度器)
 **实现路径**: `src/dag/scheduler/`
@@ -99,10 +101,10 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
 
 #### 模块 4: Worktree Manager (Worktree 管理器)
 **实现路径**: `src/dag/worktree-manager/`
-- **核心职责**: 管理 Git worktree，为每个工作流提供隔离执行环境
+- **核心职责**: 管理 Git worktree,为每个工作流提供隔离执行环境
 - **核心功能**:
   - 创建 Worktree: 基于主分支创建独立工作目录
-  - 隔离保证: 每个工作流在自己的 worktree 中执行，互不干扰
+  - 隔离保证: 每个工作流在自己的 worktree 中执行,互不干扰
   - 自动清理: 工作流完成后自动删除 worktree
   - 冲突预防: 通过 worktree 隔离避免文件冲突
   - 版本控制: 保留工作流的独立 Git 历史
@@ -110,6 +112,7 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
   - 使用 Git 原生 worktree 功能
   - 可配置的清理策略
   - 工作目录命名包含工作流 ID
+  - 铁律 #17 合规(事件广播)
 - **测试覆盖**: 14 个单元测试
 
 ---
@@ -245,31 +248,17 @@ constraints:
 
 ---
 
-## 端到端测试覆盖
+## 测试统计
 
-### 测试套件
+| 模块 | 测试数 | 状态 |
+|------|--------|------|
+| state-machine | 64 | ✅ |
+| group-manager | 118 | ✅ |
+| worktree-manager | 14 | ✅ |
+| scheduler | 35 | ✅ |
+| **总计** | **231** | **✅** |
 
-| 测试套件 | 测试数 | 状态 | 描述 |
-|---------|--------|------|------|
-| 线性 DAG 工作流 | 4 | ✅ | 验证基本顺序执行 |
-| 并行节点执行 | 4 | ✅ | 验证并发机制 |
-| Fallback 机制 | 5 | ✅ | 验证失败恢复 |
-| Worktree 隔离 | 6 | ✅ | 验证隔离保证 |
-| 中断和恢复 | 5 | ✅ | 验证断点恢复 |
-| 节点超时取消 | 6 | ✅ | 验证超时处理 |
-| 完整执行流程 | 7 | ✅ | 验证端到端场景 |
-
-**总计**: 37 个 E2E 测试全部通过
-
-### 关键测试场景
-
-1. **线性执行**: A → B → C 顺序执行
-2. **并行执行**: A → (B + C) → D 并行分支
-3. **Fallback**: 节点失败后自动切换到备用方案
-4. **隔离验证**: 多个工作流的 Worktree 完全隔离
-5. **断点恢复**: 中断后可以从已完成的节点恢复
-6. **超时控制**: 超时节点被自动取消
-7. **完整流程**: 从创建到完成的全流程验证
+所有模块测试均包含铁律合规性测试,验证铁律 #17 (事件广播)、#18 (持久化优先)、#19 (终态保护) 的正确实现。
 
 ---
 
@@ -358,23 +347,14 @@ Worktree Manager: 创建隔离执行环境
 
 ```
 packages/opencode/
-├── packages/
-│   └── opencode/
-│       └── src/dag/
-│           ├── state-machine/      # 模块 1: 状态机
-│           ├── group-manager/      # 模块 2: 分组管理
-│           ├── scheduler/          # 模块 3: 调度器
-│           ├── worktree-manager/   # 模块 4: Worktree 管理
-│           ├── e2e/                # 端到端测试
-│           ├── README.md           # 模块文档
-│           └── ARCHITECTURE.md     # 架构说明
-│
-├── command/
-│   └── template/
-│       └── dagworker.txt           # /dagworker 命令定义
-│
-└── config/
-    └── workflow-default.yaml       # 默认配置模板
+└── src/
+    └── dag/
+        ├── state-machine/      # 模块 1: 状态机
+        ├── group-manager/      # 模块 2: 分组管理
+        ├── scheduler/          # 模块 3: 调度器
+        ├── worktree-manager/   # 模块 4: Worktree 管理
+        ├── README.md           # 模块文档
+        └── ARCHITECTURE.md     # 架构说明
 ```
 
 ---
@@ -471,8 +451,7 @@ await worktreeManager.remove(workflowId)
 **初始发布版本**，所有核心功能完整稳定：
 
 - ✅ 四个核心模块：状态机、分组管理、调度器、Worktree 管理器
-- ✅ 完整的 E2E 测试覆盖（37 个测试全部通过）
-- ✅ 单元测试覆盖所有模块（86 个测试全部通过）
+- ✅ 单元测试覆盖所有模块（231 个测试全部通过）
 - ✅ /dagworker 命令完整集成
 - ✅ 支持多分支并行执行
 - ✅ 支持 Fallback 机制
@@ -504,8 +483,7 @@ await worktreeManager.remove(workflowId)
 
 - **架构设计**: `packages/opencode/src/dag/ARCHITECTURE.md`
 - **使用指南**: `packages/opencode/src/dag/README.md`
-- **实现方案**: `docs/integration/dag-integration-plan.md`
-- **测试报告**: E2E 测试详细报告（运行 `bun test` 查看）
+- **开发者指南**: `packages/opencode/src/dag/AGENTS.md`
 
 ---
 
@@ -513,7 +491,7 @@ await worktreeManager.remove(workflowId)
 
 - **项目负责人**: OpenCode DAG Team
 - **实现人员**: AI Assistant (2026-06)
-- **测试覆盖**: 123 个测试，100% 通过
+- **测试覆盖**: 231 个测试，100% 通过
 - **代码量**: 约 10,000 行高质量 TypeScript 代码
 
 ---

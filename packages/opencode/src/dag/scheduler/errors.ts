@@ -96,3 +96,64 @@ export class WorkerCancelledError extends SchedulerError {
   workerId: string;
   reason?: string;
 }
+
+// ============================================================================
+// Iron Law 错误 — §1.3
+// ============================================================================
+
+/**
+ * Scheduler 状态持久化失败错误
+ *
+ * 铁律 #18: persister.save() 失败时抛出
+ */
+export class SchedulerStateNotPersistedError extends SchedulerError {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`Scheduler state not persisted: ${reason}`);
+    this.name = 'SchedulerStateNotPersistedError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Worker 终态违规错误
+ *
+ * 铁律 #19: 试图从终态转移时抛出
+ */
+export class WorkerTerminalViolationError extends SchedulerError {
+  readonly workerId: string;
+  readonly currentStatus: string;
+  readonly attemptedStatus: string;
+
+  constructor(workerId: string, currentStatus: string, attemptedStatus: string) {
+    super(
+      `Worker ${workerId} is in terminal state '${currentStatus}', cannot transition to '${attemptedStatus}'`
+    );
+    this.name = 'WorkerTerminalViolationError';
+    this.workerId = workerId;
+    this.currentStatus = currentStatus;
+    this.attemptedStatus = attemptedStatus;
+  }
+}
+
+/**
+ * 非法 Worker 状态转移错误
+ *
+ * 铁律 #19 (状态机不可绕过): 目标状态不在当前状态的合法转移集合中时抛出
+ */
+export class InvalidWorkerTransitionError extends SchedulerError {
+  readonly workerId: string;
+  readonly currentStatus: string;
+  readonly attemptedStatus: string;
+
+  constructor(workerId: string, currentStatus: string, attemptedStatus: string) {
+    super(
+      `Invalid worker transition for ${workerId}: ${currentStatus} -> ${attemptedStatus}`
+    );
+    this.name = 'InvalidWorkerTransitionError';
+    this.workerId = workerId;
+    this.currentStatus = currentStatus;
+    this.attemptedStatus = attemptedStatus;
+  }
+}

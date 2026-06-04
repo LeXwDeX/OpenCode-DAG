@@ -219,4 +219,276 @@ worktree-manager 完全遵守 state-machine 定义的 4 条状态机铁律：
 
 ## 4. scheduler 模块
 
-（后续模块循环时填充）
+### 4.1 模块定位
+
+scheduler 是 DAG 工作流引擎的第四个核心模块，负责根据 DAG 结构和当前状态调度节点执行。它在 state-machine（状态机）、worktree-manager（工作区管理器）和 group-manager（分组管理器）之上，提供完整的节点生命周期管理和执行调度能力。
+
+### 4.2 核心职责
+
+1. **节点状态管理**：管理节点的完整生命周期状态转换（pending → running → completed/failed）
+2. **状态持久化**：确保所有状态变更优先持久化到 SQLite，防止内存与持久层不一致
+3. **事件广播**：通过 IEventBus 广播节点状态变更事件，支持其他模块订阅和响应
+4. **执行调度**：根据 DAG 拓扑顺序和并发约束调度节点执行
+5. **错误恢复**：支持 persist 失败时的 rollback 机制，保证状态一致性
+
+### 4.3 关键接口
+
+#### IScheduler（接口定义）
+
+```typescript
+export interface IScheduler {
+  // 节点生命周期管理
+  createNode(nodeId: string, config: INodeConfig): Promise<INode>;
+  getNode(nodeId: string): Promise<INode | null>;
+  listNodes(): Promise<INode[]>;
+  updateNodeStatus(nodeId: string, newStatus: NodeStatus): Promise<void>;
+  
+  // 执行调度
+  scheduleNode(nodeId: string, executor: INodeExecutor): Promise<void>;
+  cancelNode(nodeId: string): Promise<void>;
+  
+  // 批量操作
+  cancelAllNodes(): Promise<void>;
+  
+  // 事件订阅（可选）
+  on(event: SchedulerEvent, handler: EventHandler): void;
+}
+```
+
+#### INodeExecutor（执行器接口）
+
+```typescript
+export interface INodeExecutor {
+  execute(nodeId: string, context: ExecutionContext): Promise<ExecutionResult>;
+}
+```
+
+### 4.4 铁律合规实现
+
+#### 铁律 #1: 状态机不可绕过
+
+**实现方式**：`updateNodeStatus` 方法封装所有状态转换逻辑，包括：
+- 转换合法性验证（检查 `VALID_NODE_TRANSITIONS`）
+- 终态不可逆验证（检查 `TERMINAL_NODE_STATUSES`）
+- 状态持久化（调用 `persist()`）
+- 事件广播（调用 `emit()`）
+
+**代码示例**：
+```typescript
+async updateNodeStatus(nodeId: string, newStatus: NodeStatus): Promise<void> {
+  const node = await this.getNode(nodeId);
+  if (!node) {
+    throw new NodeNotFoundError(nodeId);
+  }
+  
+  const currentStatus = node.status;
+  
+  // 1. 终态不可逆验证（铁律 #2）
+  if (TERMINAL_NODE_STATUSES.includes(currentStatus)) {
+    throw new TerminalStateViolationError(nodeId, currentStatus, newStatus);
+  }
+  
+  // 2. 转换合法性验证（铁律 #1）
+  const validNextStatuses = VALID_NODE_TRANSITIONS[currentStatus];
+  if (!validNextStatuses.includes(newStatus)) {
+    throw new InvalidStateTransitionError(nodeId, currentStatus, newStatus);
+  }
+  
+  // 3. 内存状态暂存（用于 rollback）
+  const previousStatus = node.status;
+  node.status = newStatus;
+  node.updatedAt = Date.now();
+  
+  try {
+    // 4. 状态持久化（铁律 #4）
+    await this.persist(nodeId, node);
+    
+    // 5. 事件广播（铁律 #3）
+    await this.emit({
+      type: 'scheduler.node.state_changed',
+      nodeId,
+      oldStatus: previousStatus,
+      newStatus: newStatus,
+      timestamp: Date.now()
+    });
+  } catch (error) {
+    // 6. Rollback 机制（铁律 #4 补充）
+    node.status = previousStatus;
+    throw new StateNotPersistedError(nodeId, error);
+  }
+}
+```
+
+#### 铁律 #2: 终态不可逆
+
+**实现方式**：在 `updateNodeStatus` 中检查 `TERMINAL_NODE_STATUSES`（completed, failed, cancelled, timeout）。
+
+**常量定义**：
+```typescript
+export const TERMINAL_NODE_STATUSES = [
+  NodeStatus.COMPLETED,
+  NodeStatus.FAILED,
+  NodeStatus.CANCELLED,
+  NodeStatus.TIMEOUT
+] as const;
+```
+
+#### 铁律 #3: 事件必须广播
+
+**实现方式**：所有状态变更都通过 `IEventBus.emit()` 广播事件。
+
+**事件类型**：
+```typescript
+export type SchedulerEvent = 
+  | { type: 'scheduler.node.state_changed'; nodeId: string; oldStatus: NodeStatus; newStatus: NodeStatus; timestamp: number }
+  | { type: 'scheduler.scheduled'; nodeId: string; timestamp: number }
+  | { type: 'scheduler.cancelled'; nodeId: string; timestamp: number };
+```
+
+**跨模块类型桥接**：使用 `as unknown as WorkflowEvent | NodeEvent` 桥接到 IEventBus 的泛型类型。
+
+#### 铁律 #4: 状态持久化优先
+
+**实现方式**：采用 **rollback 模式**（先更新内存，后持久化，失败时回滚）。
+
+**设计理由**：
+- 避免"持久化旧状态 → 更新内存新状态"的不一致窗口
+- 持久化失败时自动恢复内存状态
+- 参考 WorktreeManager 的成熟模式
+
+**错误处理**：
+```typescript
+export class StateNotPersistedError extends Error {
+  constructor(
+    public readonly nodeId: string,
+    public readonly originalError: Error
+  ) {
+    super(`Failed to persist state for node ${nodeId}: ${originalError.message}`);
+  }
+}
+```
+
+### 4.5 关键设计决策
+
+#### P0 修复：persist 顺序问题（rollback 模式）
+
+**问题背景**：
+初始实现采用"先调用 `persist()`，后更新 `node.status`"的顺序，导致：
+- 持久化写入的是旧状态
+- 内存中是新状态
+- 应用重启后状态回退到旧值
+
+**修复方案**：
+```typescript
+// ❌ 错误实现（初始版本）
+try {
+  await this.persist(nodeId, node);  // 持久化旧状态
+  node.status = newStatus;           // 内存更新
+} catch (error) {
+  // 持久化失败，但内存未更新，无法回滚
+}
+
+// ✅ 正确实现（rollback 模式）
+const previousStatus = node.status;
+node.status = newStatus;             // 先更新内存
+try {
+  await this.persist(nodeId, node);  // 后持久化新状态
+} catch (error) {
+  node.status = previousStatus;      // 失败时回滚
+  throw new StateNotPersistedError(nodeId, error);
+}
+```
+
+**验证方式**：通过测试验证 persist 后的状态确实是新状态。
+
+#### P1 修复：executeWorker 外部注入
+
+**问题背景**：
+初始实现在 Scheduler 内部硬编码了 `simulateExecution` 方法，导致：
+- 无法在测试中注入真实的执行逻辑
+- 无法在不同执行环境（CLI、Web）中使用不同的 executor
+- 违反了依赖注入原则（§0.1）
+
+**修复方案**：
+```typescript
+// 构造函数接受可选的 workerExecutor
+constructor(
+  private persister: IStatePersister,
+  private eventBus?: IEventBus,
+  private workerExecutor?: INodeExecutor  // 新增参数
+) {}
+
+// scheduleNode 接受外部 executor
+async scheduleNode(nodeId: string, executor: INodeExecutor): Promise<void> {
+  // 使用传入的 executor，而非内部方法
+  const result = await executor.execute(nodeId, context);
+}
+```
+
+**验证方式**：通过测试验证实用的 executor 是否被调用。
+
+### 4.6 依赖关系
+
+**上游依赖**：
+- `state-machine`：提供状态枚举（NodeStatus, WorkflowStatus）和状态转换规则（VALID_NODE_TRANSITIONS）
+- `worktree-manager`：在工作区中执行节点（可选依赖）
+
+**下游依赖**：
+- DAG 引擎核心：调用 Scheduler 的 `scheduleNode`、`updateNodeStatus` 等方法
+- 上层调度器/服务：订阅 Scheduler 事件以响应节点状态变更
+
+**依赖关系图**：
+```
+state-machine ─────┐
+                   ├──→ scheduler ──→ DAG 引擎核心
+worktree-manager ──┘            └──→ 上层调度器/服务
+```
+
+### 4.7 测试覆盖
+
+**测试套件**：35 个测试，全部通过
+
+**测试分类**：
+1. **基础功能测试**（17 个）：节点创建、状态查询、状态更新等
+2. **铁律 #1 测试**（5 个）：验证所有状态变更都经过 `updateNodeStatus`
+3. **铁律 #2 测试**（5 个）：验证终态不可逆
+4. **铁律 #3 测试**（4 个）：验证所有状态变更都广播事件
+5. **铁律 #4 测试**（3 个）：验证状态持久化优先和 rollback 机制
+6. **P0/P1 修复验证**（1 个）：验证 executeWorker 外部注入
+
+### 4.8 关键文件
+
+- `src/dag/scheduler/types.ts`：类型定义（NodeStatus, SchedulerEvent, INode, INodeExecutor 等）
+- `src/dag/scheduler/errors.ts`：错误类型（NodeNotFoundError, TerminalStateViolationError, StateNotPersistedError 等）
+- `src/dag/scheduler/IScheduler.ts`：接口定义（IScheduler）
+- `src/dag/scheduler/Scheduler.ts`：实现类（Scheduler）
+- `src/dag/scheduler/__tests__/Scheduler.test.ts`：测试套件
+
+### 4.9 使用示例
+
+```typescript
+// 1. 初始化 Scheduler
+const persister = new StatePersister(sqliteDatabase);
+const eventBus = new EventBus();
+const executor = new MyNodeExecutor();
+
+const scheduler = new Scheduler(persister, eventBus, executor);
+
+// 2. 创建节点
+const node = await scheduler.createNode('node-1', {
+  name: 'Build Project',
+  command: 'npm run build',
+  timeout: 30000
+});
+
+// 3. 调度执行
+await scheduler.scheduleNode('node-1', executor);
+
+// 4. 监听事件
+eventBus.on('scheduler.node.state_changed', (event) => {
+  console.log(`Node ${event.nodeId}: ${event.oldStatus} → ${event.newStatus}`);
+});
+
+// 5. 取消节点
+await scheduler.cancelNode('node-1');
+```
