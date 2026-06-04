@@ -16,16 +16,18 @@ import { WorkflowStatus } from '../state-machine/types';
 describe('DAG Cross-Module Smoke Tests', () => {
   describe('Mock Smoke Test (Pre-Commit)', () => {
     it('should instantiate and integrate state machine with event bus', () => {
+      const events: any[] = [];
       const mockEventBus: IEventBus = {
-        events: [],
-        emit: (event: any) => { mockEventBus.events!.push(event); },
-        subscribe: () => {},
-        unsubscribe: () => {},
+        emit: (event: any) => { events.push(event); },
+        subscribe: () => () => {},
+        destroy: () => {},
       };
 
       const mockPersister: IStatePersister = {
-        saveState: async () => {},
-        loadState: async () => null,
+        writeWorkflowState: async () => {},
+        readWorkflowState: async () => null,
+        deleteWorkflowState: async () => {},
+        listWorkflowIds: async () => [],
       };
 
       const sm = new WorkflowStateMachine('test-workflow', mockEventBus, mockPersister);
@@ -36,11 +38,11 @@ describe('DAG Cross-Module Smoke Tests', () => {
     });
 
     it('should instantiate GroupManager with EventBus and optional dependencies', () => {
+      const events: any[] = [];
       const mockEventBus: IEventBus = {
-        events: [],
-        emit: (event: any) => { mockEventBus.events!.push(event); },
-        subscribe: () => {},
-        unsubscribe: () => {},
+        emit: (event: any) => { events.push(event); },
+        subscribe: () => () => {},
+        destroy: () => {},
       };
 
       const gm = new GroupManager(mockEventBus);
@@ -48,11 +50,11 @@ describe('DAG Cross-Module Smoke Tests', () => {
     });
 
     it('should instantiate WorktreeManager with EventBus and optional persister', () => {
+      const events: any[] = [];
       const mockEventBus: IEventBus = {
-        events: [],
-        emit: (event: any) => { mockEventBus.events!.push(event); },
-        subscribe: () => {},
-        unsubscribe: () => {},
+        emit: (event: any) => { events.push(event); },
+        subscribe: () => () => {},
+        destroy: () => {},
       };
 
       const mockPersister: IWorktreePersister = {
@@ -65,16 +67,18 @@ describe('DAG Cross-Module Smoke Tests', () => {
     });
 
     it('should integrate state machine with group manager', async () => {
+      const events: any[] = [];
       const mockEventBus: IEventBus = {
-        events: [],
-        emit: (event: any) => { mockEventBus.events!.push(event); },
-        subscribe: () => {},
-        unsubscribe: () => {},
+        emit: (event: any) => { events.push(event); },
+        subscribe: () => () => {},
+        destroy: () => {},
       };
 
       const mockPersister: IStatePersister = {
-        saveState: async () => {},
-        loadState: async () => null,
+        writeWorkflowState: async () => {},
+        readWorkflowState: async () => null,
+        deleteWorkflowState: async () => {},
+        listWorkflowIds: async () => [],
       };
 
       const mockGroupPersister: IGroupStatePersister = {
@@ -91,11 +95,11 @@ describe('DAG Cross-Module Smoke Tests', () => {
     });
 
     it('should integrate worktree manager with group manager', () => {
+      const events: any[] = [];
       const mockEventBus: IEventBus = {
-        events: [],
-        emit: (event: any) => { mockEventBus.events!.push(event); },
-        subscribe: () => {},
-        unsubscribe: () => {},
+        emit: (event: any) => { events.push(event); },
+        subscribe: () => () => {},
+        destroy: () => {},
       };
 
       const mockPersister: IWorktreePersister = {
