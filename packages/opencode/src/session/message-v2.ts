@@ -28,6 +28,27 @@ import { MessageError } from "./message-error"
 import { AuthError, OutputLengthError } from "./message-error"
 export { AuthError, OutputLengthError } from "./message-error"
 
+/**
+ * Check if an OpenAI Fernet encrypted reasoning token has expired.
+ * Fernet format (after base64 decode): byte 0 = version (0x80),
+ * bytes 1-8 = big-endian uint64 Unix timestamp (seconds).
+ * Returns true if expired or unparseable (safe degradation).
+ */
+function isEncryptedContentExpired(token: string, maxAgeMs: number = 25 * 60 * 1000): boolean {
+  try {
+    // Fernet tokens use base64url-safe encoding; normalize to standard base64
+    const normalized = token.replace(/-/g, "+").replace(/_/g, "/")
+    const binary = Buffer.from(normalized, "base64")
+    if (binary.length < 9) return true
+    // Bytes 1-8: big-endian uint64 timestamp in seconds
+    const timestampSec = binary.readBigUInt64BE(1)
+    const ageMs = Date.now() - Number(timestampSec) * 1000
+    return ageMs > maxAgeMs
+  } catch {
+    return true
+  }
+}
+
 /** Error shape thrown by Bun's fetch() when gzip/br decompression fails mid-stream */
 interface FetchDecompressionError extends Error {
   code: "ZlibError"
@@ -865,6 +886,24 @@ export const toModelMessagesEffect = Effect.fnUntraced(function* (
                 text: part.text,
               })
             continue
+          }
+          // Strip expired encrypted content to avoid API 400 errors on replay
+          const metadata = part.metadata
+          if (metadata?.openai?.reasoningEncryptedContent) {
+            const token = metadata.openai.reasoningEncryptedContent as string
+            if (isEncryptedContentExpired(token)) {
+              const { openai, ...rest } = metadata
+              const { reasoningEncryptedContent, ...openaiRest } = openai as Record<string, unknown>
+              const cleanedMetadata = Object.keys(openaiRest).length > 0
+                ? { ...rest, openai: openaiRest }
+                : Object.keys(rest).length > 0 ? rest : undefined
+              assistantMessage.parts.push({
+                type: "reasoning",
+                text: part.text,
+                providerMetadata: cleanedMetadata,
+              })
+              continue
+            }
           }
           assistantMessage.parts.push({
             type: "reasoning",
