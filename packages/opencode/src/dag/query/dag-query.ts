@@ -13,7 +13,7 @@ import { Effect } from 'effect';
 
 /**
  * DAG Query 实现
- * 
+ *
  * 提供灵活的 DAG 图查询能力
  */
 export class DAGQuery implements IDAGQuery {
@@ -47,6 +47,14 @@ export class DAGQuery implements IDAGQuery {
   }
 
   /**
+   * 获取工作流下所有节点
+   */
+  async getNodes(workflowId: string): Promise<DAGNodeSession[]> {
+    const program = this.sessionService.listNodes(workflowId);
+    return Effect.runPromise(program);
+  }
+
+  /**
    * 获取工作流的执行时间线
    */
   async getExecutionTimeline(workflowId: string): Promise<ExecutionTimeline> {
@@ -55,49 +63,47 @@ export class DAGQuery implements IDAGQuery {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
-    const nodesProgram = this.sessionService.listNodes(workflowId);
-    const nodes = await Effect.runPromise(nodesProgram);
-
+    const nodes = await this.getNodes(workflowId);
     const events: TimelineEvent[] = [];
     const nodeExecutionTimes: Record<string, NodeExecutionTime> = {};
 
-    // 构建时间线事件
     for (const node of nodes) {
-      if (node.started_at) {
+      const startTime = node.start_time;
+      const endTime = node.end_time ?? (node.completed_at ? Number(node.completed_at) : null);
+
+      if (startTime != null) {
         events.push({
           type: 'node_start',
           nodeId: node.node_id,
-          timestamp: node.started_at,
-          metadata: { nodeName: node.config.name }
+          timestamp: startTime,
         });
       }
 
-      if (node.completed_at) {
+      if (endTime != null) {
+        const eventType: TimelineEvent['type'] = node.status === 'failed' ? 'node_failed' : 'node_complete';
         events.push({
-          type: 'node_complete',
+          type: eventType,
           nodeId: node.node_id,
-          timestamp: node.completed_at,
-          duration: node.duration_ms,
-          metadata: { nodeName: node.config.name, status: node.status }
+          timestamp: endTime,
+          duration: startTime != null ? endTime - startTime : undefined,
         });
-
-        nodeExecutionTimes[node.node_id] = {
-          nodeId: node.node_id,
-          nodeName: node.config.name,
-          startTime: node.started_at || 0,
-          endTime: node.completed_at,
-          duration: (node.duration_ms || 0) / 1000,
-          status: node.status as any
-        };
       }
+
+      nodeExecutionTimes[node.node_id] = {
+        nodeId: node.node_id,
+        nodeName: node.config.name,
+        startTime: startTime ?? 0,
+        endTime: endTime ?? 0,
+        duration: startTime != null && endTime != null ? endTime - startTime : 0,
+        status: node.status === 'queued' ? 'running' : node.status as NodeExecutionTime['status'],
+      };
     }
 
-    // 按时间排序
     events.sort((a, b) => a.timestamp - b.timestamp);
 
-    const startTime = events.length > 0 ? events[0].timestamp : Date.now();
-    const endTime = workflow.completed_at;
-    const totalDuration = endTime ? (endTime - startTime) / 1000 : 0;
+    const startTime = workflow.start_time;
+    const endTime = workflow.end_time;
+    const totalDuration = endTime != null ? endTime - startTime : Date.now() - startTime;
 
     return {
       workflowId,
@@ -105,7 +111,7 @@ export class DAGQuery implements IDAGQuery {
       endTime,
       events,
       totalDuration,
-      nodeExecutionTimes
+      nodeExecutionTimes,
     };
   }
 
@@ -123,10 +129,10 @@ export class DAGQuery implements IDAGQuery {
   async searchWorkflows(query: string): Promise<DAGWorkflowSession[]> {
     const workflows = await this.listWorkflows();
     const lowerQuery = query.toLowerCase();
-    
-    return workflows.filter(w => 
-      w.name.toLowerCase().includes(lowerQuery) ||
-      (w.description && w.description.toLowerCase().includes(lowerQuery))
+
+    return workflows.filter(w =>
+      w.config.name.toLowerCase().includes(lowerQuery) ||
+      (w.config.description && w.config.description.toLowerCase().includes(lowerQuery))
     );
   }
 
@@ -139,29 +145,29 @@ export class DAGQuery implements IDAGQuery {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
-    const nodesProgram = this.sessionService.listNodes(workflowId);
-    const nodes = await Effect.runPromise(nodesProgram);
+    const nodes = await this.getNodes(workflowId);
 
     const totalNodes = nodes.length;
     const totalEdges = nodes.reduce((acc, node) => acc + node.dependencies.length, 0);
-    
-    // 计算关键路径长度
+
     const criticalPathLength = this.calculateCriticalPathLength(nodes);
-    
-    // 计算并行度
+
     const parallelismDegree = Math.min(
-      workflow.maxConcurrency,
+      workflow.config.max_concurrency,
       nodes.filter(n => n.status === 'running' || n.status === 'pending').length
     );
 
-    // 估算完成时间（基于已完成节点的平均时间）
-    const completedNodes = nodes.filter(n => n.completed_at);
+    const completedNodes = nodes.filter(n => n.completed_at != null);
     const avgNodeTime = completedNodes.length > 0
-      ? completedNodes.reduce((acc, n) => acc + (n.completed_at! - (n.started_at || 0)), 0) / completedNodes.length
+      ? completedNodes.reduce((acc, n) => {
+          const start = n.start_time ?? 0;
+          const end = n.completed_at ? Number(n.completed_at) : 0;
+          return acc + (end - start);
+        }, 0) / completedNodes.length
       : 0;
-    
+
     const pendingNodes = nodes.filter(n => n.status === 'pending' || n.status === 'running').length;
-    const estimatedCompletionTime = (avgNodeTime * pendingNodes) / parallelismDegree;
+    const estimatedCompletionTime = parallelismDegree > 0 ? (avgNodeTime * pendingNodes) / parallelismDegree : 0;
 
     return {
       totalNodes,
@@ -176,22 +182,20 @@ export class DAGQuery implements IDAGQuery {
    * 获取节点依赖关系
    */
   async getNodeDependencies(workflowId: string): Promise<NodeDependency[]> {
-    const nodesProgram = this.sessionService.listNodes(workflowId);
-    const nodes = await Effect.runPromise(nodesProgram);
+    const nodes = await this.getNodes(workflowId);
 
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
     const dependencies: NodeDependency[] = [];
 
     for (const node of nodes) {
-      const dependents = nodes.filter(n => n.dependencies.includes(node.id));
-      
+      const dependents = nodes.filter(n => n.dependencies.includes(node.node_id));
+
       dependencies.push({
-        nodeId: node.id,
+        nodeId: node.node_id,
         nodeName: node.config.name,
         dependencies: node.dependencies,
-        dependents: dependents.map(d => d.id),
+        dependents: dependents.map(d => d.node_id),
         status: node.status,
-        completedAt: node.completed_at
+        completedAt: node.completed_at != null ? Number(node.completed_at) : undefined
       });
     }
 
@@ -207,8 +211,7 @@ export class DAGQuery implements IDAGQuery {
       throw new Error(`Workflow ${workflowId} not found`);
     }
 
-    const nodesProgram = this.sessionService.listNodes(workflowId);
-    const nodes = await Effect.runPromise(nodesProgram);
+    const nodes = await this.getNodes(workflowId);
 
     const totalNodes = nodes.length;
     const completedNodes = nodes.filter(n => n.status === 'completed').length;
@@ -216,14 +219,16 @@ export class DAGQuery implements IDAGQuery {
     const failedNodes = nodes.filter(n => n.status === 'failed').length;
     const currentRunning = nodes.filter(n => n.status === 'running').length;
 
-    // 计算平均节点执行时间
-    const completedNodesWithTime = nodes.filter(n => n.completed_at && n.completed_at > 0);
+    const completedNodesWithTime = nodes.filter(n => n.completed_at != null && Number(n.completed_at) > 0);
     const averageNodeDuration = completedNodesWithTime.length > 0
-      ? completedNodesWithTime.reduce((acc, n) => acc + (n.completed_at! - (n.started_at || 0)), 0) / completedNodesWithTime.length
+      ? completedNodesWithTime.reduce((acc, n) => {
+          const start = n.start_time ?? 0;
+          const end = n.completed_at ? Number(n.completed_at) : 0;
+          return acc + (end - start);
+        }, 0) / completedNodesWithTime.length
       : 0;
 
-    // 计算总经过时间
-    const startTime = workflow.started_at;
+    const startTime = workflow.start_time;
     const currentTime = Date.now();
     const totalElapsedTime = startTime ? (currentTime - startTime) / 1000 : 0;
 
@@ -243,7 +248,7 @@ export class DAGQuery implements IDAGQuery {
    * 计算图的关键路径长度（最长路径）
    */
   private calculateCriticalPathLength(nodes: DAGNodeSession[]): number {
-    const nodeMap = new Map(nodes.map(n => [n.id, n]));
+    const nodeMap = new Map(nodes.map(n => [n.node_id, n]));
     const memo = new Map<string, number>();
 
     const getLongestPath = (nodeId: string): number => {
@@ -255,7 +260,9 @@ export class DAGQuery implements IDAGQuery {
       if (!node) return 0;
 
       if (node.dependencies.length === 0) {
-        const duration = node.completed_at ? (node.completed_at - (node.started_at || 0)) : 0;
+        const start = node.start_time ?? 0;
+        const end = node.completed_at ? Number(node.completed_at) : 0;
+        const duration = node.completed_at ? end - start : 0;
         memo.set(nodeId, duration);
         return duration;
       }
@@ -266,19 +273,21 @@ export class DAGQuery implements IDAGQuery {
         maxLength = Math.max(maxLength, depLength);
       }
 
-      const nodeDuration = node.completed_at ? (node.completed_at - (node.started_at || 0)) : 0;
+      const start = node.start_time ?? 0;
+      const end = node.completed_at ? Number(node.completed_at) : 0;
+      const nodeDuration = node.completed_at ? end - start : 0;
       const totalLength = maxLength + nodeDuration;
-      
+
       memo.set(nodeId, totalLength);
       return totalLength;
     };
 
     let maxPathLength = 0;
     for (const node of nodes) {
-      const pathLength = getLongestPath(node.id);
+      const pathLength = getLongestPath(node.node_id);
       maxPathLength = Math.max(maxPathLength, pathLength);
     }
 
-    return maxPathLength / 1000; // 转换为秒
+    return maxPathLength / 1000;
   }
 }
