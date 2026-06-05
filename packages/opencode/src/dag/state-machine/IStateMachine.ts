@@ -21,6 +21,7 @@ import type {
   NodeEvent,
   WorkflowTransition,
   NodeTransition,
+  FallbackTrigger,
 } from './types';
 import type { WorktreeEvent } from '../worktree-manager/types';
 import type { GroupEvent } from '../group-manager/types';
@@ -224,6 +225,16 @@ export interface NodeTransitionParams {
   output?: any;
   /** Diff 统计（仅 completed 状态） */
   diffStats?: any;
+  /** Fallback 触发原因（用于 node.failed 事件 payload） */
+  fallbackTrigger?: FallbackTrigger;
+  /** 重试计数（用于 node.restarted 事件 payload） */
+  retryCount?: number;
+  /** 中止原因（用于 node.aborted 事件 payload） */
+  abortReason?: string;
+  /** 上游失败节点名（用于 node.skipped 事件 payload，经 transition 路径） */
+  upstreamFailedNode?: string;
+  /** 工作树路径（用于 node.started 事件 payload） */
+  worktreePath?: string;
 }
 
 /**
@@ -347,18 +358,6 @@ export interface INodeStateMachine {
    * @returns 是否全部完成
    */
   areAllRequiredNodesCompleted(requiredNodes: string[]): Promise<boolean>;
-
-  /**
-   * 获取下一个可调度的节点
-   * 
-   * 规则：
-   * 1. 状态为 PENDING
-   * 2. 所有依赖节点已完成
-   * 3. 按拓扑排序返回
-   * 
-   * @returns 可调度的节点名称列表
-   */
-  getSchedulableNodes(): Promise<string[]>;
 }
 
 // ============================================================================

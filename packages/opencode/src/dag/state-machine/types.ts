@@ -319,6 +319,11 @@ export type NodeEvent =
       workflow_id: string;
       node_name: string;
       timeout_sec: number;
+    }
+  | {
+      type: 'node.reset';
+      workflow_id: string;
+      node_name: string;
     };
 
 // ============================================================================

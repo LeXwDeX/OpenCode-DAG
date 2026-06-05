@@ -108,6 +108,7 @@ export type {
 
 export { EventBus } from './EventBus';
 export { WorkflowStateMachine } from './WorkflowStateMachine';
+export { NodeStateMachine } from './NodeStateMachine';
 
 // ============================================================================
 // 5. 常量导出
