@@ -436,14 +436,15 @@ export function isWorkflowTerminalStatus(status: WorkflowStatus): boolean {
 export function isNodeTerminalStatus(
   status: NodeStatus | ShadowNodeStatus
 ): boolean {
-  return [
+  const terminals: ReadonlySet<NodeStatus | ShadowNodeStatus> = new Set([
     NodeStatus.COMPLETED,
     NodeStatus.FAILED,
     NodeStatus.ABORTED,
     NodeStatus.SKIPPED,
     ShadowNodeStatus.COMPLETED,
     ShadowNodeStatus.FAILED,
-  ].includes(status as any);
+  ]);
+  return terminals.has(status);
 }
 
 /**

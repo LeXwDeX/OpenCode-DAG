@@ -14,6 +14,7 @@ import type {
   WorkflowStatus,
   NodeStatus,
   ShadowNodeStatus,
+  DiffStats,
   WorkflowStateData,
   NodeStateData,
   BranchStateData,
@@ -222,9 +223,9 @@ export interface NodeTransitionParams {
   reason?: string;
   timestamp?: Date;
   /** 节点输出（仅 completed 状态） */
-  output?: any;
+  output?: unknown;
   /** Diff 统计（仅 completed 状态） */
-  diffStats?: any;
+  diffStats?: DiffStats;
   /** Fallback 触发原因（用于 node.failed 事件 payload） */
   fallbackTrigger?: FallbackTrigger;
   /** 重试计数（用于 node.restarted 事件 payload） */

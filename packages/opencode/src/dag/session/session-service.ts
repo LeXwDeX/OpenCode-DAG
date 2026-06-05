@@ -153,7 +153,7 @@ export function buildSessionNodeEvent(
 export interface CreateWorkflowInput {
   name: string
   chatSessionId: string
-  config: any
+  config: any  // JSON blob — typed as DAGConfig internally when persisted
   metadata?: Record<string, unknown>
 }
 
@@ -162,8 +162,8 @@ export interface CreateNodeInput {
   name: string
   nodeName: string
   nodeType: string
-  config: any
-  inputData?: any
+  config: any  // JSON blob — typed as DAGNodeConfig internally when persisted
+  inputData?: unknown
   timeoutMs?: number
   retryCount?: number
   maxRetries?: number
@@ -173,8 +173,8 @@ export interface CreateNodeInput {
 export interface UpdateNodeStatusInput {
   sessionId: string
   status: DAGNodeStatus
-  outputData?: any
-  error?: any
+  outputData?: unknown
+  error?: unknown
 }
 
 export interface CreateViolationInput {
