@@ -190,7 +190,7 @@ export interface CreateViolationInput {
 // Service Interface
 // ============================================================================
 
-export interface DAGSessionService {
+export interface IDAGSessionService {
   readonly createWorkflow: (input: CreateWorkflowInput) => Effect.Effect<DAGWorkflowSession>
   readonly getWorkflow: (workflowId: string) => Effect.Effect<DAGWorkflowSession | undefined>
   readonly listWorkflowsByChatSession: (chatSessionId: string) => Effect.Effect<DAGWorkflowSession[]>
@@ -212,7 +212,7 @@ export interface DAGSessionService {
 
 const make = Effect.gen(function* () {
   
-  const createWorkflow: DAGSessionService["createWorkflow"] = (input) =>
+  const createWorkflow: IDAGSessionService["createWorkflow"] = (input) =>
     Effect.sync(() => {
       const now = Date.now()
       const workflowId = `workflow_${now}_${Math.random().toString(36).slice(2)}`
@@ -250,7 +250,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const getWorkflow: DAGSessionService["getWorkflow"] = (workflowId) =>
+  const getWorkflow: IDAGSessionService["getWorkflow"] = (workflowId) =>
     Effect.sync(() => {
       let result: any[] = []
       
@@ -279,7 +279,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const listWorkflowsByChatSession: DAGSessionService["listWorkflowsByChatSession"] = (chatSessionId) =>
+  const listWorkflowsByChatSession: IDAGSessionService["listWorkflowsByChatSession"] = (chatSessionId) =>
     Effect.sync(() => {
       let results: any[] = []
       
@@ -307,7 +307,7 @@ const make = Effect.gen(function* () {
       }))
     })
   
-  const updateWorkflowStatus: DAGSessionService["updateWorkflowStatus"] = (workflowId, status) =>
+  const updateWorkflowStatus: IDAGSessionService["updateWorkflowStatus"] = (workflowId, status) =>
     Effect.sync(() => {
       const now = Date.now()
       
@@ -366,7 +366,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const createNode: DAGSessionService["createNode"] = (input) =>
+  const createNode: IDAGSessionService["createNode"] = (input) =>
     Effect.sync(() => {
       const now = Date.now()
       const nodeId = `node_${now}_${Math.random().toString(36).slice(2)}`
@@ -418,7 +418,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const getNode: DAGSessionService["getNode"] = (nodeId) =>
+  const getNode: IDAGSessionService["getNode"] = (nodeId) =>
     Effect.sync(() => {
       let result: any[] = []
       
@@ -453,7 +453,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const listNodes: DAGSessionService["listNodes"] = (workflowId) =>
+  const listNodes: IDAGSessionService["listNodes"] = (workflowId) =>
     Effect.sync(() => {
       let results: any[] = []
       
@@ -487,7 +487,7 @@ const make = Effect.gen(function* () {
       }))
     })
   
-  const updateNodeStatus: DAGSessionService["updateNodeStatus"] = (input) =>
+  const updateNodeStatus: IDAGSessionService["updateNodeStatus"] = (input) =>
     Effect.sync(() => {
       const now = Date.now()
       
@@ -557,7 +557,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const createViolation: DAGSessionService["createViolation"] = (input) =>
+  const createViolation: IDAGSessionService["createViolation"] = (input) =>
     Effect.sync(() => {
       const now = new Date().toISOString()
       const violationId = `violation_${Date.now()}_${Math.random().toString(36).slice(2)}`
@@ -588,7 +588,7 @@ const make = Effect.gen(function* () {
       }
     })
   
-  const listViolations: DAGSessionService["listViolations"] = (workflowId) =>
+  const listViolations: IDAGSessionService["listViolations"] = (workflowId) =>
     Effect.sync(() => {
       let results: any[] = []
       Database.use((db) => {
@@ -607,7 +607,7 @@ const make = Effect.gen(function* () {
       }))
     })
   
-  const listAllWorkflows: DAGSessionService["listAllWorkflows"] = () =>
+  const listAllWorkflows: IDAGSessionService["listAllWorkflows"] = () =>
     Effect.sync(() => {
       let results: any[] = []
       Database.use((db) => {
@@ -644,7 +644,7 @@ const make = Effect.gen(function* () {
     createViolation,
     listViolations,
     listAllWorkflows,
-  } satisfies DAGSessionService
+  } satisfies IDAGSessionService
 })
 
 export const DAGSessionService = {

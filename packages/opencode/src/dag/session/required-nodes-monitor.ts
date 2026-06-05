@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { EventBus } from "../state-machine/EventBus"
-import type { DAGSessionService } from "./session-service"
+import type { IDAGSessionService } from "./session-service"
 import type { DAGNodeConfig } from "./types"
 
 /**
@@ -12,7 +12,7 @@ import type { DAGNodeConfig } from "./types"
 export class RequiredNodesMonitor {
   constructor(
     private eventBus: EventBus,
-    private sessionService: DAGSessionService,
+    private sessionService: IDAGSessionService,
   ) {}
 
   /**

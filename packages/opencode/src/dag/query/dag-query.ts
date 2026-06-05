@@ -8,7 +8,7 @@ import type {
   WorkflowStatistics
 } from './query-types';
 import type { DAGWorkflowSession, DAGNodeStatus, DAGNodeSession } from '../session/types';
-import { DAGSessionService } from '../session/session-service';
+import type { IDAGSessionService } from '../session/session-service';
 import { Effect } from 'effect';
 
 /**
@@ -17,7 +17,7 @@ import { Effect } from 'effect';
  * 提供灵活的 DAG 图查询能力
  */
 export class DAGQuery implements IDAGQuery {
-  constructor(private sessionService: DAGSessionService) {}
+  constructor(private sessionService: IDAGSessionService) {}
 
   /**
    * 列出所有工作流

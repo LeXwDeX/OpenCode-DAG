@@ -2,7 +2,7 @@ import { Effect } from "effect"
 import { Database } from "@/storage/db"
 import { eq, desc, gte, lte } from "drizzle-orm"
 import { dagViolations } from "../persistence/schema"
-import type { DAGSessionService } from "./session-service"
+import type { IDAGSessionService } from "./session-service"
 import type { DAGViolation } from "./types"
 
 /**
@@ -12,7 +12,7 @@ import type { DAGViolation } from "./types"
  * Supports filtering, counting, and history queries.
  */
 export class ViolationQueryAPI {
-  constructor(private sessionService: DAGSessionService) {}
+  constructor(private sessionService: IDAGSessionService) {}
 
   /**
    * Query all violations for a specific workflow
@@ -173,7 +173,7 @@ function mapRow(row: any): DAGViolation {
  * Create violation query API instance
  */
 export function createViolationQueryAPI(
-  sessionService: DAGSessionService
+  sessionService: IDAGSessionService
 ): ViolationQueryAPI {
   return new ViolationQueryAPI(sessionService)
 }

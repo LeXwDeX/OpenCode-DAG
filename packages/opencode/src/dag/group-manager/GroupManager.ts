@@ -364,6 +364,7 @@ export class GroupManager implements IGroupManager {
     branchId: string,
     status: BranchStatus
   ): Promise<void> {
+    const group = this.requireGroup(groupId);
     const branch = await this.getBranch(groupId, branchId);
     const oldStatus = branch.status;
 
@@ -383,6 +384,7 @@ export class GroupManager implements IGroupManager {
       );
     }
 
+    // 应用状态变更（用于持久化时使用相同分支引用）
     branch.status = status;
     if (status === 'running' && !branch.started_at) {
       branch.started_at = Date.now();
@@ -391,6 +393,12 @@ export class GroupManager implements IGroupManager {
       branch.completed_at = Date.now();
     }
 
+    // 持久化优先（与 updateGroupStatus 模式一致 —— 持久化整棵 group 含 branches）
+    if (this.statePersister) {
+      await this.statePersister.saveGroupState(groupId, group);
+    }
+
+    // 铁律 #17：广播事件
     this.emit({
       type: 'branch.state_changed',
       groupId,
