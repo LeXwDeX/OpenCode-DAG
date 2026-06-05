@@ -394,7 +394,122 @@ eventBus.subscribe('state_changed', (event) => {
 - [ ] 无循环依赖（检查 §5 依赖关系图）
 - [ ] 错误处理完整（捕获所有可能的错误类型）
 
-### 测试覆盖
+### 测试覆盖（最新）
+
+### 当前测试状态（262 pass, 5 skip）
+
+#### state-machine (64 tests)
+- StateMachine 核心逻辑
+- 状态转移规则验证
+- 铁律 #1-#4 合规性验证
+
+#### scheduler (43 tests)
+- Scheduler.test.ts: 35 tests（单元测试）
+- Scheduler.Integration.test.ts: 8 tests（集成测试）
+  - 3 节点串行工作流
+  - 3 节点并行工作流
+  - 复杂 DAG 工作流（菱形依赖图）
+  - Worker 失败场景
+  - 事件广播
+  - 持久化验证
+  - 并发限制
+  - 多工作流交叉调度
+
+#### worktree-manager (15 tests)
+- Worktree 创建/删除
+- 并行 Worktree 管理
+- 状态更新和事件广播
+
+#### group-manager (39 tests)
+- Group 创建/删除
+- 依赖图管理
+- 状态更新和事件广播
+
+#### group-manager (4 tests)
+- Group 依赖关系验证
+- 并行 Group 执行
+- 状态转移验证
+
+#### dag-integration (24 tests)
+- 串行工作流集成
+- 并行工作流集成
+- 复杂 DAG 集成
+- 多模块协同测试
+
+#### dag-smoke (5 tests)
+- 快速烟雾测试
+- Mock 环境下的基础功能验证
+
+#### dag-deepseek-e2e (10 tests)
+- 真实 deepseek-v4-pro 模型调用
+- 真实工作流执行
+- 事件广播验证
+- 持久化验证
+
+### 测试文件清单
+
+```
+packages/opencode/src/dag/
+├── state-machine/
+│   └── state-machine.test.ts          (64 tests)
+├── scheduler/
+│   ├── Scheduler.test.ts              (35 tests)
+│   └── __tests__/
+│       └── Scheduler.Integration.test.ts  (8 tests)
+├── worktree-manager/
+│   └── __tests__/
+│       └── WorktreeManager.test.ts    (15 tests)
+├── group-manager/
+│   ├── GroupManager.test.ts           (39 tests)
+│   └── __tests__/
+│       └── GroupManager.test.ts       (4 tests)
+├── __tests__/
+│   ├── dag-integration.test.ts        (24 tests)
+│   ├── dag-smoke.test.ts              (5 tests)
+│   └── dag-deepseek-e2e.test.ts       (10 tests)
+└── AGENTS.md  (本文档)
+```
+
+### DAG 集成测试要求
+
+使用 Mock Worker Executor 模拟真实的任务执行：
+
+```typescript
+interface MockWorkerExecutorState {
+  executionHistory: Array<{
+    workerId: string;
+    startTime: number;
+    endTime: number;
+    status: string;
+  }>;
+  failureScenarios: Set<string>;
+  delayScenarios: Map<string, number>;
+}
+```
+
+**功能**：
+- 支持成功、失败、超时场景
+- 追踪执行历史
+- 支持依赖关系模拟
+
+### CI 集成配置
+
+GitHub Actions CI 已在 `.github/workflows/test.yml` 中配置：
+- DAG smoke 测试（mock 环境）
+- DAG 集成测试（真实实现）
+- DAG 模块单元测试
+- DAG 覆盖率报告生成
+
+**CI 运行命令**：
+```bash
+# 运行所有 DAG 测试
+cd packages/opencode && bun test src/dag
+
+# 运行特定测试套件
+bun test src/dag/scheduler/__tests__/Scheduler.Integration.test.ts
+bun test src/dag/__tests__/dag-smoke.test.ts
+bun test src/dag/__tests__/dag-integration.test.ts
+```
 - [ ] 所有铁律有对应测试
 - [ ] 测试涵盖成功和失败场景
 - [ ] 使用 SQLite mock 进行集成测试
