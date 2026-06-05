@@ -64,6 +64,7 @@ export interface DAGSessionService {
   readonly createWorkflow: (input: CreateWorkflowInput) => Effect.Effect<DAGWorkflowSession>
   readonly getWorkflow: (workflowId: string) => Effect.Effect<DAGWorkflowSession | undefined>
   readonly listWorkflowsByChatSession: (chatSessionId: string) => Effect.Effect<DAGWorkflowSession[]>
+  readonly listAllWorkflows: () => Effect.Effect<DAGWorkflowSession[]>
   readonly updateWorkflowStatus: (workflowId: string, status: DAGWorkflowStatus) => Effect.Effect<void>
   
   readonly createNode: (input: CreateNodeInput) => Effect.Effect<DAGNodeSession>
@@ -386,11 +387,8 @@ const make = Effect.gen(function* () {
   const listViolations: DAGSessionService["listViolations"] = (workflowId) =>
     Effect.sync(() => {
       let results: any[] = []
-      
       Database.use((db) => {
-        results = db.select().from(dagViolations)
-          .where(eq(dagViolations.workflow_id, workflowId))
-          .all()
+        results = db.select().from(dagViolations).where(eq(dagViolations.workflow_id, workflowId)).all()
       })
       
       return results.map(row => ({
@@ -405,6 +403,31 @@ const make = Effect.gen(function* () {
       }))
     })
   
+  const listAllWorkflows: DAGSessionService["listAllWorkflows"] = () =>
+    Effect.sync(() => {
+      let results: any[] = []
+      Database.use((db) => {
+        results = db.select().from(dagWorkflows).all()
+      })
+      
+      return results.map(row => ({
+        id: row.workflow_id,
+        chat_session_id: row.chat_session_id,
+        config: row.config ? JSON.parse(row.config) : {},
+        metadata: row.metadata ? JSON.parse(row.metadata) : {},
+        status: row.status as DAGWorkflowStatus,
+        start_time: row.started_at ?? row.created_at,
+        end_time: row.completed_at,
+        current_node: null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        completed_at: row.completed_at,
+        duration_ms: row.completed_at ? row.completed_at - (row.started_at ?? row.created_at) : null,
+        node_sessions: {},
+        violations: [],
+      }))
+    })
+  
   return {
     createWorkflow,
     getWorkflow,
@@ -416,6 +439,7 @@ const make = Effect.gen(function* () {
     updateNodeStatus,
     createViolation,
     listViolations,
+    listAllWorkflows,
   } satisfies DAGSessionService
 })
 
