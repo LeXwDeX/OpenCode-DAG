@@ -214,7 +214,6 @@ interface INodeStateMachine {
   incrementPushCount(nodeName: string, reason: string): Promise<void>
   incrementFallbackCount(nodeName: string): Promise<void>
   areAllRequiredNodesCompleted(requiredNodes: string[]): Promise<boolean>
-  getSchedulableNodes(): Promise<string[]>
 }
 ```
 
