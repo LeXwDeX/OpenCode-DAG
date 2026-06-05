@@ -396,7 +396,7 @@ eventBus.subscribe('state_changed', (event) => {
 
 ### 测试覆盖（最新）
 
-### 当前测试状态（262 pass, 5 skip）
+### 当前测试状态（273 pass, 5 skip, 0 fail）
 
 #### state-machine (64 tests)
 - StateMachine 核心逻辑
@@ -446,28 +446,42 @@ eventBus.subscribe('state_changed', (event) => {
 - 事件广播验证
 - 持久化验证
 
+#### e2e/worker-execution (16 tests) ★ 新增
+- 串行工作流（A → B → C）
+- 并行工作流（A → [B, C] → D）
+- 复杂 DAG（多汇聚菱形图）
+- Worker 失败处理（状态、错误传播、并发场景）
+- 并发控制（executeWorkers 分批）
+- Worker 状态转换（铁律 #17/#18/#19 验证）
+- 多工作流交叉调度
+- Worktree 集成
+
 ### 测试文件清单
 
 ```
 packages/opencode/src/dag/
 ├── state-machine/
-│   └── state-machine.test.ts          (64 tests)
+│   └── state-machine.test.ts              (64 tests)
 ├── scheduler/
-│   ├── Scheduler.test.ts              (35 tests)
+│   ├── Scheduler.test.ts                  (35 tests)
 │   └── __tests__/
 │       └── Scheduler.Integration.test.ts  (8 tests)
 ├── worktree-manager/
 │   └── __tests__/
-│       └── WorktreeManager.test.ts    (15 tests)
+│       └── WorktreeManager.test.ts        (15 tests)
 ├── group-manager/
-│   ├── GroupManager.test.ts           (39 tests)
+│   ├── GroupManager.test.ts               (39 tests)
 │   └── __tests__/
-│       └── GroupManager.test.ts       (4 tests)
+│       └── GroupManager.test.ts           (4 tests)
 ├── __tests__/
-│   ├── dag-integration.test.ts        (24 tests)
-│   ├── dag-smoke.test.ts              (5 tests)
-│   └── dag-deepseek-e2e.test.ts       (10 tests)
+│   ├── dag-integration.test.ts            (24 tests)
+│   ├── dag-smoke.test.ts                  (5 tests)
+│   ├── dag-deepseek-e2e.test.ts           (10 tests)
+│   └── e2e/
+│       └── worker-execution.test.ts       (16 tests) ★ 新增
 └── AGENTS.md  (本文档)
+
+总计: 273 tests across 9 files
 ```
 
 ### DAG 集成测试要求
