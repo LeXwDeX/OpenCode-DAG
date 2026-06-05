@@ -12,7 +12,6 @@ function workflowStatusIcon(status: DAGWorkflowStatus): string {
     case "completed":
       return "✓"
     case "failed":
-    case "failed_with_violations":
       return "✗"
     case "cancelled":
       return "⊘"

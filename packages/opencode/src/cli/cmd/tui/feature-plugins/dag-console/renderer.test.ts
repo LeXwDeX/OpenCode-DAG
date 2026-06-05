@@ -47,7 +47,6 @@ function workflowStatusColor(status: DAGWorkflowStatus, theme: typeof THEME) {
     case "completed":
       return theme.success
     case "failed":
-    case "failed_with_violations":
       return theme.error
     case "cancelled":
       return theme.textMuted
@@ -174,9 +173,8 @@ describe("DAG Renderer — workflowStatusColor", () => {
     expect(workflowStatusColor("completed", THEME)).toBe(THEME.success)
   })
 
-  it("should return error color for failed and failed_with_violations", () => {
+  it("should return error color for failed", () => {
     expect(workflowStatusColor("failed", THEME)).toBe(THEME.error)
-    expect(workflowStatusColor("failed_with_violations", THEME)).toBe(THEME.error)
   })
 
   it("should return muted color for cancelled and pending", () => {

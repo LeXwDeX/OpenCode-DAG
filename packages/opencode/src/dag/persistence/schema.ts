@@ -62,39 +62,39 @@ export const dagViolations = sqliteTable("dag_violation", {
 // DAG Workflow History Table
 // ============================================================================
 export const dagWorkflowHistory = sqliteTable("dag_workflow_history", {
-  historyId: text("history_id").primaryKey(),
-  workflowId: text("workflow_id").notNull(),
-  chatSessionId: text("chat_session_id").notNull(),
-  action: text("action").notNull(),
-  oldState: text("old_state", { mode: "json" }),
-  newState: text("new_state", { mode: "json" }),
-  changeDetails: text("change_details", { mode: "json" }),
-  changedBy: text("changed_by"),
-  createdAt: integer("created_at").notNull(),
+  history_id: text().primaryKey(),
+  workflow_id: text().notNull(),
+  chat_session_id: text().notNull(),
+  action: text().notNull(),
+  old_state: text({ mode: "json" }),
+  new_state: text({ mode: "json" }),
+  change_details: text({ mode: "json" }),
+  changed_by: text(),
+  created_at: integer().notNull(),
 })
 
 // ============================================================================
 // DAG Node Execution Log Table
 // ============================================================================
 export const dagNodeLogs = sqliteTable("dag_node_log", {
-  logId: text("log_id").primaryKey(),
-  nodeId: text("node_id").notNull(),
-  workflowId: text("workflow_id").notNull(),
-  chatSessionId: text("chat_session_id").notNull(),
-  logLevel: text("log_level").notNull(),
-  logMessage: text("log_message").notNull(),
-  logData: text("log_data", { mode: "json" }),
-  executionPhase: text("execution_phase"),
-  createdAt: integer("created_at").notNull(),
+  log_id: text().primaryKey(),
+  node_id: text().notNull(),
+  workflow_id: text().notNull(),
+  chat_session_id: text().notNull(),
+  log_level: text().notNull(),
+  log_message: text().notNull(),
+  log_data: text({ mode: "json" }),
+  execution_phase: text(),
+  created_at: integer().notNull(),
 })
 
 // ============================================================================
 // Schema Version Table
 // ============================================================================
 export const dagSchemaVersions = sqliteTable("dag_schema_version", {
-  version: integer("version").primaryKey(),
-  appliedAt: integer("applied_at").notNull(),
-  description: text("description"),
+  version: integer().primaryKey(),
+  applied_at: integer().notNull(),
+  description: text(),
 })
 
 // ============================================================================

@@ -388,9 +388,10 @@ describe('Type Definitions', () => {
   });
 
   describe('NodeStatus', () => {
-    it('应该包含所有 7 种状态', () => {
-      expect(Object.values(NodeStatus)).toHaveLength(7);
+    it('应该包含所有 8 种状态', () => {
+      expect(Object.values(NodeStatus)).toHaveLength(8);
       expect(NodeStatus.PENDING).toBe(NodeStatus.PENDING);
+      expect(NodeStatus.QUEUED).toBe(NodeStatus.QUEUED);
       expect(NodeStatus.RUNNING).toBe(NodeStatus.RUNNING);
       expect(NodeStatus.PAUSED).toBe(NodeStatus.PAUSED);
       expect(NodeStatus.COMPLETED).toBe(NodeStatus.COMPLETED);

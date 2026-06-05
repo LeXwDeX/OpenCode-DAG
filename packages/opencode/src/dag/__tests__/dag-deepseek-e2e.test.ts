@@ -20,6 +20,25 @@ import * as os from 'os';
 const DEFAULT_TIMEOUT = 30000;
 
 // ============================================================================
+// 重试辅助函数：应对外部 LLM API 不稳定
+// ============================================================================
+async function retry<T>(fn: () => Promise<T>, maxRetries: number = 2, delayMs: number = 2000): Promise<T> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < maxRetries) {
+        console.log(`[RETRY] Attempt ${attempt + 1}/${maxRetries} failed, retrying in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw lastError;
+}
+
+// ============================================================================
 // 加载 deepseek-v4-pro 配置
 // ============================================================================
 
@@ -48,6 +67,39 @@ async function loadDeepSeekConfig() {
 }
 
 // ============================================================================
+// retry 辅助函数单元测试
+// ============================================================================
+
+describe('retry helper', () => {
+  it('should return result on first success', async () => {
+    const result = await retry(() => Promise.resolve('ok'));
+    expect(result).toBe('ok');
+  });
+
+  it('should retry on failure and succeed', async () => {
+    let attempts = 0;
+    const result = await retry(() => {
+      attempts++;
+      if (attempts < 2) throw new Error('transient');
+      return Promise.resolve('recovered');
+    }, 2, 10);
+    expect(result).toBe('recovered');
+    expect(attempts).toBe(2);
+  });
+
+  it('should throw after exhausting retries', async () => {
+    let attempts = 0;
+    await expect(
+      retry(() => {
+        attempts++;
+        return Promise.reject(new Error('always fails'));
+      }, 2, 10),
+    ).rejects.toThrow('always fails');
+    expect(attempts).toBe(3); // initial + 2 retries
+  });
+});
+
+// ============================================================================
 // 端到端测试
 // ============================================================================
 
@@ -74,11 +126,11 @@ describe('DAG End-to-End Test with deepseek-v4-pro', () => {
     it('应该能够调用 deepseek-v4-pro 并返回结果', async () => {
       const model = deepseekClient(config.modelId);
       
-      const result = await generateText({
+      const result = await retry(() => generateText({
         model,
         prompt: '用 100 字描述什么是 DAG 工作流',
         maxOutputTokens: 200,
-      });
+      }));
 
       expect(result.text).toBeDefined();
       // LLM 可能返回 reasoning_content 而非 text，检查两者
@@ -93,20 +145,24 @@ describe('DAG End-to-End Test with deepseek-v4-pro', () => {
     it('应该能够处理复杂推理请求', async () => {
       const model = deepseekClient(config.modelId);
       
-      const result = await generateText({
+      const result = await retry(() => generateText({
         model,
         prompt: '分析一个 3 节点的 DAG 工作流的依赖关系和执行顺序',
         maxOutputTokens: 500,
-      });
+      }));
 
       expect(result.text).toBeDefined();
-      // 复杂推理可能返回简短响应，只要有内容即可
-      expect(result.text.length).toBeGreaterThan(0);
+      // reasoning 模型可能将回答放在 reasoning_content 而非 content
+      const textContent = result.text || '';
+      const reasoningContent = result.reasoning ? String(result.reasoning) : '';
+      const hasReasoning = reasoningContent.length > 0;
+      const hasText = textContent.length > 0;
+      expect(hasText || hasReasoning).toBe(true);
       expect(result.usage).toBeDefined();
       expect(result.usage.totalTokens).toBeGreaterThan(0);
-      console.log(`\n[TEST] 推理结果长度: ${result.text.length}`);
+      console.log(`\n[TEST] text 长度: ${textContent.length}, reasoning 长度: ${reasoningContent.length}`);
       console.log(`[INFO] Token 使用: ${result.usage.totalTokens}`);
-      console.log(`[TEST] 推理结果预览: ${result.text.substring(0, 150)}...`);
+      console.log(`[TEST] 推理结果预览: ${(textContent || reasoningContent).substring(0, 150)}...`);
     }, DEFAULT_TIMEOUT);
   });
 
@@ -126,11 +182,11 @@ describe('DAG End-to-End Test with deepseek-v4-pro', () => {
       // 执行每个节点
       const results = [];
       for (const node of workflow.nodes) {
-        const result = await generateText({
+        const result = await retry(() => generateText({
           model,
           prompt: `执行工作流节点: ${node}`,
           maxOutputTokens: 200,
-        });
+        }));
         
         results.push({
           nodeId: node,
@@ -155,11 +211,11 @@ describe('DAG End-to-End Test with deepseek-v4-pro', () => {
       const parallelNodes = ['task-a', 'task-b', 'task-c'];
       
       const promises = parallelNodes.map(async (node) => {
-        const result = await generateText({
+        const result = await retry(() => generateText({
           model,
           prompt: `执行并行任务: ${node}`,
           maxOutputTokens: 150,
-        });
+        }));
         
         return {
           nodeId: node,
@@ -192,11 +248,11 @@ describe('DAG End-to-End Test with deepseek-v4-pro', () => {
       
       // 管理工作流状态
       for (const state of states) {
-        const result = await generateText({
+        const result = await retry(() => generateText({
           model,
           prompt: `工作流 ${workflowId} 状态变更: ${state}`,
           maxOutputTokens: 100,
-        });
+        }));
         
         expect(result.text).toBeDefined();
       }

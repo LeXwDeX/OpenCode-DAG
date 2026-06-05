@@ -27,6 +27,13 @@ import type {
   DAGNodeConfig,
   DAGViolation,
 } from '../types';
+import {
+  getValidNextSessionWorkflowStatuses,
+  getValidNextSessionNodeStatuses,
+  buildSessionWorkflowEvent,
+  buildSessionNodeEvent,
+  setEventBus,
+} from '../session-service';
 
 // ============================================================================
 // Test Helper: Build mock DAG config
@@ -104,15 +111,13 @@ describe('DAG Session Types - Shape Validation', () => {
         'completed',
         'failed',
         'cancelled',
-        'failed_with_violations',
       ];
-      expect(statuses).toHaveLength(6);
+      expect(statuses).toHaveLength(5);
       expect(statuses).toContain('pending');
       expect(statuses).toContain('running');
       expect(statuses).toContain('completed');
       expect(statuses).toContain('failed');
       expect(statuses).toContain('cancelled');
-      expect(statuses).toContain('failed_with_violations');
     });
   });
 
@@ -178,10 +183,6 @@ describe('DAG Session Logic - Terminal Status Guards', () => {
 
     it('should return true for cancelled workflows', () => {
       expect(isTerminalStatus('cancelled')).toBe(true);
-    });
-
-    it('should return true for failed_with_violations workflows', () => {
-      expect(isTerminalStatus('failed_with_violations')).toBe(true);
     });
 
     it('should return false for pending workflows', () => {
@@ -374,11 +375,10 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
   describe('Workflow status transitions', () => {
     const validTransitions = {
       'pending': ['running', 'cancelled', 'failed'],
-      'running': ['completed', 'failed', 'cancelled', 'failed_with_violations'],
+      'running': ['completed', 'failed', 'cancelled'],
       'completed': [], // terminal
       'failed': [], // terminal
       'cancelled': [], // terminal
-      'failed_with_violations': [], // terminal
     };
 
     it('pending can transition to running', () => {
@@ -409,9 +409,6 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
       expect(validTransitions['cancelled']).toHaveLength(0);
     });
 
-    it('failed_with_violations is terminal (no outgoing transitions)', () => {
-      expect(validTransitions['failed_with_violations']).toHaveLength(0);
-    });
   });
 
   describe('Node status transitions', () => {
@@ -628,4 +625,162 @@ describe('DAG Session - Violation Type Coverage', () => {
     expect(violation.type).toBe('timeout_exceeded');
     expect(violation.severity).toBe('error');
   });
+});
+
+// ============================================================================
+// 10. Iron Law Enforcement Helpers (Session Layer)
+// ============================================================================
+
+describe('Iron Law #1/#2: getValidNextSessionWorkflowStatuses', () => {
+  it('pending can transition to running, failed, cancelled', () => {
+    const valid = getValidNextSessionWorkflowStatuses('pending')
+    expect(valid).toContain('running')
+    expect(valid).toContain('failed')
+    expect(valid).toContain('cancelled')
+  })
+
+  it('running can transition to completed, failed, cancelled', () => {
+    const valid = getValidNextSessionWorkflowStatuses('running')
+    expect(valid).toContain('completed')
+    expect(valid).toContain('failed')
+    expect(valid).toContain('cancelled')
+  })
+
+  it('completed is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionWorkflowStatuses('completed')).toEqual([])
+  })
+
+  it('failed is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionWorkflowStatuses('failed')).toEqual([])
+  })
+
+  it('cancelled is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionWorkflowStatuses('cancelled')).toEqual([])
+  })
+});
+
+describe('Iron Law #1/#2: getValidNextSessionNodeStatuses', () => {
+  it('pending can transition to queued, running, skipped', () => {
+    const valid = getValidNextSessionNodeStatuses('pending')
+    expect(valid).toContain('queued')
+    expect(valid).toContain('running')
+    expect(valid).toContain('skipped')
+  })
+
+  it('queued can transition to running, skipped', () => {
+    const valid = getValidNextSessionNodeStatuses('queued')
+    expect(valid).toContain('running')
+    expect(valid).toContain('skipped')
+  })
+
+  it('running can transition to completed, failed', () => {
+    const valid = getValidNextSessionNodeStatuses('running')
+    expect(valid).toContain('completed')
+    expect(valid).toContain('failed')
+  })
+
+  it('completed is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionNodeStatuses('completed')).toEqual([])
+  })
+
+  it('failed is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionNodeStatuses('failed')).toEqual([])
+  })
+
+  it('skipped is terminal (Iron Law #2)', () => {
+    expect(getValidNextSessionNodeStatuses('skipped')).toEqual([])
+  })
+});
+
+describe('Iron Law #3: buildSessionWorkflowEvent', () => {
+  const now = 1717610000000
+  const wfId = 'wf_test_event'
+
+  it('running transition emits workflow.started', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'pending', 'running', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.started')
+    expect(event!.workflow_id).toBe(wfId)
+  })
+
+  it('completed transition emits workflow.completed', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'running', 'completed', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.completed')
+  })
+
+  it('failed transition emits workflow.failed', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'running', 'failed', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.failed')
+  })
+
+  it('cancelled transition emits workflow.cancelled', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'running', 'cancelled', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.cancelled')
+  })
+
+  it('pending transition emits null (no event)', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'running', 'pending', now)
+    expect(event).toBeNull()
+  })
+});
+
+describe('Iron Law #3: buildSessionNodeEvent', () => {
+  const wfId = 'wf_test_node_event'
+  const nodeId = 'node_123'
+  const nodeName = 'implement'
+
+  it('running transition emits node.started', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'running')
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.started')
+    expect((event as any).node_name).toBe(nodeName)
+  })
+
+  it('completed transition emits node.completed', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'completed')
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.completed')
+  })
+
+  it('failed transition emits node.failed', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'failed')
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.failed')
+  })
+
+  it('skipped transition emits node.skipped', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'skipped')
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.skipped')
+  })
+
+  it('pending transition emits null (no event)', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'pending')
+    expect(event).toBeNull()
+  })
+
+  it('queued transition emits null (no event)', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'queued')
+    expect(event).toBeNull()
+  })
+});
+
+describe('setEventBus', () => {
+  it('should be callable without errors', () => {
+    expect(() => setEventBus(undefined)).not.toThrow()
+  })
+
+  it('should accept a mock event bus', () => {
+    const mockBus = {
+      subscribe: () => () => {},
+      emit: () => {},
+      destroy: () => {},
+    }
+    expect(() => setEventBus(mockBus)).not.toThrow()
+    // cleanup
+    setEventBus(undefined)
+  })
 });

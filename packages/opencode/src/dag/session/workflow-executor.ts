@@ -1,6 +1,9 @@
 import { Effect } from "effect"
-import type { WorkflowEngine, WorkflowStatus } from "./workflow-engine"
+import type { WorkflowEngine, WorkflowStatusSnapshot } from "./workflow-engine"
 import type { DAGConfig } from "./types"
+
+/** DAG executor default max runtime: 10 minutes */
+const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000
 
 /**
  * DAG 工作流执行器接口
@@ -20,7 +23,7 @@ export interface WorkflowExecutor {
   /**
    * 获取当前工作流状态
    */
-  getStatus(workflowId: string): Effect.Effect<WorkflowStatus, never, never>
+  getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never, never>
   
   /**
    * 执行单个就绪节点（用于测试或手动控制）
@@ -30,39 +33,47 @@ export interface WorkflowExecutor {
 
 /**
  * 创建 WorkflowExecutor 实例
+ * 
+ * 执行循环包含超时保护和 cancelled 检测：
+ * - 超过 maxRuntimeMs 自动中止
+ * - 工作流状态变为 cancelled 立即退出
  */
 export function createWorkflowExecutor(
   engine: WorkflowEngine,
-  config: DAGConfig
+  config: DAGConfig,
+  maxRuntimeMs: number = DEFAULT_MAX_RUNTIME_MS
 ): WorkflowExecutor {
   return {
     start(workflowId: string): Effect.Effect<void, never, never> {
       return Effect.gen(function* () {
+        const startedAt = Date.now()
+        
         while (true) {
-          // 获取当前状态
-          const status = yield* engine.getWorkflowStatus(workflowId)
-          
-          // 检查是否完成
-          if (status.status === "completed" || status.status === "failed") {
+          // Timeout guard: abort if max runtime exceeded
+          if (Date.now() - startedAt > maxRuntimeMs) {
+            yield* engine.cancelWorkflow(workflowId)
+            console.error(`Workflow ${workflowId} exceeded max runtime (${maxRuntimeMs}ms), cancelled`)
             break
           }
           
-          // 调度就绪节点
-          yield* engine.scheduleReadyNodes(workflowId)
+          const status = yield* engine.getWorkflowStatus(workflowId)
           
-          // 等待一段时间（避免忙等待）
+          // Terminal state check: completed / failed / cancelled
+          if (status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
+            break
+          }
+          
+          yield* engine.scheduleReadyNodes(workflowId)
           yield* Effect.sleep(100)
         }
       })
     },
     
-    getStatus(workflowId: string): Effect.Effect<WorkflowStatus, never, never> {
+    getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never, never> {
       return engine.getWorkflowStatus(workflowId)
     },
     
     executeReadyNode(workflowId: string, nodeId: string): Effect.Effect<unknown, Error, never> {
-      // 这个方法的实现需要访问节点执行器
-      // 暂时抛出未实现错误
       return Effect.die(new Error("executeReadyNode not yet implemented"))
     }
   }

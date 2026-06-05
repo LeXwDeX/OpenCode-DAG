@@ -46,6 +46,8 @@ export enum WorkflowStatus {
 export enum NodeStatus {
   /** 等待上游依赖完成 */
   PENDING = 'pending',
+  /** 依赖已满足，等待执行槽位 */
+  QUEUED = 'queued',
   /** agent session 正在执行 */
   RUNNING = 'running',
   /** 节点暂停（仅当 workflow paused 时传播） */

@@ -19,21 +19,19 @@ export class RequiredNodesMonitor {
    * 注册事件监听器
    */
   register() {
-    // 1. 监听节点状态变化 - 如果 required node 被 skipped
-    this.eventBus.subscribe("node.status_changed", (event: any) => {
-      if (event?.data?.status === "skipped") {
-        const nodeId = event.data.nodeId
-        const workflowId = event.data.workflowId
-        
-        if (nodeId && workflowId) {
-          this.handleNodeSkipped(nodeId, workflowId)
-        }
+    // 1. 监听节点跳过事件 - 如果 required node 被 skipped
+    this.eventBus.subscribe("node.skipped", (event: any) => {
+      const nodeName = event?.node_name
+      const workflowId = event?.workflow_id
+
+      if (nodeName && workflowId) {
+        this.handleNodeSkipped(nodeName, workflowId)
       }
     })
 
     // 2. 监听 workflow 完成 - 检查所有 required nodes 是否完成
     this.eventBus.subscribe("workflow.completed", (event: any) => {
-      const workflowId = event?.data?.workflow_id
+      const workflowId = event?.workflow_id
       
       if (workflowId) {
         this.checkAllRequiredNodesCompleted(workflowId)
@@ -44,7 +42,7 @@ export class RequiredNodesMonitor {
   /**
    * 处理节点被跳过的情况
    */
-  private async handleNodeSkipped(nodeId: string, workflowId: string) {
+  private async handleNodeSkipped(nodeName: string, workflowId: string) {
     try {
       // 1. 获取 workflow
       const workflow = await Effect.runPromise(
@@ -56,18 +54,19 @@ export class RequiredNodesMonitor {
         return
       }
 
-      // 2. 获取节点
-      const node = await Effect.runPromise(
-        this.sessionService.getNode(nodeId)
+      // 2. 按节点配置名查找 session 层节点（event 带的是 node_name，非 session 层 node_id）
+      const allNodes = await Effect.runPromise(
+        this.sessionService.listNodes(workflowId)
       )
+      const node = allNodes.find(n => (n.config as any)?.name === nodeName)
       
       if (!node) {
-        console.error(`Node ${nodeId} not found in workflow ${workflowId}`)
+        console.error(`Node "${nodeName}" not found in workflow ${workflowId}`)
         return
       }
 
-      // 3. 检查这是否是 required node
-      const isRequired = workflow.config.nodes.find((n) => n.id === nodeId)
+      // 3. 检查这是否是 required node（按配置名匹配）
+      const isRequired = workflow.config.nodes.find((n) => n.name === nodeName)
 
       if (!isRequired) {
         return // 不是 required node，忽略
@@ -80,21 +79,21 @@ export class RequiredNodesMonitor {
           nodeId: node.node_id,
           type: "required_node_skipped",
           severity: "error",
-          message: `Required node ${node.node_id} was skipped`,
+          message: `Required node "${nodeName}" was skipped`,
         })
       )
 
-      // 5. 更新 workflow 状态为 failed_with_violations
+      // 5. 更新 workflow 状态为 failed
       await Effect.runPromise(
         this.sessionService.updateWorkflowStatus(
           workflowId,
-          "failed_with_violations"
+          "failed"
         )
       )
       
-      console.warn(`Required node ${node.node_id} was skipped in workflow ${workflowId}`)
+      console.warn(`Required node "${nodeName}" was skipped in workflow ${workflowId}`)
     } catch (error) {
-      console.error(`Failed to handle skipped node ${nodeId}:`, error)
+      console.error(`Failed to handle skipped node ${nodeName}:`, error)
     }
   }
 
@@ -156,13 +155,8 @@ export class RequiredNodesMonitor {
           )
         }
 
-        // 6. 更新 workflow 状态为 failed_with_violations
-        await Effect.runPromise(
-          this.sessionService.updateWorkflowStatus(
-            workflowId,
-            "failed_with_violations"
-          )
-        )
+        // 6. workflow 已 completed（终态不可逆），仅通过 violation 记录追踪
+        //    不再尝试 updateWorkflowStatus — completed→failed 违反铁律 #2
       }
     } catch (error) {
       console.error(`Failed to check required nodes for workflow ${workflowId}:`, error)

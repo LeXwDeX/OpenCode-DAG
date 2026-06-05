@@ -9,7 +9,7 @@ CREATE TABLE dag_workflow (
   chat_session_id TEXT NOT NULL,                   -- Reference to OpenCode session
   workflow_name TEXT NOT NULL,                     -- Human-readable name
   config TEXT NOT NULL,                             -- JSON: complete workflow config
-  status TEXT NOT NULL DEFAULT 'pending',           -- pending | running | completed | failed | cancelled | failed_with_violations
+  status TEXT NOT NULL DEFAULT 'pending',           -- pending | running | completed | failed | cancelled
   current_progress TEXT,                            -- JSON: progress snapshot
   metadata TEXT,                                    -- JSON: additional metadata
   created_at INTEGER NOT NULL,                     -- Unix timestamp (ms)
@@ -33,28 +33,28 @@ CREATE INDEX idx_dag_workflow_created_at
 -- ============================================================================
 -- DAG Node Table
 -- ============================================================================
+-- NOTE: Column names aligned with drizzle schema.ts (runtime source of truth).
+-- SQL file is a reference/migration script; actual schema is applied via drizzle-kit.
 CREATE TABLE dag_node (
   node_id TEXT PRIMARY KEY,                        -- node_<timestamp>_<random>
   workflow_id TEXT NOT NULL,                        -- Reference to workflow
-  chat_session_id TEXT NOT NULL,                    -- Denormalized for easier querying
-  node_name TEXT NOT NULL,                          -- Human-readable name
-  node_type TEXT NOT NULL,                          -- 'code' | 'review' | 'test' | etc.
   config TEXT NOT NULL,                             -- JSON: node-specific config
   status TEXT NOT NULL DEFAULT 'pending',           -- pending | running | completed | failed | cancelled | skipped
-  input_data TEXT,                                  -- JSON: input payload
-  output_data TEXT,                                 -- JSON: output payload
-  error_message TEXT,                               -- Error message if failed
-  error_stack TEXT,                                 -- Error stack trace if failed
+  output TEXT,                                      -- JSON: output payload
+  error_info TEXT,                                  -- JSON: error details if failed
   retry_count INTEGER NOT NULL DEFAULT 0,           -- Number of retries performed
   max_retries INTEGER NOT NULL DEFAULT 3,           -- Maximum allowed retries
   timeout_ms INTEGER,                               -- Node timeout in milliseconds
   required_nodes TEXT,                              -- JSON array: required node IDs
-  dependency_nodes TEXT,                            -- JSON array: dependency node IDs
-  created_at INTEGER NOT NULL,                     -- Unix timestamp (ms)
-  updated_at INTEGER NOT NULL,                     -- Unix timestamp (ms)
-  started_at INTEGER,                              -- Unix timestamp (ms)
-  completed_at INTEGER,                            -- Unix timestamp (ms)
-  duration_ms INTEGER,                             -- Execution duration (ms)
+  dependencies TEXT,                                -- JSON array: dependency node IDs
+  metadata TEXT,                                    -- JSON: additional metadata
+  start_time INTEGER,                               -- Unix timestamp (ms) when execution started
+  end_time INTEGER,                                 -- Unix timestamp (ms) when execution ended
+  parent_node TEXT,                                 -- Parent node ID (for nested nodes)
+  duration_ms INTEGER,                              -- Execution duration (ms)
+  created_at INTEGER NOT NULL,                      -- Unix timestamp (ms)
+  updated_at INTEGER NOT NULL,                      -- Unix timestamp (ms)
+  completed_at INTEGER,                             -- Unix timestamp (ms)
   FOREIGN KEY (workflow_id) REFERENCES dag_workflow(workflow_id)
     ON DELETE CASCADE
 );
@@ -62,10 +62,6 @@ CREATE TABLE dag_node (
 -- Index for querying nodes by workflow (JOIN optimization)
 CREATE INDEX idx_dag_node_workflow 
   ON dag_node(workflow_id);
-
--- Index for querying nodes by chat session (cross-module queries)
-CREATE INDEX idx_dag_node_chat_session 
-  ON dag_node(chat_session_id);
 
 -- Index for querying nodes by status (for filtering)
 CREATE INDEX idx_dag_node_status 

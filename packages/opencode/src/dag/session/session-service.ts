@@ -15,6 +15,136 @@ import type {
   DAGViolationType,
   DAGViolationSeverity,
 } from "./types"
+import type { IEventBus } from "../state-machine/IStateMachine"
+import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
+import { FallbackTrigger } from "../state-machine/types"
+
+// ============================================================================
+// Iron Law Enforcement: Module-Level Event Bus & Validation Helpers
+// ============================================================================
+
+let _eventBus: IEventBus | undefined
+
+/**
+ * Inject an IEventBus for state-change event broadcasting (Iron Law #3).
+ * Optional — if not set, no events are emitted (graceful degradation).
+ */
+export function setEventBus(bus: IEventBus | undefined): void {
+  _eventBus = bus
+}
+
+/**
+ * Session-layer valid next workflow statuses (Iron Law #1/#2).
+ * Terminal states: completed, failed, cancelled — no outgoing transitions.
+ */
+export function getValidNextSessionWorkflowStatuses(
+  currentStatus: DAGWorkflowStatus
+): DAGWorkflowStatus[] {
+  switch (currentStatus) {
+    case "pending":
+      return ["running", "failed", "cancelled"]
+    case "running":
+      return ["completed", "failed", "cancelled"]
+    case "completed":
+    case "failed":
+    case "cancelled":
+      return []
+    default:
+      return []
+  }
+}
+
+/**
+ * Session-layer valid next node statuses (Iron Law #1/#2).
+ * Terminal states: completed, failed, skipped — no outgoing transitions.
+ */
+export function getValidNextSessionNodeStatuses(
+  currentStatus: DAGNodeStatus
+): DAGNodeStatus[] {
+  switch (currentStatus) {
+    case "pending":
+      return ["queued", "running", "skipped"]
+    case "queued":
+      return ["running", "skipped"]
+    case "running":
+      return ["completed", "failed"]
+    case "completed":
+    case "failed":
+    case "skipped":
+      return []
+    default:
+      return []
+  }
+}
+
+/**
+ * Build a WorkflowEvent from a session-layer status transition (Iron Law #3).
+ * Returns null when no corresponding event type exists.
+ */
+export function buildSessionWorkflowEvent(
+  workflowId: string,
+  oldStatus: DAGWorkflowStatus,
+  newStatus: DAGWorkflowStatus,
+  timestamp: number,
+  durationMs?: number,
+  accumulatedDiff?: string,
+  reason?: string,
+  failedNodes?: string[],
+): WorkflowEvent | null {
+  // Note: Session layer DAGWorkflowStatus omits "paused", so workflow.resumed is unreachable here.
+  switch (newStatus) {
+    case "running":
+      return { type: "workflow.started", workflow_id: workflowId, timestamp: new Date(timestamp) }
+    case "completed":
+      return { type: "workflow.completed", workflow_id: workflowId, duration_ms: durationMs ?? 0, accumulated_diff: accumulatedDiff ?? "" }
+    case "failed":
+      return { type: "workflow.failed", workflow_id: workflowId, reason: reason ?? "status_updated", failed_nodes: failedNodes ?? [] }
+    case "cancelled":
+      return { type: "workflow.cancelled", workflow_id: workflowId, cancelled_at: new Date(timestamp) }
+    default:
+      return null
+  }
+}
+
+/**
+ * Build a NodeEvent from a session-layer status transition (Iron Law #3).
+ * Returns null when no corresponding event type exists (e.g. pending, queued).
+ */
+/** Empty DiffStats placeholder for events where real diff data isn't available. */
+const EMPTY_DIFF_STATS: DiffStats = { files_changed_count: 0, lines_added: 0, lines_removed: 0, patch_file: "" }
+
+export function buildSessionNodeEvent(
+  workflowId: string,
+  nodeId: string,
+  nodeName: string,
+  newStatus: DAGNodeStatus,
+  opts?: {
+    worktreePath?: string
+    outputSummary?: unknown
+    diffStats?: DiffStats
+    triggerReason?: FallbackTrigger
+    upstreamFailedNode?: string
+  }
+): NodeEvent | null {
+  switch (newStatus) {
+    case "running":
+      return { type: "node.started", workflow_id: workflowId, node_name: nodeName, worktree_path: opts?.worktreePath ?? "" }
+    case "completed":
+      return {
+        type: "node.completed",
+        workflow_id: workflowId,
+        node_name: nodeName,
+        output_summary: opts?.outputSummary ?? null,
+        diff_stats: opts?.diffStats ?? EMPTY_DIFF_STATS,
+      }
+    case "failed":
+      return { type: "node.failed", workflow_id: workflowId, node_name: nodeName, trigger_reason: opts?.triggerReason ?? FallbackTrigger.EXEC_FAILED }
+    case "skipped":
+      return { type: "node.skipped", workflow_id: workflowId, node_name: nodeName, upstream_failed_node: opts?.upstreamFailedNode ?? "" }
+    default:
+      return null
+  }
+}
 
 // ============================================================================
 // Types
@@ -181,6 +311,31 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       const now = Date.now()
       
+      // ── Iron Law #1/#2: Read current status & validate transition ──
+      let currentStatus: DAGWorkflowStatus | null = null
+      let startedAt: number | null = null
+      Database.use((db) => {
+        const rows = db.select({ status: dagWorkflows.status, started_at: dagWorkflows.started_at })
+          .from(dagWorkflows)
+          .where(eq(dagWorkflows.workflow_id, workflowId))
+          .limit(1)
+          .all()
+        if (rows.length > 0) {
+          currentStatus = rows[0].status as DAGWorkflowStatus
+          startedAt = rows[0].started_at
+        }
+      })
+      
+      if (currentStatus) {
+        const validNext = getValidNextSessionWorkflowStatuses(currentStatus)
+        if (!validNext.includes(status)) {
+          throw new Error(
+            `Invalid workflow transition: ${currentStatus} → ${status}. Valid: [${validNext.join(", ")}]`
+          )
+        }
+      }
+      
+      // ── Iron Law #4: Build updates & persist ──
       const updates: any = {
         status,
         updated_at: now,
@@ -200,6 +355,15 @@ const make = Effect.gen(function* () {
           .where(eq(dagWorkflows.workflow_id, workflowId))
           .run()
       })
+      
+      // ── Iron Law #3: Emit event after successful persist ──
+      if (_eventBus && currentStatus) {
+        const durationMs = (status === "completed" || status === "failed" || status === "cancelled") && startedAt
+          ? now - startedAt
+          : undefined
+        const event = buildSessionWorkflowEvent(workflowId, currentStatus, status, now, durationMs)
+        if (event) _eventBus.emit(event)
+      }
     })
   
   const createNode: DAGSessionService["createNode"] = (input) =>
@@ -327,6 +491,38 @@ const make = Effect.gen(function* () {
     Effect.sync(() => {
       const now = Date.now()
       
+      // ── Iron Law #1/#2: Read current status & validate transition ──
+      let currentStatus: DAGNodeStatus | null = null
+      let nodeWorkflowId: string | null = null
+      let nodeName: string = input.sessionId
+      Database.use((db) => {
+        const rows = db.select({
+          status: dagNodes.status,
+          workflow_id: dagNodes.workflow_id,
+          config: dagNodes.config,
+        })
+          .from(dagNodes)
+          .where(eq(dagNodes.node_id, input.sessionId))
+          .limit(1)
+          .all()
+        if (rows.length > 0) {
+          currentStatus = rows[0].status as DAGNodeStatus
+          nodeWorkflowId = rows[0].workflow_id
+          const cfg = rows[0].config as any
+          if (cfg?.name) nodeName = cfg.name
+        }
+      })
+      
+      if (currentStatus) {
+        const validNext = getValidNextSessionNodeStatuses(currentStatus)
+        if (!validNext.includes(input.status)) {
+          throw new Error(
+            `Invalid node transition: ${input.sessionId} (${currentStatus} → ${input.status}). Valid: [${validNext.join(", ")}]`
+          )
+        }
+      }
+      
+      // ── Iron Law #4: Build updates & persist ──
       const updates: any = {
         status: input.status,
         updated_at: now,
@@ -351,6 +547,14 @@ const make = Effect.gen(function* () {
           .where(eq(dagNodes.node_id, input.sessionId))
           .run()
       })
+      
+      // ── Iron Law #3: Emit event after successful persist ──
+      if (_eventBus && nodeWorkflowId) {
+        const event = buildSessionNodeEvent(nodeWorkflowId, input.sessionId, nodeName, input.status, {
+          outputSummary: input.outputData,
+        })
+        if (event) _eventBus.emit(event)
+      }
     })
   
   const createViolation: DAGSessionService["createViolation"] = (input) =>

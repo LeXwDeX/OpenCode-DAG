@@ -16,7 +16,7 @@ import { Session } from "@/session/session"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
 import { WorkflowEngine } from "../dag/session/workflow-engine"
-import type { WorkflowStatus } from "../dag/session/workflow-engine"
+import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import type { WorkflowExecutor } from "../dag/session/workflow-executor"
 import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
@@ -53,7 +53,7 @@ function formatOutput(text: string): string {
   ].join("\n")
 }
 
-function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, status: WorkflowStatus): string {
+function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, status: WorkflowStatusSnapshot): string {
   const lines = [
     `Workflow ${workflowId}:`,
     `  Name: ${workflow.config.name}`,

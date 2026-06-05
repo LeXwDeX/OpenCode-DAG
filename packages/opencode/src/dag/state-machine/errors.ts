@@ -486,6 +486,8 @@ export function getValidNextNodeStatuses(
   // 普通节点的状态转移规则
   switch (currentStatus) {
     case NodeStatus.PENDING:
+      return [NodeStatus.QUEUED, NodeStatus.RUNNING, NodeStatus.SKIPPED];
+    case NodeStatus.QUEUED:
       return [NodeStatus.RUNNING, NodeStatus.SKIPPED];
     case NodeStatus.RUNNING:
       return [

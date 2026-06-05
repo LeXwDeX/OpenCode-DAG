@@ -4,293 +4,203 @@
 
 ## 概述
 
-DAG 工作流引擎是一个强大的任务编排系统，允许用户定义复杂的工作流，其中每个节点代表一个独立的任务，节点之间的依赖关系通过边来表示。引擎会自动处理任务的调度、执行、状态管理和错误恢复。
+DAG 工作流引擎是 opencode 的核心扩展模块，将任务编排建模为有向无环图。每个节点代表一个独立任务，节点间的依赖关系通过 `depends_on` 定义。引擎自动处理任务调度、并发执行、状态管理和错误恢复。
 
 ### 核心特性
 
-- **多分支并行执行**: 无依赖关系的节点可以并发执行
-- **依赖管理**: 自动处理节点间依赖，确保正确的执行顺序
-- **断点恢复**: 工作流中断后可以从断点继续执行
-- **Fallback 机制**: 节点失败时自动触发备用方案
-- **超时控制**: 支持节点级别的超时设置和自动取消
-- **Worktree 隔离**: 每个工作流在独立的 Git worktree 中执行，防止交叉污染
-- **状态持久化**: 工作流状态实时保存到数据库，支持恢复
+- **多分支并行执行** — 无依赖关系的节点自动并发
+- **依赖管理** — 拓扑排序保证正确执行顺序
+- **断点恢复** — 工作流中断后从断点继续
+- **Fallback 机制** — 节点失败时自动触发备用方案（push + fallback chain）
+- **Worktree 隔离** — 每个工作流在独立 Git worktree 中执行
+- **状态持久化** — Core 层 state.json + Session 层 SQLite 双层持久化
+- **四条铁律** — 状态机不可绕过、终态不可逆、事件必须广播、持久化优先
 
 ## 模块结构
 
 ```
 src/dag/
-├── state-machine/        # 状态机模块
-│   ├── types.ts         # 状态类型定义
-│   ├── machine.ts       # 状态机实现
-│   └── __tests__/       # 单元测试（34个，全部通过）
+├── state-machine/          # 状态机核心（基础层）
+│   ├── types.ts            #   WorkflowStatus / NodeStatus / 事件类型
+│   ├── errors.ts           #   转移规则验证 + 错误类型
+│   ├── WorkflowStateMachine.ts  #   Workflow 状态机实现
+│   ├── EventBus.ts         #   IEventBus 实现
+│   └── IStateMachine.ts    #   接口定义
 │
-├── group-manager/       # 分组管理模块
-│   ├── types.ts         # 分组类型定义
-│   ├── manager.ts       # 分组管理器实现
-│   └── __tests__/       # 单元测试（21个，全部通过）
+├── scheduler/              # 调度器（Worker 生命周期 + 并发控制）
+│   ├── Scheduler.ts
+│   ├── IScheduler.ts
+│   └── types.ts
 │
-├── worktree-manager/    # Worktree 管理模块
-│   ├── types.ts         # Worktree 类型定义
-│   ├── manager.ts       # Worktree 管理器实现
-│   └── __tests__/       # 单元测试（14个，全部通过）
+├── worktree-manager/       # Git worktree 管理（文件隔离）
+│   ├── WorktreeManager.ts
+│   ├── IWorktreeManager.ts
+│   └── types.ts
 │
-└── scheduler/           # 调度器模块
-    ├── types.ts         # 调度器类型定义
-    ├── scheduler.ts     # 调度器实现
-    └── __tests__/       # 单元测试（35个，包括铁律合规测试）
+├── group-manager/          # 多层级 Group 管理 + 依赖图
+│   ├── GroupManager.ts
+│   ├── IGroupManager.ts
+│   ├── DependencyGraph.ts
+│   └── IDependencyGraph.ts
+│
+├── session/                # Session 服务层（DB 持久化 + Effect 模式）
+│   ├── session-service.ts  #   DAGSessionService（CRUD + 铁律验证）
+│   ├── workflow-engine.ts  #   WorkflowEngine（调度编排）
+│   ├── required-nodes-monitor.ts  #   required_nodes 违规检测
+│   └── types.ts
+│
+├── query/                  # 只读查询 API
+│   ├── dag-query.ts        #   DAGQuery（时间线 + 统计 + 搜索）
+│   └── query-types.ts
+│
+└── persistence/            # SQLite schema（Drizzle ORM）
+    └── schema.ts           #   6 表定义
 ```
+
+### 模块依赖关系
+
+```
+state-machine ← scheduler / worktree-manager / group-manager / session ← query
+                     ↑                          ↑
+              worktree-manager ──────────→ group-manager（可选依赖）
+```
+
+**无循环依赖**，单一方向数据流。
 
 ## 快速开始
 
-### 创建一个简单的 DAG YAML 配置
+### 创建 DAG 配置
 
 ```yaml
-name: simple-linear-dag
-description: 简单的线性 DAG（A → B → C）
-
-system:
-  sandbox:
-    type: git_worktree
-    base_dir: ".task_state"
-    cleanup_on_complete: true
-    keep_on_failure: true
-  default_merge_strategy: squash
+name: ci-pipeline
 
 branches:
   - name: main
     nodes:
       - type: required
-        name: step-a
+        name: setup
         agent: implement
-        task: "执行步骤 A"
-        
+        task: "初始化环境"
+
       - type: required
-        name: step-b
+        name: build
         agent: implement
-        task: "执行步骤 B"
-        depends_on: [step-a]
-        
+        task: "构建项目"
+        depends_on: [setup]
+
       - type: required
-        name: step-c
+        name: test
         agent: implement
-        task: "执行步骤 C"
-        depends_on: [step-b]
+        task: "运行测试"
+        depends_on: [build]
 
 constraints:
   max_nodes: 20
   max_concurrency: 3
   node_timeout_sec: 600
-  max_pushes: 3
-  max_fallback_chain: 3
-  disable_worktree_isolation: false
 ```
 
-### 使用 /dagworker 命令
+### 运行测试
 
-```
-/dagworker validate ./dag.yaml
-/dagworker create my-workflow
+```bash
+# 运行所有 DAG 测试
+cd packages/opencode && bun test src/dag
+
+# 运行特定模块
+bun test src/dag/state-machine
+bun test src/dag/session
 ```
 
 ## 测试
 
-所有测试均已通过，共 **125 个 expect() 调用** 在 **7 个测试文件** 中。
+**396 pass, 5 skip, 0 fail**（跨 15 个测试文件）
 
-```bash
-# 运行所有 DAG 单元测试
-bun test packages/opencode/src/dag
+| 模块 | 测试数 |
+|------|--------|
+| state-machine | 65 |
+| scheduler | 43 |
+| worktree-manager | 15 |
+| group-manager | 43 |
+| dag-integration | 24 |
+| dag-smoke | 5 |
+| dag-e2e | 8 |
+| dag-deepseek-e2e | 8 |
+| worker-execution | 16 |
+| session-service | 98 |
+| workflow-engine | 14 |
+| required-nodes-validator | 17 |
 
-# 只运行端到端测试
-bun test packages/opencode/src/dag/e2e
-```
+## API 概览
 
-### 测试覆盖
-
-| 模块 | 测试数 | 状态 |
-|------|--------|------|
-| State Machine | 34 | ✅ 通过 |
-| Group Manager | 21 | ✅ 通过 |
-| Worktree Manager | 14 | ✅ 通过 |
-| Scheduler | 17 | ✅ 通过 |
-| E2E Tests | 37 | ✅ 通过 |
-| **Total** | **123** | ✅ 全部通过 |
-
-## API 参考
-
-### 状态机 API
+### 状态机
 
 ```typescript
-import { StateMachine } from './src/dag/state-machine'
+import { WorkflowStateMachine } from './state-machine/WorkflowStateMachine'
+import { WorkflowStatus, WorkflowTransition } from './state-machine/types'
 
-const machine = new StateMachine()
-state = machine.transition('PENDING', 'START')
-state = machine.transition('RUNNING', 'COMPLETE')
+const machine = new WorkflowStateMachine(workflowId, eventBus, persister)
+machine.initialize(WorkflowStatus.PENDING)
+
+await machine.transition({
+  fromStatus: WorkflowStatus.PENDING,
+  toStatus: WorkflowStatus.RUNNING,
+  transition: WorkflowTransition.ENGINE_START,
+})
 ```
 
-### 调度器 API
+### 调度器
 
 ```typescript
-import { Scheduler } from './src/dag/scheduler'
+import { Scheduler } from './scheduler/Scheduler'
 
-const scheduler = new Scheduler()
-await scheduler.start(workflowId, config)
-await scheduler.pause(workflowId)
-await scheduler.resume(workflowId)
-await scheduler.cancel(workflowId)
+const scheduler = new Scheduler(persister, eventBus)
+await scheduler.createWorker(id, config)
+await scheduler.executeWorkers(workerIds, context, maxConcurrency)
 ```
 
-### Worktree 管理器 API
+### Session 服务
 
 ```typescript
-import { WorktreeManager } from './src/dag/worktree-manager'
+import { DAGSessionService } from './session/session-service'
 
-const manager = new WorktreeManager()
-await manager.create(workflowId, baseDir)
-await manager.remove(workflowId)
-await manager.list()
+const service = yield* DAGSessionService.make
+const workflow = yield* service.createWorkflow({
+  name: 'my-workflow',
+  chatSessionId: 'session-123',
+  config: { /* DAG 配置 */ },
+})
+yield* service.updateWorkflowStatus(workflow.id, 'running')
 ```
+
+完整 API 参考：[API.md](./API.md)
 
 ## 约束和限制
 
-- **最大节点数**: 20
-- **最大并发数**: 3
-- **节点超时**: 600 秒
-- **最大 Push 次数**: 3
-- **最大 Fallback 链**: 3
-- **Worktree 隔离**: 默认启用
+| 约束 | 默认值 |
+|------|--------|
+| 最大节点数 | 20 |
+| 最大并发数 | 10 |
+| 节点超时 | 600 秒 |
+| 最大 Push 次数 | 3 |
+| 最大 Fallback 链 | 3 |
+| Group 嵌套深度 | ≤ 5 层 |
 
-## ⛔ 非法 DAG 流程（绝对禁止创建）
+## 四条铁律（不可违反）
 
-以下模式在测试中被验证为绝对非法，任何情况下都不能创建：
+1. **状态机不可绕过** — 所有状态变更必须通过状态机 API
+2. **终态不可逆** — `completed`/`failed`/`cancelled` 不可回退
+3. **事件必须广播** — 每次状态变更发出 dot notation 事件（`workflow.*` / `node.*`）
+4. **状态持久化优先** — 先写磁盘再更新内存，失败时回滚
 
-### 1. 循环依赖（Circular Dependencies）
+## 文档索引
 
-```yaml
-# ❌ 非法：A → B → C → A 形成循环
-branches:
-  - name: main
-    nodes:
-      - name: step-a
-        depends_on: [step-c]  # ❌ 循环
-      - name: step-b
-        depends_on: [step-a]
-      - name: step-c
-        depends_on: [step-b]
-```
+| 文档 | 用途 |
+|------|------|
+| [ARCHITECTURE.md](./ARCHITECTURE.md) | 模块架构 + 设计模式 |
+| [API.md](./API.md) | 公共接口参考 |
+| [USER_GUIDE.md](./USER_GUIDE.md) | 用户使用教程 |
+| [AGENTS.md](./AGENTS.md) | 开发者指南 |
 
-**为什么非法**：DAG 必须是无环图。循环依赖会导致无限等待和死锁，调度器无法确定执行顺序。
+---
 
-**验证规则**：调度器使用拓扑排序检测循环依赖。
-
-### 2. 非法状态转移（Invalid State Transitions）
-
-```yaml
-# ❌ 非法：尝试从终态逆转到运行态
-branches:
-  - name: main
-    nodes:
-      - name: step-a
-        status: completed
-        transition_to: running  # ❌ 终态不可逆转
-```
-
-**以下转移绝对禁止**：
-- `RUNNING → PENDING`（只能向前，不能回退）
-- `COMPLETED → RUNNING`（终态不可逆转）
-- `FAILED → RUNNING`（终态不可逆转）
-- `CANCELLED → RUNNING`（终态不可逆转）
-
-**为什么非法**：状态机铁律 #16 要求终态（COMPLETED/FAILED/CANCELLED）不可逆转。这是系统的核心保证。
-
-**验证规则**：状态机使用 `getValidNextStatuses()` 验证每次转移的合法性。
-
-### 3. 缺失必需节点（Missing Required Nodes）
-
-```yaml
-# ❌ 非法：缺少必需的 workflow 步骤
-branches:
-  - name: main
-    nodes:
-      - name: implement  # ❌ 缺少 skeleton, tdd, review
-        task: "直接实现"
-```
-
-**为什么非法**：workflow 必须包含所有 `required_nodes`（skeleton, tdd, implementation, review），这是铁律 #22 的要求，确保工作流的完整性和质量。
-
-**验证规则**：验证器检查所有 required_nodes 是否存在于 DAG 定义中。
-
-### 4. 引用不存在的依赖（Non-existent Dependencies）
-
-```yaml
-# ❌ 非法：引用不存在的节点
-branches:
-  - name: main
-    nodes:
-      - name: step-a
-        task: "第一个步骤"
-      - name: step-b
-        depends_on: [step-x]  # ❌ step-x 不存在
-        task: "依赖不存在的节点"
-```
-
-**为什么非法**：所有 `depends_on` 必须引用已定义的节点。引用不存在的节点会导致调度器无法正确处理依赖关系。
-
-**验证规则**：验证器检查所有 depends_on 引用的节点是否都存在于 DAG 定义中。
-
-### 5. 非法转移参数（Invalid Transition Parameters）
-
-```yaml
-# ❌ 非法：错误的 transition 名称
-branches:
-  - name: main
-    nodes:
-      - name: step-a
-        from_status: pending
-        to_status: running
-        transition: invalid_transition  # ❌ 不存在的 transition
-```
-
-**合法 transition 类型**：
-- `ENGINE_START`（pending → running）
-- `ENGINE_PAUSE`（running → paused）
-- `ENGINE_RESUME`（paused → running）
-- `ENGINE_COMPLETE`（running → completed）
-- `ENGINE_FAIL`（running → failed）
-- `ENGINE_CANCEL`（任意 → cancelled）
-
-**为什么非法**：必须使用预定义的 transition 类型，这确保状态转换的合法性和可追踪性。
-
-**验证规则**：状态机使用 `isValidTransition()` 验证 transition 类型的合法性。
-
-## 故障排查
-
-### 常见问题
-
-1. **节点执行超时**
-   - 检查 YAML 配置中的 `timeout_sec` 设置
-   - 优化节点任务复杂度
-
-2. **Worktree 创建失败**
-   - 确保有足够的磁盘空间
-   - 检查 Git 仓库状态
-
-3. **状态恢复失败**
-   - 检查数据库连接
-   - 验证 worktree 是否存在
-
-## 版本历史
-
-- **v1.0** - 2026-06-04
-  - 初始版本发布
-  - 支持多分支并行执行
-  - 支持断点恢复
-  - 完整测试覆盖（123 个测试）
-
-## 许可证
-
-MIT
-
-## 维护者
-
-OpenCode DAG Team
+*最后更新: 2026-06-05*

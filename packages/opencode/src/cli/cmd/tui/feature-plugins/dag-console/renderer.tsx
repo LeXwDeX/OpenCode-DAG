@@ -36,7 +36,6 @@ function workflowStatusColor(status: DAGWorkflowStatus, theme: ReturnType<typeof
     case "completed":
       return theme.success
     case "failed":
-    case "failed_with_violations":
       return theme.error
     case "cancelled":
       return theme.textMuted

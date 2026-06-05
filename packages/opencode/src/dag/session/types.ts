@@ -17,8 +17,7 @@
  *
  * 状态转换规则：
  * pending → running → completed (所有 required nodes 完成)
- *                   → failed (某个 required node 失败且 no fallback)
- *                   → failed_with_violations (有 skipped required nodes)
+ *                   → failed (某个 required node 失败 / 有 skipped required nodes)
  *
  * 任何状态 → cancelled (用户取消)
  */
@@ -27,8 +26,7 @@ export type DAGWorkflowStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'cancelled'
-  | 'failed_with_violations';
+  | 'cancelled';
 
 /**
  * DAG 节点状态
@@ -339,7 +337,7 @@ export interface QueryViolatedWorkflowsRequest {
  * 类型守卫：判断状态是否为终态
  */
 export function isTerminalStatus(status: DAGWorkflowStatus): boolean {
-  return ['completed', 'failed', 'cancelled', 'failed_with_violations'].includes(status);
+  return ['completed', 'failed', 'cancelled'].includes(status);
 }
 
 /**

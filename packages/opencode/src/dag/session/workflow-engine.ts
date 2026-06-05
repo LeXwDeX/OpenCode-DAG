@@ -4,9 +4,11 @@ import { ViolationQueryAPI } from "./violation-query"
 import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowStatus } from "./types"
 
 /**
- * Workflow Status 接口
+ * Workflow Status 快照接口
+ * 
+ * 命名为 Snapshot 以避免与 state-machine/types.ts 的 enum WorkflowStatus 冲突
  */
-export interface WorkflowStatus {
+export interface WorkflowStatusSnapshot {
   workflowId: string
   status: DAGWorkflowStatus
   totalNodes: number
@@ -28,7 +30,7 @@ export interface WorkflowEngine {
   handleNodeCompletion(workflowId: string, nodeId: string, output: unknown): Effect.Effect<unknown>
   handleNodeFailure(workflowId: string, nodeId: string, error: Error): Effect.Effect<unknown>
   cancelWorkflow(workflowId: string): Effect.Effect<unknown>
-  getWorkflowStatus(workflowId: string): Effect.Effect<WorkflowStatus>
+  getWorkflowStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot>
 }
 
 const make = Effect.gen(function* () {
@@ -153,7 +155,7 @@ const make = Effect.gen(function* () {
       yield* sessionService.createViolation({
         workflowId,
         nodeId,
-        type: 'max_nodes_exceeded',
+        type: 'required_node_failed',
         severity: 'error',
         message: error.message
       })
@@ -225,7 +227,7 @@ const make = Effect.gen(function* () {
         violations_count: violations.length,
         timestamp: Date.now()
       }
-    }) as Effect.Effect<WorkflowStatus, never>
+    }) as Effect.Effect<WorkflowStatusSnapshot, never>
 
   return {
     startWorkflow,

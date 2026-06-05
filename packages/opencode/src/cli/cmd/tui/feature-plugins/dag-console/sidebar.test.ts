@@ -9,7 +9,6 @@ function workflowStatusIcon(status: DAGWorkflowStatus): string {
     case "completed":
       return "✓"
     case "failed":
-    case "failed_with_violations":
       return "✗"
     case "cancelled":
       return "⊘"
@@ -52,9 +51,8 @@ describe("DAG Sidebar — workflowStatusIcon", () => {
     expect(workflowStatusIcon("completed")).toBe("✓")
   })
 
-  it("should return cross for failed and failed_with_violations", () => {
+  it("should return cross for failed", () => {
     expect(workflowStatusIcon("failed")).toBe("✗")
-    expect(workflowStatusIcon("failed_with_violations")).toBe("✗")
   })
 
   it("should return slashed circle for cancelled", () => {
