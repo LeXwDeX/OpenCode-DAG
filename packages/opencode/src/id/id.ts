@@ -11,6 +11,9 @@ const prefixes = {
   pty: "pty",
   tool: "tool",
   workspace: "wrk",
+  "dag-workflow": "dagwf",
+  "dag-node": "dagn",
+  "dag-violation": "dagvio",
 } as const
 
 const LENGTH = 26
