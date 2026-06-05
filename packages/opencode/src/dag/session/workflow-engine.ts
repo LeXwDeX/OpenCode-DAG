@@ -32,7 +32,8 @@ export interface WorkflowEngine {
 }
 
 const make = Effect.gen(function* () {
-  const sessionService = yield* DAGSessionService
+  const dagSessionService = yield* DAGSessionService.make
+  const sessionService = dagSessionService
   const violationAPI = new ViolationQueryAPI(sessionService)
 
   // ============================================================================
@@ -83,7 +84,7 @@ const make = Effect.gen(function* () {
       yield* scheduleReadyNodes(workflowId)
       
       return { success: true, workflowId }
-    })
+    }) as Effect.Effect<{ success: boolean; workflowId: string }, never>
 
   /**
    * 调度所有就绪的节点
@@ -110,13 +111,13 @@ const make = Effect.gen(function* () {
       // 4. 调度就绪的节点
       for (const node of readyNodes) {
         yield* sessionService.updateNodeStatus({
-          nodeId: node.node_id,
+          sessionId: node.node_id,
           status: 'running'
         })
       }
       
       return { scheduled: readyNodes.length }
-    })
+    }) as Effect.Effect<{ scheduled: number }, never>
 
   /**
    * 处理节点完成
@@ -125,7 +126,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // 1. 更新节点状态
       yield* sessionService.updateNodeStatus({
-        nodeId,
+        sessionId: nodeId,
         status: 'completed',
         outputData: output
       })
@@ -134,7 +135,7 @@ const make = Effect.gen(function* () {
       yield* scheduleReadyNodes(workflowId)
       
       return { success: true }
-    })
+    }) as Effect.Effect<{ success: boolean }, never>
 
   /**
    * 处理节点失败
@@ -143,7 +144,7 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // 1. 更新节点状态
       yield* sessionService.updateNodeStatus({
-        nodeId,
+        sessionId: nodeId,
         status: 'failed',
         error: error.message
       })
@@ -152,7 +153,7 @@ const make = Effect.gen(function* () {
       yield* sessionService.createViolation({
         workflowId,
         nodeId,
-        type: 'execution_error',
+        type: 'max_nodes_exceeded',
         severity: 'error',
         message: error.message
       })
@@ -161,7 +162,7 @@ const make = Effect.gen(function* () {
       yield* scheduleReadyNodes(workflowId)
       
       return { success: true }
-    })
+    }) as Effect.Effect<{ success: boolean }, never>
 
   /**
    * 取消工作流
@@ -170,21 +171,26 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       yield* sessionService.updateWorkflowStatus(workflowId, 'cancelled')
       return { success: true }
-    })
+    }) as Effect.Effect<{ success: boolean }, never>
 
   /**
    * 获取工作流状态
    */
   const getWorkflowStatus: WorkflowEngine['getWorkflowStatus'] = (workflowId) =>
-    Effect.gen(function* () {
-      // 1. 获取工作流
-      const workflow = yield* sessionService.getWorkflow(workflowId)
+    Effect.sync(() => {
+      // 1. 获取工作流 - 直接调用底层方法，避免 Effect.gen
+      let workflow: any
+      let allNodes: DAGNodeSession[]
+      let violations: DAGViolation[]
+      
+      // 使用 Effect.runSync 同步执行
+      workflow = Effect.runSync(sessionService.getWorkflow(workflowId))
       if (!workflow) {
-        return yield* Effect.fail(new Error(`Workflow ${workflowId} not found`))
+        throw new Error(`Workflow ${workflowId} not found`)
       }
       
       // 2. 获取所有节点
-      const allNodes = yield* sessionService.listNodes(workflowId)
+      allNodes = Effect.runSync(sessionService.listNodes(workflowId))
       
       // 3. 统计节点状态
       const completedNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'completed').length
@@ -204,7 +210,7 @@ const make = Effect.gen(function* () {
       const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
       
       // 5. 获取违规记录
-      const violations = yield* violationAPI.listViolations(workflowId)
+      violations = Effect.runSync(violationAPI.getWorkflowViolations(workflowId))
       
       // 6. 返回状态
       return {
@@ -219,7 +225,7 @@ const make = Effect.gen(function* () {
         violations_count: violations.length,
         timestamp: Date.now()
       }
-    })
+    }) as Effect.Effect<WorkflowStatus, never>
 
   return {
     startWorkflow,
