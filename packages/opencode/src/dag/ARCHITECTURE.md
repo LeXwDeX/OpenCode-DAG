@@ -75,9 +75,9 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 - FAILED 作为半终态：`getValidNextNodeStatuses(FAILED)` 返回 `[RUNNING, ABORTED]`（允许 fallback retry）
 - 本地 `INodeStatePersister extends IStatePersister` 不污染公共接口（接口隔离原则）
 
-**接口签名**: 详见 `state-machine/IStateMachine.ts::INodeStateMachine`（11 个公共方法）
+**接口签名**: 详见 `state-machine/IStateMachine.ts::INodeStateMachine`（10 个公共方法：transition / getNodeState / getBranchState / getAllNodeStates / registerNode / resetNode / skipNode / incrementPushCount / incrementFallbackCount / areAllRequiredNodesCompleted）
 
-**测试覆盖**: 45 个测试按 4 条铁律 + 核心功能分组（含 5 个 Shadow 节点集成测试）
+**测试覆盖**: 124 pass across 4 files（state-machine.test.ts + NodeStateMachine.test.ts + CoreCoordination.test.ts + TddCoverage.test.ts），按 4 条铁律 + 核心功能分组（含 10+ Shadow 节点集成测试）
 
 ## 2. group-manager 模块
 
