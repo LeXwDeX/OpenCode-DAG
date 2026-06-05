@@ -58,26 +58,7 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ### 1.5 NodeStateMachine 实现
 
-**定位**: 节点级状态管理的具体实现类，与 `WorkflowStateMachine` 平级，提供 Node/ShadowNode 独立生命周期管理。NodeStateMachine 是 Core 层的节点级状态执行器，提供**纯内存（或可选持久化）+ 事件驱动**的状态转移能力。**当前仅被其自身单元测试及 `index.ts` exports 消费**；Scheduler 和 session-service 各自独立实现状态逻辑，仅在事件类型层面依赖 `state-machine/types`。定位为**工具路径/扩展层入口**，待上层按需接入（如 CLI、test harness、影子执行）。
-
-**核心职责**:
-- 节点状态转移验证（调用 `getValidNextNodeStatuses()` 强制 Iron Law #1）
-- 终态不可逆保障（调用 `isNodeTerminalStatus()` 强制 Iron Law #2）
-- 节点事件广播（emit `node.started` / `node.completed` / `node.failed` / `node.reset` 等 Iron Law #3）
-- 节点状态持久化（通过 `INodeStatePersister` 扩展接口，rollback 模式 Iron Law #4）
-- 节点注册 + 复位 + 跳过 + push/fallback 计数
-
-**设计要点**:
-- 构造函数注入：`workflowId`（必需）+ `eventBus?` + `persister?` 可选，符合 §0.1
-- `resetNode()` 设计为 admin bypass（类比 `WorkflowStateMachine.updateStatus()`），跳过 #1/#2 验证但保留 #3/#4
-- `skipNode()` 严格 from-status 验证，仅允许 PENDING/QUEUED → SKIPPED
-- `persistAndApply()` 私有 helper：统一的 persist → catch → throw → memory → emit 模式，消除代码重复
-- FAILED 作为半终态：`getValidNextNodeStatuses(FAILED)` 返回 `[RUNNING, ABORTED]`（允许 fallback retry）
-- 本地 `INodeStatePersister extends IStatePersister` 不污染公共接口（接口隔离原则）
-
-**接口签名**: 详见 `state-machine/IStateMachine.ts::INodeStateMachine`（10 个公共方法：transition / getNodeState / getBranchState / getAllNodeStates / registerNode / resetNode / skipNode / incrementPushCount / incrementFallbackCount / areAllRequiredNodesCompleted）
-
-**测试覆盖**: 124 pass across 4 files（state-machine.test.ts + NodeStateMachine.test.ts + CoreCoordination.test.ts + TddCoverage.test.ts），按 4 条铁律 + 核心功能分组（含 10+ Shadow 节点集成测试）
+- **NodeStateMachine**：节点级状态管理的具体实现类，提供纯内存+事件驱动的 Node/ShadowNode 独立生命周期管理（约束由地基代码承载 — 接口 `INodeStateMachine` @ `IStateMachine.ts:265-312`，实现 `NodeStateMachine` @ `NodeStateMachine.ts:40`，测试 124 pass @ `state-machine/*.test.ts`）
 
 ## 2. group-manager 模块
 
