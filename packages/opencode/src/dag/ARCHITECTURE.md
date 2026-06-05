@@ -58,7 +58,7 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ### 1.5 NodeStateMachine 实现
 
-**定位**: 节点级状态管理的具体实现类，与 `WorkflowStateMachine` 平级，提供 Node/ShadowNode 独立生命周期管理。被 Scheduler、session-service 等上层模块直接使用。
+**定位**: 节点级状态管理的具体实现类，与 `WorkflowStateMachine` 平级，提供 Node/ShadowNode 独立生命周期管理。NodeStateMachine 是 Core 层的节点级状态执行器，提供**纯内存（或可选持久化）+ 事件驱动**的状态转移能力。**当前仅被其自身单元测试及 `index.ts` exports 消费**；Scheduler 和 session-service 各自独立实现状态逻辑，仅在事件类型层面依赖 `state-machine/types`。定位为**工具路径/扩展层入口**，待上层按需接入（如 CLI、test harness、影子执行）。
 
 **核心职责**:
 - 节点状态转移验证（调用 `getValidNextNodeStatuses()` 强制 Iron Law #1）
