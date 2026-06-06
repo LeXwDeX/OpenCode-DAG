@@ -4,7 +4,7 @@
  * 定义 DAG 查询相关的类型接口
  */
 
-import type { DAGWorkflowSession, DAGNodeStatus } from '../session/types'
+import type { DAGWorkflowSession, DAGNodeStatus, DAGViolation } from '../session/types'
 
 /**
  * DAG 查询接口
@@ -46,6 +46,11 @@ export interface IDAGQuery {
    * 用于在平台 Chat Session 上下文中查找关联的 DAG 工作流。
    */
   listWorkflowsByChatSession(chatSessionId: string): Promise<DAGWorkflowSession[]>
+
+  /**
+   * 列出指定工作流的所有违规记录
+   */
+  listViolations(workflowId: string): Promise<DAGViolation[]>
 }
 
 /**

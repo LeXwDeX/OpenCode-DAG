@@ -155,6 +155,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   })
 
   const { violations } = useViolations({
+    client: props.api.client,
+    event: props.api.event,
     workflowId: currentWorkflowID,
   })
 

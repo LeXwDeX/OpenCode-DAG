@@ -1524,6 +1524,24 @@ export type DagGraphStatistics = {
   estimatedCompletionTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type DagViolation = {
+  id: string
+  workflowId: string
+  nodeId?: string
+  type:
+    | "required_node_skipped"
+    | "required_node_failed"
+    | "max_nodes_exceeded"
+    | "max_concurrency_exceeded"
+    | "timeout_exceeded"
+  severity: "info" | "warning" | "error" | "critical"
+  message: string
+  timestamp: string
+  details?: {
+    [key: string]: unknown
+  }
+}
+
 export type ConsoleState = {
   consoleManagedProviders: Array<string>
   activeOrgName?: string
@@ -4622,6 +4640,36 @@ export type DagGetStatsResponses = {
 }
 
 export type DagGetStatsResponse = DagGetStatsResponses[keyof DagGetStatsResponses]
+
+export type DagGetViolationsData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/violations"
+}
+
+export type DagGetViolationsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetViolationsError = DagGetViolationsErrors[keyof DagGetViolationsErrors]
+
+export type DagGetViolationsResponses = {
+  /**
+   * DAG workflow violations
+   */
+  200: Array<DagViolation>
+}
+
+export type DagGetViolationsResponse = DagGetViolationsResponses[keyof DagGetViolationsResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never

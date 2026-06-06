@@ -286,12 +286,45 @@ export function useNodes(props: {
 /**
  * useViolations — workflow 违规记录。
  *
- * server 目前未暴露独立的 violations 只读路由，故此 hook 返回空集合，
- * 保留接口以便后续 server 增加 `/dag/workflows/:id/violations` 后接入。
+ * 通过 SDK 只读路由 client.dag.getViolations({workflowId}) 拉取。
+ * 订阅 dag.workflow.updated 事件作为刷新信号（违规通常伴随节点状态变更发生）。
  */
-export function useViolations(_props: {
+export function useViolations(props: {
+  client: Client
+  event: EventBus
   workflowId: Accessor<string | undefined>
 }): ViolationsApi {
-  const [violations] = createSignal<DAGViolation[]>([])
-  return { violations, refresh: () => {} }
+  const [violations, setViolations] = createSignal<DAGViolation[]>([])
+  let cancelled = false
+
+  async function load() {
+    const id = props.workflowId()
+    if (!id) {
+      setViolations([])
+      return
+    }
+    const res = await props.client.dag.getViolations({ workflowId: id })
+    if (cancelled) return
+    setViolations((res.data ?? []) as unknown as DAGViolation[])
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
+  })
+
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offN()
+  })
+
+  return { violations, refresh: () => void load() }
 }

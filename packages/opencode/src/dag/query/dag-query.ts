@@ -7,7 +7,7 @@ import type {
   NodeDependency,
   WorkflowStatistics
 } from './query-types';
-import type { DAGWorkflowSession, DAGNodeStatus, DAGNodeSession } from '../session/types';
+import type { DAGWorkflowSession, DAGNodeStatus, DAGNodeSession, DAGViolation } from '../session/types';
 import type { IDAGSessionService } from '../session/session-service';
 import { Effect } from 'effect';
 
@@ -128,6 +128,13 @@ export class DAGQuery implements IDAGQuery {
    */
   async listWorkflowsByChatSession(chatSessionId: string): Promise<DAGWorkflowSession[]> {
     return Effect.runPromise(this.sessionService.listWorkflowsByChatSession(chatSessionId))
+  }
+
+  /**
+   * 列出指定工作流的所有违规记录
+   */
+  async listViolations(workflowId: string): Promise<DAGViolation[]> {
+    return Effect.runPromise(this.sessionService.listViolations(workflowId))
   }
 
   /**

@@ -95,6 +95,23 @@ export const DagGraphStatistics = Schema.Struct({
   estimatedCompletionTime: Schema.Number,
 }).annotate({ identifier: "DagGraphStatistics" })
 
+export const DagViolation = Schema.Struct({
+  id: Schema.String,
+  workflowId: Schema.String,
+  nodeId: Schema.optional(Schema.String),
+  type: Schema.Literals([
+    "required_node_skipped",
+    "required_node_failed",
+    "max_nodes_exceeded",
+    "max_concurrency_exceeded",
+    "timeout_exceeded",
+  ]),
+  severity: Schema.Literals(["info", "warning", "error", "critical"]),
+  message: Schema.String,
+  timestamp: Schema.String,
+  details: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+}).annotate({ identifier: "DagViolation" })
+
 // ============================================================================
 // Queries
 // ============================================================================
@@ -153,6 +170,17 @@ const dagGroup = HttpApiGroup.make("dag")
         identifier: "dag.getStats",
         summary: "Get DAG graph statistics",
         description: "Retrieve graph-level statistics for a DAG workflow (node count, edges, critical path, parallelism).",
+      }),
+    ),
+    HttpApiEndpoint.get("getViolations", `${root}/workflows/:workflowId/violations`, {
+      params: { workflowId: Schema.String },
+      query: WorkflowIdQuery,
+      success: described(Schema.Array(DagViolation), "DAG workflow violations"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.getViolations",
+        summary: "Get DAG violations",
+        description: "Retrieve all recorded violations for a DAG workflow.",
       }),
     ),
   )

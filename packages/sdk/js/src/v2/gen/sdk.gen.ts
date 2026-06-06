@@ -28,6 +28,8 @@ import type {
   DagGetStatsResponses,
   DagGetTimelineErrors,
   DagGetTimelineResponses,
+  DagGetViolationsErrors,
+  DagGetViolationsResponses,
   DagGetWorkflowErrors,
   DagGetWorkflowResponses,
   DagListWorkflowsErrors,
@@ -861,6 +863,38 @@ export class Dag extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<DagGetStatsResponses, DagGetStatsErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/stats",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG violations
+   *
+   * Retrieve all recorded violations for a DAG workflow.
+   */
+  public getViolations<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagGetViolationsResponses, DagGetViolationsErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/violations",
       ...options,
       ...params,
     })

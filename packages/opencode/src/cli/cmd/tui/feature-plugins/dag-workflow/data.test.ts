@@ -62,6 +62,7 @@ const sdkWorkflow = {
 function fakeClient(overrides?: {
   list?: unknown[]
   detail?: { workflow: unknown; nodes: unknown[] } | null
+  violations?: unknown[]
 }): TuiPluginApi["client"] {
   return {
     dag: {
@@ -72,6 +73,7 @@ function fakeClient(overrides?: {
             ? { workflow: sdkWorkflow, nodes: [sdkNode] }
             : overrides.detail,
       }),
+      getViolations: async () => ({ data: overrides?.violations ?? [] }),
     },
   } as unknown as TuiPluginApi["client"]
 }
@@ -174,11 +176,40 @@ describe("WP4 data.ts — useNodes", () => {
 })
 
 describe("WP4 data.ts — useViolations", () => {
-  it("returns an empty array (no server route yet)", () => {
-    createRoot((dispose) => {
-      const { violations } = useViolations({ workflowId: () => "wf-1" })
-      expect(violations()).toEqual([])
-      dispose()
-    })
+  it("loads violations from the SDK client", async () => {
+    const sampleViolation = {
+      id: "v-1",
+      workflowId: "wf-1",
+      nodeId: "n1",
+      type: "required_node_failed",
+      severity: "error",
+      message: "Node n1 failed",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    }
+    const { value, dispose } = await withRoot(() =>
+      useViolations({
+        client: fakeClient({ violations: [sampleViolation] }),
+        event: fakeEvent,
+        workflowId: () => "wf-1",
+      }),
+    )
+    const v = value.violations()
+    expect(Array.isArray(v)).toBe(true)
+    expect(v.length).toBe(1)
+    expect(v[0]!.id).toBe("v-1")
+    expect(v[0]!.type).toBe("required_node_failed")
+    dispose()
+  })
+
+  it("returns [] when workflowId is undefined", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useViolations({
+        client: fakeClient({ violations: [] }),
+        event: fakeEvent,
+        workflowId: () => undefined,
+      }),
+    )
+    expect(value.violations()).toEqual([])
+    dispose()
   })
 })

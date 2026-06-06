@@ -42,10 +42,17 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       },
     )
 
+    const getViolations = Effect.fn("DagHttpApi.getViolations")(
+      function* (ctx: { params: { workflowId: string } }) {
+        return yield* Effect.promise(() => dagQuery.listViolations(ctx.params.workflowId))
+      },
+    )
+
     return handlers
       .handle("listWorkflows", listWorkflows)
       .handle("getWorkflow", getWorkflow)
       .handle("getTimeline", getTimeline)
       .handle("getStats", getStats)
+      .handle("getViolations", getViolations)
   }),
 )

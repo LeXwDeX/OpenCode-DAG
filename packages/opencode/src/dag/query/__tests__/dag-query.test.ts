@@ -51,7 +51,17 @@ function makeMockService(workflows: DAGWorkflowSession[]): IDAGSessionService {
     listNodes: () => Effect.succeed([]),
     updateNodeStatus: () => Effect.succeed(undefined),
     createViolation: () => Effect.die("not implemented"),
-    listViolations: () => Effect.succeed([]),
+    listViolations: (workflowId: string) =>
+      Effect.succeed(workflowId === "wf-with-violations"
+        ? [{
+            id: "v-1",
+            workflowId,
+            type: "required_node_failed",
+            severity: "error",
+            message: "boom",
+            timestamp: "2026-01-01T00:00:00.000Z",
+          }]
+        : []),
   }
 }
 
@@ -80,6 +90,22 @@ describe("DAGQuery.listWorkflowsByChatSession", () => {
   test("returns [] when no workflows match chat_session_id", async () => {
     const result = await query.listWorkflowsByChatSession("nonexistent")
     expect(result).toHaveLength(0)
+    expect(result).toEqual([])
+  })
+})
+
+describe("DAGQuery.listViolations", () => {
+  test("delegates to sessionService.listViolations and returns workflow's violations", async () => {
+    const query = new DAGQuery(makeMockService([]))
+    const result = await query.listViolations("wf-with-violations")
+    expect(result).toHaveLength(1)
+    expect(result[0]!.id).toBe("v-1")
+    expect(result[0]!.type).toBe("required_node_failed")
+  })
+
+  test("returns [] when workflow has no violations", async () => {
+    const query = new DAGQuery(makeMockService([]))
+    const result = await query.listViolations("other-wf")
     expect(result).toEqual([])
   })
 })
