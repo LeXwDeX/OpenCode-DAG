@@ -281,6 +281,77 @@ bus.subscribe('workflow.started', (event) => {
 
 更多设计决策详见 `.task_state/dag-completion/taskplan.md` 与 `.task_state/findings.md`。
 
+## 9. bridge 模块（DAG 内部事件 → 平台 Bus 单向桥接）
+
+**定位**：把 DAG 内部 `IEventBus` 上的 `workflow.*` / `node.*` 事件**单向、只读**地翻译发布到平台 Effect `Bus`，使 OpenCode TUI / SDK 等外部订阅者能通过统一的 `dag.workflow.*` / `dag.node.*` 事件收到 DAG 运行时变化。**禁止任何反向回写**。
+
+**包**：`src/dag/bridge/`（独立子模块）
+- `dag-bus-bridge.ts`：`DagEventBridge` 类
+- `dag-events.ts`：用 `Effect.Schema.Struct` + `BusEvent.define()` 声明到平台总线的事件清单
+
+### 9.a 职责边界
+
+| 允许 | 禁止 |
+|------|------|
+| 订阅 DAG `IEventBus` 全品类事件 | 任何对 `WorkflowEngine` / `session-service` 的写操作 |
+| 按 §9.c 规则转换为 `BusEvent.define()` 事件并 `Bus.publish()` | 修改 DAG 内存状态 / SQLite 表 / `IEventBus` 事件流 |
+| 提供 `subscribe(bus)` / `dispose()` 生命周期方法 | 为每个 `DAGWorkflowSession` 创建独立订阅（必须按 `workflow_id` 过滤） |
+| 在 server 启动时由 server 层挂载 | 从 TUI / SDK 进程直连（必须经 server） |
+| 暴露 `DagEventBusEvent` payload schema（含 `workflow_id` / `node_id?` / `status` / 时间戳） | 把 DAG 内部类型（`WorkflowEvent` / `NodeEvent` 枚举值）原样转发到平台 Bus（必须翻译） |
+
+### 9.b 事件命名约定（翻译规则）
+
+| DAG 内部事件 | 平台 Bus 事件 | payload 关键差异 |
+|--------------|--------------|-----------------|
+| `workflow.created/started/completed/failed/cancelled` | `dag.workflow.updated` | payload 含 `workflow_id`、`status: DAGWorkflowStatus`、`chat_session_id` |
+| `node.started/completed/failed/paused/resumed/restarted/aborted/skipped` | `dag.node.updated` | payload 含 `workflow_id`、`node_id`、`status: DAGNodeStatus`、`chat_session_id?` |
+| `node.progress` | `dag.node.progress` | payload 含 `node_id`、`progress` 数值/消息 |
+| `node.ask_main` | `dag.node.ask_main` | payload 含 `node_id`、`question` |
+| `node.timeout` / `node.reset` / `node.pushed` / `node.registered` | 不转发 | 内部调度事件，无需扩散 |
+
+> 合并策略：多个 DAG 终态事件合并为单一 `updated` 是为了**保护状态机权威**——平台侧只关心"状态变过了"，不关心"DAG 内部是怎么走完状态转移的"。具体状态转移规则的唯一真相源是 §1 state-machine。
+
+### 9.c 隔离与订阅策略
+
+- 全局**单例** `DagEventBridge`，在 server 进程启动时 `subscribe(bus)` 一次，进程退出时 `dispose()` 释放
+- 订阅 DAG `IEventBus` 的 `*` 通配（或逐一订阅所有事件），按 `event.workflow_id` 字段过滤，**不按事件类型前缀**（与 §8.a 双路径隔离规则同形）
+- TUI 侧用现有 `api.event.on("dag.node.updated", …)` 过滤 `workflow_id === activeWorkflow` 即可
+
+### 9.d 反模式（禁止）
+
+- ❌ 桥接层调用 `WorkflowEngine.updateNodeStatus()` 反向写状态
+- ❌ 桥接层绕过状态机直接 `DB.insert/update`（破坏四铁律 #1）
+- ❌ 把 `workflow.failed_with_violations` 等已删除状态重新引入（参见 history）
+- ❌ TUI 直连 DAG SQLite（跨进程 + 状态机边界）
+- ❌ 为每个 workflow 实例化独立 bridge（内存/订阅数爆炸）
+
+### 9.e 依赖关系
+
+```
+bridge ← IEventBus（共享实例，来自 §0.2 注入规范）
+      ← @/bus（平台 Bus.publish / BusEvent.define）
+      ← effect/Schema（仅用于 payload 声明）
+
+DAGQuery ← session-service（只读数据来源，与 bridge 无直接依赖）
+
+server/routes/dag（新增 HTTP 路由组） ← DAGQuery（注入为 Effect 服务）
+                                      ← DagEventBridge（进程启动时挂上共享 IEventBus）
+```
+
+## 10. 节点↔子会话绑定（点节点进上下文的字段约定）
+
+**定位**：TUI 「点节点进入子 agent 会话并递归下钻」的唯一契约字段。
+
+**字段**：`DAGNodeSession.metadata.chat_session_id: string | undefined`
+
+**写入方**：`WorkflowEngine` / `worker` 在 dispatch 节点给 subagent 时，必须把 OpenCode 创建的子会话 `SessionID` 立即写入该节点的 `metadata.chat_session_id`，并持久化到 SQLite（`dag_node.metadata` JSON 列）。
+
+**约束**：
+- 字段名固定为 `chat_session_id`（禁止 `sessionId` / `subSessionId` 等别名）
+- 写入必须在节点进入 `RUNNING` 之前或同时（保证 TUI 首次拉取时已可用）
+- 未绑定子会话的节点（如纯函数 worker）：字段为 `undefined`，TUI 降级为 `node-dialog` 日志视图
+- 不新增独立字段，复用现有 `metadata` JSON 列
+
 ---
 
-*最后更新: 2026-06-05*
+*最后更新: 2026-06-06*

@@ -32,7 +32,7 @@ const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
 // Upstream request ID captured from proxy response headers (X-Upstream-Request-Id).
-// Stored per-session so hallucination detection can surface it in TUI alerts.
+// Stored per-session for debugging provider-side stream issues.
 // Capped at 50 entries to prevent unbounded growth; oldest entries are evicted.
 const MAX_UPSTREAM_IDS = 50
 const upstreamRequestIds = new Map<string, string>()

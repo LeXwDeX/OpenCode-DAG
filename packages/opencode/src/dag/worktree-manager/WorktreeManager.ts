@@ -107,6 +107,53 @@ export class WorktreeManager implements IWorktreeManager {
     });
   }
 
+  /**
+   * Git 命令执行 seam（透明转发 Bun `$` 标签模板）。
+   *
+   * 抽出为 protected 是为可测性：Bun 原生 `bun` 模块导出的 `$` 无法被
+   * `mock.module` 拦截，单元测试因此通过子类覆写本方法注入假 git 执行，
+   * 从而在不触碰真实 git 的前提下验证 ensureGitRepo 的分支行为。
+   * 生产路径下与直接调用 `$` 行为完全一致。
+   *
+   * 返回类型收窄为 `Promise<unknown>`：现有调用方仅 `await` 其副作用
+   * （成功/抛错），不消费 `.text()` 等结果，便于测试以普通 Promise 注入。
+   */
+  protected git(...args: Parameters<typeof $>): Promise<unknown> {
+    return $(...args);
+  }
+
+  /**
+   * 确保 baseDir 所在目录可用于 `git worktree add`（幂等）。
+   *
+   * - 非 git 工作树 → `git init`
+   * - 无 HEAD commit → 创建初始空提交（`-c` 内联注入身份，不依赖全局 git config）
+   * - 已是 git 仓库且有 commit → 不执行任何写操作
+   */
+  private async ensureGitRepo(): Promise<void> {
+    // 1) 是否在 git 工作树：失败（抛错）视为非 repo → git init
+    let insideWorkTree = true;
+    try {
+      await this.git`git rev-parse --is-inside-work-tree`;
+    } catch {
+      insideWorkTree = false;
+    }
+    if (!insideWorkTree) {
+      await this.git`git init`;
+    }
+
+    // 2) 是否存在 HEAD commit：失败（无 commit）→ 创建初始空提交
+    //    身份用 -c 内联注入，不依赖全局 git config，保证 CI / 全新环境可用
+    let hasHeadCommit = true;
+    try {
+      await this.git`git rev-parse --verify HEAD`;
+    } catch {
+      hasHeadCommit = false;
+    }
+    if (!hasHeadCommit) {
+      await this.git`git -c user.email=dag@local -c user.name=dag commit --allow-empty -m ${'chore: init independent workspace base'}`;
+    }
+  }
+
   // ========================================================================
   // CRUD
   // ========================================================================
@@ -115,8 +162,14 @@ export class WorktreeManager implements IWorktreeManager {
     const worktreePath = path.join(this.baseDir, name);
 
     try {
-      // 创建 Git Worktree
-      await $`git worktree add ${worktreePath} -b ${config.branch}`;
+      // P0：确保目标目录可用于 git worktree add（非 repo / 无 commit 时自动初始化）。
+      // autoInitGit 默认视为 true；仅当显式为 false 时跳过 ensureGitRepo。
+      if (config.autoInitGit !== false) {
+        await this.ensureGitRepo();
+      }
+
+      // 创建 Git Worktree（经 git() seam 转发，便于单元测试注入）
+      await this.git`git worktree add ${worktreePath} -b ${config.branch}`;
 
       const now = Date.now();
       const worktree: WorktreeInfo = {

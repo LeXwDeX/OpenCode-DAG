@@ -841,6 +841,22 @@ it.instance(
   3_000,
 )
 
+// Step-limit guard
+
+noLLMServer.instance(
+  "step-limit guard breaks loop instead of infinite retry",
+  () =>
+    Effect.gen(function* () {
+      const { prompt, chat } = yield* boot()
+      yield* seed(chat.id, { finish: "tool-calls" })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.role).toBe("assistant")
+    }),
+  { config: { ...cfg, agent: { build: { steps: 1 } } } },
+  5_000,
+)
+
 // Cancel semantics
 
 it.instance(

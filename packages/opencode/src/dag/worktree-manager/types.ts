@@ -16,6 +16,11 @@ export interface WorktreeConfig {
   autoCleanup?: boolean;
   /** 远程仓库 URL（可选） */
   remoteUrl?: string;
+  /**
+   * 目标目录非 git 仓库 / 无任何 commit 时，是否自动临时 init 本地仓库并创建初始空提交，
+   * 使 `git worktree add` 能成功（默认视为 true，开箱可用）。仅当显式为 false 时跳过。
+   */
+  autoInitGit?: boolean;
 }
 
 /**

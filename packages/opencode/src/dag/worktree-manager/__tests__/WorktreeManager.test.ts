@@ -9,6 +9,10 @@ import {
   WorktreeTerminalViolationError,
 } from '../errors';
 import { EventBus } from '../../state-machine/EventBus';
+import { $ } from 'bun';
+import { tmpdir } from 'node:os';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 describe('WorktreeManager', () => {
   let manager: WorktreeManager;
@@ -467,5 +471,180 @@ describe('WorktreeManager - 铁律合规改造', () => {
       const afterUpdate = await manager.get(created.id);
       expect(afterUpdate?.status).toBe('completed');
     });
+  });
+});
+
+// =============================================================================
+// P0: ensureGitRepo —— 目标目录非 git 仓库 / 无 commit 时自动临时初始化
+// =============================================================================
+
+/**
+ * 测试替身：覆写 git() 执行 seam，记录全部 git 命令并按 isRepo / hasCommit
+ * 配置模拟「是否在 git 工作树 / 是否存在 HEAD commit」，从而在完全不触碰
+ * 真实 git 的前提下验证 ensureGitRepo 的分支行为。
+ *
+ * 说明：Bun 原生 `bun` 模块导出的 `$` 无法被 mock.module 拦截（已实测验证），
+ * 故 WorktreeManager 暴露 protected git() seam，单元测试通过子类覆写注入假实现。
+ */
+class FakeGitWorktreeManager extends WorktreeManager {
+  gitCalls: string[] = [];
+  isRepo = true;
+  hasCommit = true;
+
+  protected override git(...args: Parameters<typeof $>): Promise<unknown> {
+    const [strings, ...exprs] = args;
+    let cmd = '';
+    strings.forEach((s, i) => {
+      cmd += s + (i < exprs.length ? String(exprs[i]) : '');
+    });
+    cmd = cmd.trim();
+    this.gitCalls.push(cmd);
+
+    // 仅在「应失败」的探测上返回 rejected promise（懒构造，被 ensureGitRepo 即时 await/catch）
+    if (cmd.startsWith('git rev-parse --is-inside-work-tree') && !this.isRepo) {
+      return Promise.reject(new Error('fatal: not a work tree'));
+    }
+    if (cmd.startsWith('git rev-parse --verify HEAD') && !this.hasCommit) {
+      return Promise.reject(new Error('fatal: no HEAD'));
+    }
+    return Promise.resolve({ text: () => '' });
+  }
+}
+
+const callEnsureGitRepo = (m: WorktreeManager): Promise<void> =>
+  (m as unknown as { ensureGitRepo(): Promise<void> }).ensureGitRepo();
+
+const didInit = (calls: string[]) => calls.some((c) => c.startsWith('git init'));
+const didEmptyCommit = (calls: string[]) => calls.some((c) => c.includes('commit --allow-empty'));
+const didProbeWorkTree = (calls: string[]) =>
+  calls.some((c) => c.startsWith('git rev-parse --is-inside-work-tree'));
+const didWorktreeAdd = (calls: string[]) => calls.some((c) => c.startsWith('git worktree add'));
+
+describe('WorktreeManager - ensureGitRepo（P0 自动初始化，mock git）', () => {
+  function makeEnsureConfig(overrides?: Partial<WorktreeConfig>): WorktreeConfig {
+    return {
+      basePath: '/mock/base',
+      branch: `feature/ensure-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      groupId: 'group-ensure',
+      ...overrides,
+    };
+  }
+
+  // (a) 已是 repo 且有 commit → 幂等：不 init、不 commit，仅两次探测
+  it('(a) 已是 git 仓库且有 commit 时不执行任何写操作（幂等）', async () => {
+    const m = new FakeGitWorktreeManager();
+    m.isRepo = true;
+    m.hasCommit = true;
+
+    await callEnsureGitRepo(m);
+
+    expect(didInit(m.gitCalls)).toBe(false);
+    expect(didEmptyCommit(m.gitCalls)).toBe(false);
+    expect(m.gitCalls).toEqual([
+      'git rev-parse --is-inside-work-tree',
+      'git rev-parse --verify HEAD',
+    ]);
+  });
+
+  // (b) 非 repo（--is-inside-work-tree 失败）→ git init 且创建空 commit
+  it('(b) 非 git 工作树时执行 git init 并创建初始空提交', async () => {
+    const m = new FakeGitWorktreeManager();
+    m.isRepo = false;
+    m.hasCommit = false;
+
+    await callEnsureGitRepo(m);
+
+    expect(didInit(m.gitCalls)).toBe(true);
+    expect(didEmptyCommit(m.gitCalls)).toBe(true);
+    // 身份通过 -c 内联注入，绝不依赖全局 git config
+    const commit = m.gitCalls.find((c) => c.includes('commit --allow-empty'))!;
+    expect(commit).toContain('-c user.email=dag@local');
+    expect(commit).toContain('-c user.name=dag');
+  });
+
+  // (c) 是 repo 但无 commit（--verify HEAD 失败）→ 仅创建空 commit，不 init
+  it('(c) 已是仓库但无 commit 时仅创建空提交、不重新 init', async () => {
+    const m = new FakeGitWorktreeManager();
+    m.isRepo = true;
+    m.hasCommit = false;
+
+    await callEnsureGitRepo(m);
+
+    expect(didInit(m.gitCalls)).toBe(false);
+    expect(didEmptyCommit(m.gitCalls)).toBe(true);
+  });
+
+  // (d) autoInitGit:false → create() 完全跳过 ensureGitRepo
+  it('(d) autoInitGit=false 时 create 完全跳过 ensureGitRepo', async () => {
+    const eventBus = new EventBus();
+    const m = new FakeGitWorktreeManager(eventBus);
+    m.isRepo = false; // 即便非 repo，禁用开关后也不应触发任何探测/初始化
+    m.hasCommit = false;
+
+    const wt = await m.create('wt-skip', makeEnsureConfig({ autoInitGit: false }));
+
+    expect(didProbeWorkTree(m.gitCalls)).toBe(false);
+    expect(didInit(m.gitCalls)).toBe(false);
+    expect(didEmptyCommit(m.gitCalls)).toBe(false);
+    expect(didWorktreeAdd(m.gitCalls)).toBe(true);
+    expect(wt.status).toBe('active');
+  });
+
+  // (e) autoInitGit 默认（undefined）→ create() 调用 ensureGitRepo（开箱可用）
+  it('(e) autoInitGit 默认视为 true，create 调用 ensureGitRepo', async () => {
+    const eventBus = new EventBus();
+    const m = new FakeGitWorktreeManager(eventBus);
+    m.isRepo = true;
+    m.hasCommit = true;
+
+    const wt = await m.create('wt-default', makeEnsureConfig());
+
+    expect(didProbeWorkTree(m.gitCalls)).toBe(true);
+    expect(didWorktreeAdd(m.gitCalls)).toBe(true);
+    expect(wt.status).toBe('active');
+  });
+});
+
+// =============================================================================
+// P0: ensureGitRepo 集成测试（隔离临时目录，强制 teardown）
+// =============================================================================
+
+describe('WorktreeManager - ensureGitRepo 集成（隔离临时目录）', () => {
+  let tempDir: string | undefined;
+  let originalCwd: string | undefined;
+
+  afterEach(async () => {
+    // 强制 teardown：先恢复 cwd，再删除整个临时目录，杜绝主仓库污染 / 残留
+    if (originalCwd) {
+      process.chdir(originalCwd);
+      originalCwd = undefined;
+    }
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+      tempDir = undefined;
+    }
+  });
+
+  // 沙箱/CI 中 git worktree 对大仓库慢，且本用例依赖 process.chdir 全局状态，
+  // 默认 skip；ensureGitRepo 全部分支已由上方 FakeGit 单元测试确定性覆盖。
+  // 取消 skip 时，chdir 至独立临时仓库 + afterEach 删除整目录可保证零污染。
+  it.skip('在全新非 git 临时目录中 create 应成功（自动 init + 空 commit + worktree add）', async () => {
+    originalCwd = process.cwd();
+    tempDir = await mkdtemp(join(tmpdir(), 'wt-ensure-'));
+    // 切换到全新空目录（非 git），使 git 操作作用于隔离仓库而非主仓库
+    process.chdir(tempDir);
+
+    const eventBus = new EventBus();
+    const baseDir = join(tempDir, '.worktrees');
+    const manager = new WorktreeManager(eventBus, undefined, baseDir);
+
+    const wt = await manager.create('it-fresh', {
+      basePath: baseDir,
+      branch: 'feature/it-fresh',
+      groupId: 'group-it',
+    });
+
+    expect(wt.status).toBe('active');
+    expect(wt.name).toBe('it-fresh');
   });
 });

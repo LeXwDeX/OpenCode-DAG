@@ -16,8 +16,7 @@ import PROMPT_PLAN from "../session/prompt/plan.txt"
 import BUILD_SWITCH from "../session/prompt/build-switch.txt"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import { SessionCompaction } from "./compaction"
-import { detectHallucination } from "./hallucination"
-import { getLastUpstreamRequestId } from "./llm"
+
 import { Bus } from "../bus"
 import { SystemPrompt } from "./system"
 import { Instruction } from "./instruction"
@@ -1979,63 +1978,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             !hasToolCalls &&
             lastUser.id < lastAssistant.id
           ) {
-            // Detect model hallucinating tool-call/compression tags as plain text
-            // instead of actually calling tools. If detected, inject a
-            // continuation message and keep the loop running.
             const assistantText = lastAssistantMsg?.parts
               .filter((p): p is MessageV2.TextPart => p.type === "text")
               .map((p) => p.text)
               .join("") ?? ""
-            const { detected: hasHallucination, matchedTags } = detectHallucination(assistantText)
-
-            if (hasHallucination) {
-              const tagSummary = matchedTags.length > 0 ? matchedTags.join(", ") : "unknown"
-              const upstreamRequestId = getLastUpstreamRequestId(sessionID)
-
-              // 明确标记：补丁代码已触发
-              yield* slog.warn("🔧 HALLUCINATION_PATCH_TRIGGERED", {
-                patchType: "compression_hallucination",
-                finishReason: lastAssistant.finish,
-                step,
-                lastAssistantModel: lastUser.model.modelID,
-                matchedTags: tagSummary,
-                upstreamRequestId: upstreamRequestId || "N/A",
-                action: "injecting_continuation_message",
-              })
-
-              // Add red alert part to the assistant message for TUI display
-              yield* sessions.updatePart({
-                id: PartID.ascending(),
-                messageID: lastAssistant.id,
-                sessionID,
-                type: "text",
-                synthetic: true,
-                text: `⚠ 检测到模型幻觉标签 [${tagSummary}] + STOP，已触发 opencode 业务自动化继续${upstreamRequestId ? `，upstream_request_id：${upstreamRequestId}` : ""}`,
-                metadata: { alert: "hallucination" },
-                time: { start: Date.now(), end: Date.now() },
-              })
-
-              const continueMsg = yield* sessions.updateMessage({
-                id: MessageID.ascending(),
-                role: "user",
-                sessionID,
-                time: { created: Date.now() },
-                agent: lastUser.agent,
-                model: lastUser.model,
-              })
-              yield* sessions.updatePart({
-                id: PartID.ascending(),
-                messageID: continueMsg.id,
-                sessionID,
-                type: "text",
-                synthetic: true,
-                text: "You just output a compression summary as plain text instead of calling the compress tool. This is incorrect. Resume your previous task immediately — do NOT generate summaries inline. If you need to compress context, use the compress tool call.",
-                time: { start: Date.now(), end: Date.now() },
-              })
-              // Always continue: detected tags + STOP means model stopped prematurely.
-              // The synthetic user message above tells it to resume.
-              continue
-            }
 
             yield* slog.info("exiting loop", {
               finishReason: lastAssistant.finish,
@@ -2228,13 +2174,14 @@ NOTE: At any point in time through this workflow you should feel free to ask the
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
 
-            // Defensive guard: providers (e.g. GitHub Copilot Anthropic endpoint) reject requests
-            // whose final message is an assistant prefill. If the conversion produced trailing
-            // assistant messages, log the shape and break the loop instead of poisoning the stream.
+            // Defensive guard: providers (e.g. GitHub Copilot Anthropic endpoint) sometimes
+            // return finish_reason=tool-calls but without actual tool_use content blocks.
+            // Instead of silently aborting, inject a user message explaining the error so the
+            // model can self-correct and retry.
             const outgoing = [...modelMsgs, ...(isLastStep ? [{ role: "assistant" as const, content: MAX_STEPS }] : [])]
             const tail = outgoing.at(-1)
             if (tail && tail.role === "assistant") {
-              yield* slog.error("aborting: last outgoing message is not user", {
+              yield* slog.warn("non-standard tool call detected: last outgoing message is assistant, injecting error feedback", {
                 step,
                 modelMsgCount: modelMsgs.length,
                 isLastStep,
@@ -2248,7 +2195,26 @@ NOTE: At any point in time through this workflow you should feel free to ask the
                 hasToolCalls,
                 lastFinishedTokens: lastFinished?.tokens,
               })
-              return "break" as const
+              // Inject a synthetic user message to inform the model about the malformed tool call
+              const errorMsg = yield* sessions.updateMessage({
+                id: MessageID.ascending(),
+                role: "user",
+                sessionID,
+                time: { created: Date.now() },
+                agent: lastUser.agent,
+                model: lastUser.model,
+              })
+              yield* sessions.updatePart({
+                id: PartID.ascending(),
+                messageID: errorMsg.id,
+                sessionID,
+                type: "text",
+                synthetic: true,
+                text: "[SYSTEM] Your previous response indicated tool_use but no valid tool call was received. This is likely a provider-side stream truncation. Please retry your intended action — either call the tool properly or respond with text.",
+                time: { start: Date.now(), end: Date.now() },
+              })
+              if (isLastStep) return "break" as const
+              return "continue" as const
             }
             const result = yield* handle.process({
               user: lastUser,
