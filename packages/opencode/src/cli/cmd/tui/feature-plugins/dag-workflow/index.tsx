@@ -35,7 +35,7 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: "dag.workflow.open",
-        title: "Open DAG Workflow",
+        title: "打开 DAG 工作流面板",
         category: "DAG",
         namespace: "palette",
         run() {
@@ -62,7 +62,7 @@ const plugin: InternalTuiPlugin = {
 
 export default plugin
 
-/** 暴露给 session_topbar 渲染的 Tab 控件: [对话 | DAG Workflow] */
+/** 暴露给 session_topbar 渲染的 Tab 控件: [对话 | DAG 工作流] */
 export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
   const theme = () => props.api.theme.current
   const isDagRoute = () => props.api.route.current.name === ROUTE
@@ -102,7 +102,7 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
         fg={isDagRoute() ? theme().text : theme().textMuted}
         onMouseUp={isDagRoute() ? undefined : navigateToDagWorkflow}
       >
-        {isDagRoute() ? <b>DAG Workflow</b> : "DAG Workflow"}
+        {isDagRoute() ? <b>DAG 工作流</b> : "DAG 工作流"}
       </text>
     </box>
   )

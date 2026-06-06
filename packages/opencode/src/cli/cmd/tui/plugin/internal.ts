@@ -13,7 +13,6 @@ import Notifications from "../feature-plugins/system/notifications"
 import SessionV2Debug from "../feature-plugins/system/session-v2"
 import WhichKey from "../feature-plugins/system/which-key"
 import DiffViewer from "../feature-plugins/system/diff-viewer"
-import DAGConsole from "../feature-plugins/dag-console/index"
 import DAGWorkflow from "../feature-plugins/dag-workflow/index"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
@@ -42,7 +41,6 @@ export function internalTuiPlugins(
     PluginManager,
     WhichKey,
     DiffViewer,
-    DAGConsole,
     DAGWorkflow,
     ...(flags.experimentalEventSystem ? [SessionV2Debug] : []),
   ]

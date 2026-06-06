@@ -135,22 +135,24 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   }))
 
   const { list: workflowList } = useWorkflowList({
-    kv: props.api.kv,
+    client: props.api.client,
+    event: props.api.event,
     session_id: sessionID,
   })
 
   const { workflow: currentWorkflow } = useWorkflow({
-    kv: props.api.kv,
+    client: props.api.client,
+    event: props.api.event,
     workflowId: currentWorkflowID,
   })
 
   const { nodes } = useNodes({
-    kv: props.api.kv,
+    client: props.api.client,
+    event: props.api.event,
     workflowId: currentWorkflowID,
   })
 
   const { violations } = useViolations({
-    kv: props.api.kv,
     workflowId: currentWorkflowID,
   })
 
@@ -205,7 +207,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           </text>
           <text fg={theme.textMuted}>│</text>
           <text fg={theme.text}>
-            <b>DAG Workflow</b>
+            <b>DAG 工作流</b>
           </text>
         </box>
         <box flexDirection="row" gap={3}>
@@ -213,16 +215,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             fg={viewMode() === "tree" ? theme.text : theme.textMuted}
             onMouseUp={() => setViewMode("tree")}
           >
-            {viewMode() === "tree" ? <b>Tree View</b> : "Tree View"}
+            {viewMode() === "tree" ? <b>树状视图</b> : "树状视图"}
           </text>
           <text
             fg={viewMode() === "ascii-dag" ? theme.text : theme.textMuted}
             onMouseUp={() => setViewMode("ascii-dag")}
           >
-            {viewMode() === "ascii-dag" ? <b>ASCII DAG</b> : "ASCII DAG"}
+            {viewMode() === "ascii-dag" ? <b>ASCII 图</b> : "ASCII 图"}
           </text>
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
-            [Esc] Back
+            [Esc] 返回
           </text>
         </box>
       </box>

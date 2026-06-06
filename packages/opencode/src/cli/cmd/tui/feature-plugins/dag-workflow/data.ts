@@ -1,335 +1,129 @@
 /**
  * DAG Workflow 数据抽象层
  *
- * 封装 WP3 阶段的 mock 数据访问。
- * 后续 WP4 会替换为 SDK query + SSE subscription，但对外暴露的接口不变。
+ * 通过 server 只读路由（SDK `client.dag.*`）拉取 DAG 工作流数据，
+ * 并订阅平台事件总线（`api.event`，由 server SSE 推送）做实时刷新。
  *
  * 铁律约束：
- * - 禁止直接调用 SDK（必须走此抽象层）
- * - KV 键通过 kv.get/set API 操作（不硬编码完整键字面量到调用方）
- * - 传输抽象层接口稳定，方便 WP4 扩展实现
+ * - TUI 只读：此层只读取，绝不写状态（写必须经 server API + 状态机）
+ * - 组件不得直接调用 SDK：所有数据访问都封装在此模块的 hooks 内
+ * - 实时更新通过 `api.event` 订阅（dag.workflow.updated / dag.node.updated），
+ *   不使用 createResource（按本插件架构约束）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type {
+  DAGConfig,
+  DAGNodeConfig,
   DAGNodeSession,
   DAGViolation,
   DAGWorkflowSession,
 } from "@/dag/session/types"
-import { createMemo, createSignal, type Accessor } from "solid-js"
+import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
+
+type Client = TuiPluginApi["client"]
+type EventBus = TuiPluginApi["event"]
 
 // ============================================================================
-// KV Key 模板（封装在此模块内，调用方不感知具体前缀）
+// SDK → 领域类型映射
+//
+// SDK 生成的数字字段是 `number | "NaN" | "Infinity" | ...` 联合（OpenAPI 序列化
+// 产物），这里统一收敛为 number / number | null。
 // ============================================================================
 
-export const kvKeys = {
-  workflowList: (sessionId: string) => `dag_workflows_${sessionId}`,
-  workflow: (workflowId: string) => `dag_workflow_${workflowId}`,
-  nodes: (workflowId: string) => `dag_nodes_${workflowId}`,
-  violations: (workflowId: string) => `dag_violations_${workflowId}`,
-  timeline: (workflowId: string) => `dag_timeline_${workflowId}`,
+type SdkNumber = number | string
+
+function num(v: SdkNumber | null | undefined, fallback = 0): number {
+  if (v === null || v === undefined) return fallback
+  const n = typeof v === "number" ? v : Number(v)
+  return Number.isFinite(n) ? n : fallback
 }
 
-// ============================================================================
-// Timeline 事件类型（WP3 mock 用；WP4 将来自 SDK SSE）
-// ============================================================================
+function numOrNull(v: SdkNumber | null | undefined): number | null {
+  if (v === null || v === undefined) return null
+  const n = typeof v === "number" ? v : Number(v)
+  return Number.isFinite(n) ? n : null
+}
 
-export type DAGTimelineEvent = {
-  id: string
+/** SDK DagNode → 领域 DAGNodeSession */
+export function mapNode(n: {
+  node_id: string
   workflow_id: string
-  node_id?: string
-  type: "state_change" | "violation" | "log" | "milestone"
-  label: string
-  timestamp: number
-  severity?: "info" | "warning" | "error"
+  config: unknown
+  status: DAGNodeSession["status"]
+  output: unknown
+  retry_count: SdkNumber
+  max_retries: SdkNumber
+  timeout_ms: SdkNumber
+  required_nodes: ReadonlyArray<string>
+  dependencies: ReadonlyArray<string>
+  metadata: Record<string, unknown>
+  start_time: SdkNumber | null
+  completed_at: string | null
+  end_time: SdkNumber | null
+  duration_ms: SdkNumber | null
+  parent_node: string | null
+  created_at: SdkNumber
+  updated_at: SdkNumber
+}): DAGNodeSession {
+  return {
+    node_id: n.node_id,
+    workflow_id: n.workflow_id,
+    config: (n.config ?? {}) as DAGNodeConfig,
+    status: n.status,
+    output: n.output,
+    retry_count: num(n.retry_count),
+    max_retries: num(n.max_retries),
+    timeout_ms: num(n.timeout_ms),
+    required_nodes: [...n.required_nodes],
+    dependencies: [...n.dependencies],
+    metadata: { ...n.metadata },
+    start_time: numOrNull(n.start_time),
+    completed_at: n.completed_at ? String(n.completed_at) : null,
+    end_time: numOrNull(n.end_time),
+    duration_ms: numOrNull(n.duration_ms),
+    parent_node: n.parent_node ?? null,
+    created_at: num(n.created_at),
+    updated_at: num(n.updated_at),
+    logs: [],
+  }
 }
 
-// ============================================================================
-// Mock 数据（WP3 阶段；WP4 替换为真实数据源）
-// ============================================================================
-
-const NOW = Date.now()
-
-const MOCK_WORKFLOW_LIST: DAGWorkflowSession[] = [
-  {
-    id: "wf-123",
-    chat_session_id: "chat-session-1",
-    config: {
-      name: "Build Agent Flow",
-      description: "三阶段 agent 构建流水线",
-      nodes: [
-        {
-          id: "gather",
-          name: "收集需求",
-          dependencies: [],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        {
-          id: "plan",
-          name: "生成计划",
-          dependencies: ["gather"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        {
-          id: "execute",
-          name: "执行任务",
-          dependencies: ["plan"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-      ],
-      max_concurrency: 2,
-    },
-    status: "running",
-    node_sessions: {
-      gather: {
-        node_id: "gather",
-        workflow_id: "wf-123",
-        config: {
-          id: "gather",
-          name: "收集需求",
-          dependencies: [],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        status: "completed",
-        output: null,
-        retry_count: 0,
-        max_retries: 3,
-        timeout_ms: 60_000,
-        required_nodes: [],
-        dependencies: [],
-        metadata: { chat_session_id: "chat-node-gather" },
-        start_time: NOW - 60_000,
-        completed_at: (NOW - 30_000).toString(),
-        end_time: NOW - 30_000,
-        duration_ms: 30_000,
-        parent_node: null,
-        created_at: NOW - 60_000,
-        updated_at: NOW - 30_000,
-        logs: ["需求收集完成", "共识别 3 个子任务"],
-      },
-      plan: {
-        node_id: "plan",
-        workflow_id: "wf-123",
-        config: {
-          id: "plan",
-          name: "生成计划",
-          dependencies: ["gather"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        status: "running",
-        output: null,
-        retry_count: 0,
-        max_retries: 3,
-        timeout_ms: 120_000,
-        required_nodes: ["gather"],
-        dependencies: ["gather"],
-        metadata: { chat_session_id: "chat-node-plan" },
-        start_time: NOW - 20_000,
-        completed_at: null,
-        end_time: null,
-        duration_ms: null,
-        parent_node: null,
-        created_at: NOW - 20_000,
-        updated_at: NOW,
-        logs: ["正在分解需求为可执行计划..."],
-      },
-      execute: {
-        node_id: "execute",
-        workflow_id: "wf-123",
-        config: {
-          id: "execute",
-          name: "执行任务",
-          dependencies: ["plan"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        status: "pending",
-        output: null,
-        retry_count: 0,
-        max_retries: 3,
-        timeout_ms: 300_000,
-        required_nodes: ["plan"],
-        dependencies: ["plan"],
-        metadata: { chat_session_id: "chat-node-execute" },
-        start_time: null,
-        completed_at: null,
-        end_time: null,
-        duration_ms: null,
-        parent_node: null,
-        created_at: NOW - 60_000,
-        updated_at: NOW - 60_000,
-        logs: [],
-      },
-    },
+/** SDK DagWorkflow → 领域 DAGWorkflowSession（节点会话单独注入） */
+export function mapWorkflow(
+  w: {
+    id: string
+    chat_session_id: string
+    config: unknown
+    status: DAGWorkflowSession["status"]
+    metadata: Record<string, unknown>
+    start_time: SdkNumber
+    end_time: SdkNumber | null
+    current_node: string | null
+    created_at: SdkNumber
+    updated_at: SdkNumber
+    completed_at: SdkNumber | null
+    duration_ms: SdkNumber | null
+  },
+  nodes: DAGNodeSession[] = [],
+): DAGWorkflowSession {
+  const node_sessions: Record<string, DAGNodeSession> = {}
+  for (const n of nodes) node_sessions[n.node_id] = n
+  return {
+    id: w.id,
+    chat_session_id: w.chat_session_id,
+    config: (w.config ?? { nodes: [] }) as DAGConfig,
+    status: w.status,
+    node_sessions,
     violations: [],
-    metadata: {},
-    start_time: NOW - 60_000,
-    end_time: null,
-    current_node: "plan",
-    created_at: NOW - 60_000,
-    updated_at: NOW,
-    completed_at: null,
-    duration_ms: null,
-  },
-  {
-    id: "wf-456",
-    chat_session_id: "chat-session-1",
-    config: {
-      name: "Debug Pipeline",
-      description: "失败重试演示",
-      nodes: [
-        {
-          id: "diag",
-          name: "诊断",
-          dependencies: [],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        {
-          id: "fix",
-          name: "修复",
-          dependencies: ["diag"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-      ],
-      max_concurrency: 1,
-    },
-    status: "failed",
-    node_sessions: {
-      diag: {
-        node_id: "diag",
-        workflow_id: "wf-456",
-        config: {
-          id: "diag",
-          name: "诊断",
-          dependencies: [],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        status: "completed",
-        output: null,
-        retry_count: 0,
-        max_retries: 0,
-        timeout_ms: 60_000,
-        required_nodes: [],
-        dependencies: [],
-        metadata: { chat_session_id: "chat-node-diag" },
-        start_time: NOW - 90_000,
-        completed_at: (NOW - 80_000).toString(),
-        end_time: NOW - 80_000,
-        duration_ms: 10_000,
-        parent_node: null,
-        created_at: NOW - 90_000,
-        updated_at: NOW - 80_000,
-        logs: ["诊断完成"],
-      },
-      fix: {
-        node_id: "fix",
-        workflow_id: "wf-456",
-        config: {
-          id: "fix",
-          name: "修复",
-          dependencies: ["diag"],
-          required: true,
-          worker_type: "subagent",
-          worker_config: {},
-        },
-        status: "failed",
-        output: null,
-        error_info: {
-          type: "runtime",
-          message: "Subagent timed out after 120s",
-          retryable: true,
-        },
-        retry_count: 2,
-        max_retries: 2,
-        timeout_ms: 120_000,
-        required_nodes: ["diag"],
-        dependencies: ["diag"],
-        metadata: { chat_session_id: "chat-node-fix" },
-        start_time: NOW - 75_000,
-        completed_at: null,
-        end_time: NOW - 70_000,
-        duration_ms: 5_000,
-        parent_node: null,
-        created_at: NOW - 75_000,
-        updated_at: NOW - 70_000,
-        logs: ["尝试修复失败", "重试次数已耗尽"],
-      },
-    },
-    violations: [
-      {
-        id: "v-001",
-        workflowId: "wf-456",
-        type: "required_node_failed",
-        severity: "error",
-        nodeId: "fix",
-        message: "Required node 'fix' failed after 2 retries",
-        timestamp: new Date(NOW - 70_000).toISOString(),
-      },
-    ],
-    metadata: {},
-    start_time: NOW - 90_000,
-    end_time: NOW - 70_000,
-    current_node: null,
-    created_at: NOW - 90_000,
-    updated_at: NOW - 70_000,
-    completed_at: NOW - 70_000,
-    duration_ms: 20_000,
-  },
-]
-
-const MOCK_WORKFLOWS_INDEX: Record<string, DAGWorkflowSession> = {
-  "wf-123": MOCK_WORKFLOW_LIST[0],
-  "wf-456": MOCK_WORKFLOW_LIST[1],
-}
-
-const MOCK_TIMELINE: Record<string, DAGTimelineEvent[]> = {
-  "wf-123": [
-    {
-      id: "evt-1",
-      workflow_id: "wf-123",
-      node_id: "gather",
-      type: "milestone",
-      label: "Node 'gather' completed",
-      timestamp: NOW - 30_000,
-      severity: "info",
-    },
-    {
-      id: "evt-2",
-      workflow_id: "wf-123",
-      node_id: "plan",
-      type: "state_change",
-      label: "Node 'plan' transitioned to running",
-      timestamp: NOW - 20_000,
-      severity: "info",
-    },
-  ],
-  "wf-456": [
-    {
-      id: "evt-3",
-      workflow_id: "wf-456",
-      node_id: "fix",
-      type: "violation",
-      label: "required_node_failed: Node 'fix'",
-      timestamp: NOW - 70_000,
-      severity: "error",
-    },
-  ],
+    metadata: { ...w.metadata },
+    start_time: num(w.start_time),
+    end_time: numOrNull(w.end_time),
+    current_node: w.current_node ?? null,
+    created_at: num(w.created_at),
+    updated_at: num(w.updated_at),
+    completed_at: numOrNull(w.completed_at),
+    duration_ms: numOrNull(w.duration_ms),
+  }
 }
 
 // ============================================================================
@@ -356,130 +150,148 @@ export type ViolationsApi = {
   refresh: () => void
 }
 
-export type TimelineApi = {
-  events: Accessor<DAGTimelineEvent[]>
-  refresh: () => void
-}
+// ============================================================================
+// Hooks
+// ============================================================================
 
 /**
- * useWorkflowList — 获取 session 下所有 workflow 列表
- * 优先 KV fallback，KV 无数据时返回 mock 数据（WP3）
+ * useWorkflowList — 获取（可按 chat session 过滤的）workflow 列表。
+ * 订阅 dag.workflow.updated 做实时刷新。
  */
 export function useWorkflowList(props: {
-  kv: TuiPluginApi["kv"]
+  client: Client
+  event: EventBus
   session_id: Accessor<string>
 }): WorkflowListApi {
-  const [version, setVersion] = createSignal(0)
+  const [list, setList] = createSignal<DAGWorkflowSession[]>([])
+  let cancelled = false
 
-  const list = createMemo<DAGWorkflowSession[]>(() => {
-    version()
+  async function load() {
     const sid = props.session_id()
-    const kvData = props.kv.get<DAGWorkflowSession[]>(kvKeys.workflowList(sid))
-    if (kvData && Array.isArray(kvData) && kvData.length > 0) return kvData
-    return MOCK_WORKFLOW_LIST
+    const res = await props.client.dag.listWorkflows(sid ? { chatSessionId: sid } : {})
+    if (cancelled) return
+    const data = res.data
+    if (Array.isArray(data)) setList(data.map((w) => mapWorkflow(w)))
+  }
+
+  createEffect(() => {
+    props.session_id()
+    void load()
   })
 
-  return {
-    list,
-    refresh: () => setVersion((v) => v + 1),
-  }
+  const off = props.event.on("dag.workflow.updated", () => void load())
+  onCleanup(() => {
+    cancelled = true
+    off()
+  })
+
+  return { list, refresh: () => void load() }
 }
 
 /**
- * useWorkflow — 获取单个 workflow
- * KV 优先；mock fallback
+ * useWorkflow — 获取单个 workflow 详情（含其节点会话）。
+ * 订阅该 workflow 的 dag.workflow.updated / dag.node.updated 做实时刷新。
  */
 export function useWorkflow(props: {
-  kv: TuiPluginApi["kv"]
+  client: Client
+  event: EventBus
   workflowId: Accessor<string | undefined>
 }): WorkflowApi {
-  const [version, setVersion] = createSignal(0)
+  const [workflow, setWorkflow] = createSignal<DAGWorkflowSession | null>(null)
+  let cancelled = false
 
-  const workflow = createMemo<DAGWorkflowSession | null>(() => {
-    version()
+  async function load() {
     const id = props.workflowId()
-    if (!id) return null
-    const kvData = props.kv.get<DAGWorkflowSession>(kvKeys.workflow(id))
-    if (kvData) return kvData
-    return MOCK_WORKFLOWS_INDEX[id] ?? null
+    if (!id) {
+      setWorkflow(null)
+      return
+    }
+    const res = await props.client.dag.getWorkflow({ workflowId: id })
+    if (cancelled) return
+    const detail = res.data
+    if (detail?.workflow) {
+      const nodes = (detail.nodes ?? []).map(mapNode)
+      setWorkflow(mapWorkflow(detail.workflow, nodes))
+    } else {
+      setWorkflow(null)
+    }
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
   })
 
-  return {
-    workflow,
-    refresh: () => setVersion((v) => v + 1),
-  }
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offN()
+  })
+
+  return { workflow, refresh: () => void load() }
 }
 
 /**
- * useNodes — 获取某个 workflow 的所有节点
+ * useNodes — 获取某个 workflow 的所有节点会话。
+ * 与 useWorkflow 共享 getWorkflow 路由，订阅 dag.node.updated 做实时刷新。
  */
 export function useNodes(props: {
-  kv: TuiPluginApi["kv"]
+  client: Client
+  event: EventBus
   workflowId: Accessor<string | undefined>
 }): NodesApi {
-  const [version, setVersion] = createSignal(0)
+  const [nodes, setNodes] = createSignal<DAGNodeSession[]>([])
+  let cancelled = false
 
-  const nodes = createMemo<DAGNodeSession[]>(() => {
-    version()
+  async function load() {
     const id = props.workflowId()
-    if (!id) return []
-    const kvData = props.kv.get<DAGNodeSession[]>(kvKeys.nodes(id))
-    if (kvData && Array.isArray(kvData)) return kvData
-    const wf = MOCK_WORKFLOWS_INDEX[id]
-    return wf ? Object.values(wf.node_sessions) : []
+    if (!id) {
+      setNodes([])
+      return
+    }
+    const res = await props.client.dag.getWorkflow({ workflowId: id })
+    if (cancelled) return
+    const detail = res.data
+    setNodes((detail?.nodes ?? []).map(mapNode))
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
   })
 
-  return {
-    nodes,
-    refresh: () => setVersion((v) => v + 1),
-  }
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offN()
+  })
+
+  return { nodes, refresh: () => void load() }
 }
 
 /**
- * useViolations — 获取某个 workflow 的违规记录
+ * useViolations — workflow 违规记录。
+ *
+ * server 目前未暴露独立的 violations 只读路由，故此 hook 返回空集合，
+ * 保留接口以便后续 server 增加 `/dag/workflows/:id/violations` 后接入。
  */
-export function useViolations(props: {
-  kv: TuiPluginApi["kv"]
+export function useViolations(_props: {
   workflowId: Accessor<string | undefined>
 }): ViolationsApi {
-  const [version, setVersion] = createSignal(0)
-
-  const violations = createMemo<DAGViolation[]>(() => {
-    version()
-    const id = props.workflowId()
-    if (!id) return []
-    const kvData = props.kv.get<DAGViolation[]>(kvKeys.violations(id))
-    if (kvData && Array.isArray(kvData)) return kvData
-    const wf = MOCK_WORKFLOWS_INDEX[id]
-    return wf?.violations ?? []
-  })
-
-  return {
-    violations,
-    refresh: () => setVersion((v) => v + 1),
-  }
-}
-
-/**
- * useTimeline — 获取某个 workflow 的时间线事件
- */
-export function useTimeline(props: {
-  kv: TuiPluginApi["kv"]
-  workflowId: Accessor<string | undefined>
-}): TimelineApi {
-  const [version, setVersion] = createSignal(0)
-
-  const events = createMemo<DAGTimelineEvent[]>(() => {
-    version()
-    const id = props.workflowId()
-    if (!id) return []
-    const kvData = props.kv.get<DAGTimelineEvent[]>(kvKeys.timeline(id))
-    if (kvData && Array.isArray(kvData)) return kvData
-    return MOCK_TIMELINE[id] ?? []
-  })
-
-  return {
-    events,
-    refresh: () => setVersion((v) => v + 1),
-  }
+  const [violations] = createSignal<DAGViolation[]>([])
+  return { violations, refresh: () => {} }
 }

@@ -2,7 +2,7 @@
 /**
  * DAG Workflow 工作台渲染组件
  *
- * 复用 dag-console 的设计模式但独立实现，避免修改原文件。
+ * DAG 工作流面板渲染组件（独立实现）。
  * 包含：DagWorkflowRenderer（节点树，按拓扑层级缩进展示全部节点）
  *       DagProgressBar（进度条）
  */
