@@ -1,14 +1,18 @@
 import { Effect } from "effect"
 import { Database } from "@/storage/db"
-import { eq } from "drizzle-orm"
+import { eq, inArray } from "drizzle-orm"
 import { 
   dagWorkflows, 
   dagNodes, 
-  dagViolations 
+  dagViolations,
+  dagWorkflowHistory,
 } from "../persistence/schema"
+import type { DagWorkflowHistory } from "../persistence/schema"
 import type {
   DAGWorkflowSession,
   DAGNodeSession,
+  DAGConfig,
+  DAGNodeConfig,
   DAGViolation,
   DAGWorkflowStatus,
   DAGNodeStatus,
@@ -188,6 +192,36 @@ export interface CreateViolationInput {
   details?: Record<string, unknown>
 }
 
+export interface CreateHistoryInput {
+  workflowId: string
+  chatSessionId: string
+  action: string
+  oldState: unknown
+  newState: unknown
+  changeDetails: unknown
+  changedBy?: string | null
+}
+
+export interface UpdateNodeConfigInput {
+  nodeId: string
+  newConfig: DAGNodeConfig
+  newDependencies?: string[]
+}
+
+export interface AtomicReplanInput {
+  workflowId: string
+  chatSessionId: string
+  removeNodeIds: string[]
+  updates: UpdateNodeConfigInput[]
+  newNodes: CreateNodeInput[]
+  newWorkflowConfig: DAGConfig
+  action: string
+  oldState: unknown
+  newState: unknown
+  changeDetails: unknown
+  changedBy?: string | null
+}
+
 // ============================================================================
 // Service Interface
 // ============================================================================
@@ -208,6 +242,12 @@ export interface IDAGSessionService {
   
   readonly createViolation: (input: CreateViolationInput) => Effect.Effect<DAGViolation>
   readonly listViolations: (workflowId: string) => Effect.Effect<DAGViolation[]>
+
+  /** Optional: replan-related methods. Absent in historical mocks. */
+  readonly createHistory?: (input: CreateHistoryInput) => Effect.Effect<DagWorkflowHistory>
+  readonly deleteNode?: (nodeId: string) => Effect.Effect<void>
+  readonly updateNodeConfig?: (input: UpdateNodeConfigInput) => Effect.Effect<void>
+  readonly atomicReplan?: (input: AtomicReplanInput) => Effect.Effect<DagWorkflowHistory>
 }
 
 // ============================================================================
@@ -658,6 +698,172 @@ const make = Effect.gen(function* () {
       }))
     })
   
+  // ============================================================================
+  // Replan-related methods (optional on the interface — always provided here)
+  // ============================================================================
+
+  const createHistory: IDAGSessionService["createHistory"] = (input) =>
+    Effect.sync(() => {
+      const now = Date.now()
+      const historyId = `history_${now}_${Math.random().toString(36).slice(2)}`
+
+      Database.use((db) => {
+        db.insert(dagWorkflowHistory).values({
+          history_id: historyId,
+          workflow_id: input.workflowId,
+          chat_session_id: input.chatSessionId,
+          action: input.action,
+          old_state: input.oldState,
+          new_state: input.newState,
+          change_details: input.changeDetails,
+          changed_by: input.changedBy ?? null,
+          created_at: now,
+        }).run()
+      })
+
+      return {
+        history_id: historyId,
+        workflow_id: input.workflowId,
+        chat_session_id: input.chatSessionId,
+        action: input.action,
+        old_state: input.oldState,
+        new_state: input.newState,
+        change_details: input.changeDetails,
+        changed_by: input.changedBy ?? null,
+        created_at: now,
+      }
+    })
+
+  const deleteNode: IDAGSessionService["deleteNode"] = (nodeId) =>
+    Effect.sync(() => {
+      let currentStatus: DAGNodeStatus | null = null
+      Database.use((db) => {
+        const rows = db.select({ status: dagNodes.status })
+          .from(dagNodes)
+          .where(eq(dagNodes.node_id, nodeId))
+          .limit(1)
+          .all()
+        if (rows.length > 0) currentStatus = rows[0].status as DAGNodeStatus
+      })
+      if (currentStatus && currentStatus !== 'pending') {
+        throw new Error(`Cannot delete non-pending node: ${nodeId} (${currentStatus})`)
+      }
+      Database.use((db) => {
+        db.delete(dagNodes).where(eq(dagNodes.node_id, nodeId)).run()
+      })
+    })
+
+  const updateNodeConfig: IDAGSessionService["updateNodeConfig"] = (input) =>
+    Effect.sync(() => {
+      let currentStatus: DAGNodeStatus | null = null
+      let existingDeps: string[] = []
+      Database.use((db) => {
+        const rows = db.select({ status: dagNodes.status, dependencies: dagNodes.dependencies })
+          .from(dagNodes)
+          .where(eq(dagNodes.node_id, input.nodeId))
+          .limit(1)
+          .all()
+        if (rows.length > 0) {
+          currentStatus = rows[0].status as DAGNodeStatus
+          try { existingDeps = JSON.parse((rows[0].dependencies as any) ?? "[]") } catch { existingDeps = [] }
+        }
+      })
+      if (currentStatus && currentStatus !== 'pending') {
+        throw new Error(`Cannot update non-pending node: ${input.nodeId} (${currentStatus})`)
+      }
+      const now = Date.now()
+      Database.use((db) => {
+        db.update(dagNodes)
+          .set({
+            config: JSON.stringify(input.newConfig),
+            dependencies: JSON.stringify(input.newDependencies ?? existingDeps),
+            updated_at: now,
+          })
+          .where(eq(dagNodes.node_id, input.nodeId))
+          .run()
+      })
+    })
+
+  const atomicReplan: IDAGSessionService["atomicReplan"] = (input) =>
+    Effect.sync(() => {
+      const now = Date.now()
+      const hid = `history_${now}_${Math.random().toString(36).slice(2)}`
+      const historyId = Database.transaction((tx) => {
+        // 1. DELETE removed pending nodes
+        if (input.removeNodeIds.length > 0) {
+          tx.delete(dagNodes).where(inArray(dagNodes.node_id, input.removeNodeIds)).run()
+        }
+        // 2. UPDATE modified pending nodes (config + dependencies)
+        for (const u of input.updates) {
+          tx
+            .update(dagNodes)
+            .set({
+              config: JSON.stringify(u.newConfig),
+              dependencies: JSON.stringify(u.newDependencies ?? []),
+              updated_at: now,
+            })
+            .where(eq(dagNodes.node_id, u.nodeId))
+            .run()
+        }
+        // 3. INSERT newly added nodes (namespaced, status=pending)
+        for (const n of input.newNodes) {
+          const nodeId = n.nodeId ?? `${input.workflowId}::${(n.config as any)?.id ?? 'anon'}`
+          tx.insert(dagNodes).values({
+            node_id: nodeId,
+            workflow_id: input.workflowId,
+            config: JSON.stringify(n.config),
+            status: "pending",
+            output: null,
+            error_info: null,
+            retry_count: n.retryCount ?? 0,
+            max_retries: n.maxRetries ?? 0,
+            timeout_ms: n.timeoutMs ?? 300000,
+            required_nodes: JSON.stringify([]),
+            dependencies: JSON.stringify(n.dependencyNodes ?? []),
+            metadata: JSON.stringify({}),
+            start_time: null,
+            end_time: null,
+            parent_node: null,
+            duration_ms: null,
+            created_at: now,
+            updated_at: now,
+            completed_at: null,
+          }).run()
+        }
+        // 4. UPDATE dag_workflow.config to the new merged config
+        tx
+          .update(dagWorkflows)
+          .set({ config: JSON.stringify(input.newWorkflowConfig), updated_at: now })
+          .where(eq(dagWorkflows.workflow_id, input.workflowId))
+          .run()
+        // 5. INSERT dag_workflow_history row (the durable audit record)
+        tx.insert(dagWorkflowHistory).values({
+          history_id: hid,
+          workflow_id: input.workflowId,
+          chat_session_id: input.chatSessionId,
+          action: input.action,
+          old_state: input.oldState,
+          new_state: input.newState,
+          change_details: input.changeDetails,
+          changed_by: input.changedBy ?? null,
+          created_at: now,
+        }).run()
+        return hid
+      })
+
+      return {
+        history_id: historyId,
+        workflow_id: input.workflowId,
+        chat_session_id: input.chatSessionId,
+        action: input.action,
+        old_state: input.oldState,
+        new_state: input.newState,
+        change_details: input.changeDetails,
+        changed_by: input.changedBy ?? null,
+        created_at: now,
+      } as DagWorkflowHistory
+    })
+
   return {
     createWorkflow,
     getWorkflow,
@@ -671,6 +877,10 @@ const make = Effect.gen(function* () {
     createViolation,
     listViolations,
     listAllWorkflows,
+    createHistory,
+    deleteNode,
+    updateNodeConfig,
+    atomicReplan,
   } satisfies IDAGSessionService
 })
 

@@ -357,3 +357,131 @@ Parallel fan-out with exponential retry. `aggregate` runs only when both fixes c
 4. **Not polling status**: `dagworker start` returns immediately. If you want to know when the workflow completes, either poll `dagworker status` periodically, or set `wait: true` on start to block (not recommended for long workflows).
 
 5. **Hardcoding max_concurrency > 10**: Always ≤ 10. The engine enforces this but surfacing a clear error saves round trips.
+
+## 14. Replan protocol
+
+### 14.1 Overview
+
+`dagworker action=replan patch={...}` restructures the *tail* of a running workflow — the portion that hasn't left `pending` status — without cancelling in-flight nodes. The engine atomically:
+
+1. Deletes the specified pending nodes.
+2. Applies config/dependency patches to the specified pending nodes.
+3. Inserts the newly added nodes (with namespaced IDs).
+4. Replaces `dag_workflow.config` with the merged (post-patch) `DAGConfig`.
+5. Inserts one `dag_workflow_history` row with `action='replan'`, the pre- and post- state as JSON, a `change_details` JSON blob, and a `history_id`.
+
+All five writes happen inside a single `Database.transaction`. If any step throws, the whole transaction rolls back and the tool returns `{ ok: false, reason, detail }`.
+
+### 14.2 ReplanPatch schema
+
+```ts
+interface ReplanPatch {
+  workflow_id: string                          // Required. The workflow to replan.
+  add_nodes?: DAGNodeConfig[]                  // New nodes. cfg.id must NOT be namespaced.
+  remove_nodes?: string[]                      // Namespaced node ids (${workflowId}::${cfg.id}). Must be pending.
+  update_nodes?: ReplanNodePatch[]             // Per-node patches. See below.
+  new_max_concurrency?: number                 // 1..10. Optional.
+  changed_by?: string                          // Free-form audit tag, e.g. "main-agent".
+}
+
+interface ReplanNodePatch {
+  node_id: string                              // Namespaced.
+  new_config?: Partial<Omit<DAGNodeConfig, 'id' | 'dependencies'>>  // Patches everything except id/dependencies.
+  new_dependencies?: string[]                  // Full replacement of the dependency list (still un-namespaced).
+}
+```
+
+### 14.3 ReplanResult shape
+
+Success:
+```json
+{
+  "ok": true,
+  "workflow_id": "...",
+  "history_id": "history_<ts>_<rand>",
+  "nodes_added": 1,
+  "nodes_removed": 1,
+  "nodes_updated": 2,
+  "final_total": 5
+}
+```
+
+Failure:
+```json
+{ "ok": false, "reason": "Cannot remove frozen nodes: wf-abc::build", "detail": {} }
+```
+
+### 14.4 Frozen vs mutable nodes
+
+Nodes are classified at the moment the replan begins:
+
+| Status | Classification | Notes |
+|---|---|---|
+| `pending` | Mutable | Patch may remove, update, or rewire dependencies. |
+| `queued` | Frozen | Scheduler picked it; may be mid-spawn. |
+| `running` | Frozen | Child agent session actively executing. |
+| `completed` | Frozen (terminal) | Output already produced. |
+| `failed` | Frozen (terminal) | Violation already recorded. |
+| `skipped` | Frozen (terminal) | Required-upstream failure path. |
+
+Any `remove_nodes` entry or `update_nodes` entry targeting a frozen/terminal node makes the replan reject.
+
+Workflows whose status is `completed` / `failed` / `cancelled` reject outright.
+
+### 14.5 Validation rules applied at replan time
+
+Before any DB write, `replanWorkflow` runs these checks on the post-patch config:
+
+| Rule | Limit | Failure message |
+|---|---|---|
+| Node cap | `nodes.length ≤ 20` | `node cap exceeded: N > 20` |
+| Concurrency cap | `1 ≤ max_concurrency ≤ 10` | `max_concurrency must be 1..10, got X` |
+| Dependency reference resolution | Every `dependencies[i]` resolves to a `cfg.id` in the post-patch graph | `unresolved dependency: node 'a' references 'b'` |
+| RequiredNodesValidator | Passes the existing validator | `Validation errors: ...` |
+| Required nodes cannot be removed | No `required: true` node appears in `remove_nodes` | `Cannot remove required nodes: ...` |
+| No cycles | DFS over the post-patch `dependencies[]` graph | `patch introduces a cycle` |
+
+### 14.6 Atomicity guarantee
+
+The actual DB writes happen inside `atomicReplan`, which wraps them in `Database.transaction((tx) => { ... })`. The callback is synchronous (`Effect.sync` semantics, `NotPromise<T>` return). Any throw inside the callback aborts the SQLite transaction; the surrounding `Effect` collapses it to `{ ok: false, reason, detail }` via `Effect.catchCause`.
+
+The single `dag_workflow_history` row written inside the same transaction is the durable audit record. Each successful replan produces exactly one such row with `action='replan'`.
+
+### 14.7 Worked example — add a verification stage mid-workflow
+
+Three-stage linear pipeline: `build → test → deploy`. `build` and `test` are `completed`; `deploy` is `pending`. We want to interpose a stage `stage-check` between `test` and `deploy`.
+
+```json
+{
+  "workflow_id": "wf-abc",
+  "add_nodes": [{
+    "id": "stage-check",
+    "name": "Stage Check",
+    "dependencies": ["test"],
+    "required": true,
+    "worker_type": "verify",
+    "worker_config": { "agent": "verify", "prompt": "Validate staging deploy readiness" }
+  }],
+  "update_nodes": [{
+    "node_id": "wf-abc::deploy",
+    "new_dependencies": ["stage-check"]
+  }],
+  "changed_by": "main-agent"
+}
+```
+
+Result:
+- `stage-check` materialized as `wf-abc::stage-check` with status `pending`, dependency stored as `["wf-abc::test"]`.
+- `deploy`'s dependency rewritten to `["wf-abc::stage-check"]`.
+- `dag_workflow.config` updated to reflect the new 4-node graph.
+- One `dag_workflow_history` row written with `action='replan'`, `old_state.node_ids = ["wf-abc::build", "wf-abc::test", "wf-abc::deploy"]`, `new_state.node_ids = ["wf-abc::build", "wf-abc::test", "wf-abc::deploy", "wf-abc::stage-check"]`.
+
+### 14.8 Common mistakes
+
+1. **Trying to replan a completed workflow**: Rejected with `Cannot replan a terminal workflow (completed)`. Use a fresh workflow instead.
+2. **Trying to remove a frozen node**: Patching/removing a running or completed node is rejected. Only `pending` nodes are mutable.
+3. **Introducing cycles**: `A → B → A` in `update_nodes` / `add_nodes` is caught before any DB write.
+4. **Forgetting namespaced ids in `remove_nodes` / `update_nodes[].node_id`**: The engine looks them up by the namespaced form; an un-namespaced id silently no-ops (or throws "not found" if the node is required).
+5. **Adding a node whose `cfg.id` already exists in the post-patch graph**: The RequiredNodesValidator rejects duplicates.
+6. **Bumping `max_concurrency` above 10**: Rejected pre-write.
+7. **Removing a `required: true` node**: Always rejected, even if other required nodes complete.

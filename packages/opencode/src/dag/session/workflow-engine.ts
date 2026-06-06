@@ -1,7 +1,18 @@
 import { Cause, Effect } from "effect"
 import { DAGSessionService } from "./session-service"
+import type { CreateNodeInput, UpdateNodeConfigInput } from "./session-service"
 import { ViolationQueryAPI } from "./violation-query"
-import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowStatus } from "./types"
+import { RequiredNodesValidator } from "./required-nodes-validator"
+import type {
+  DAGConfig,
+  DAGNodeConfig,
+  DAGNodeSession,
+  DAGNodeStatus,
+  DAGViolation,
+  DAGWorkflowStatus,
+  ReplanPatch,
+  ReplanResult,
+} from "./types"
 import type { PromptOps } from "@/session/prompt-ops"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
@@ -35,6 +46,7 @@ export interface WorkflowEngine {
   handleNodeFailure(workflowId: string, nodeId: string, error: Error): Effect.Effect<unknown>
   cancelWorkflow(workflowId: string): Effect.Effect<unknown>
   getWorkflowStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot>
+  replanWorkflow(workflowId: string, patch: ReplanPatch): Effect.Effect<ReplanResult>
 }
 
 // ============================================================================
@@ -45,6 +57,29 @@ export interface WorkflowEngine {
 const engineRegistry = new Map<string, WorkflowEngine>()
 const spawnedNodes = new Set<string>()
 const concurrencyRegistry = new Map<string, number>()
+const replanInFlight = new Set<string>()
+
+/**
+ * Inline cycle detector over a list of node configs (DFS-based).
+ * Returns true when ANY cycle exists in the `dependencies[]` graph.
+ */
+function detectCycle(nodes: DAGNodeConfig[]): boolean {
+  const graph = new Map<string, string[]>()
+  for (const n of nodes) graph.set(n.id, n.dependencies)
+  const visited = new Set<string>()
+  const inStack = new Set<string>()
+  const dfs = (id: string): boolean => {
+    if (inStack.has(id)) return true
+    if (visited.has(id)) return false
+    visited.add(id)
+    inStack.add(id)
+    for (const dep of graph.get(id) ?? []) if (dfs(dep)) return true
+    inStack.delete(id)
+    return false
+  }
+  for (const id of graph.keys()) if (dfs(id)) return true
+  return false
+}
 
 export function registerEngine(workflowId: string, engine: WorkflowEngine): void {
   engineRegistry.set(workflowId, engine)
@@ -244,6 +279,8 @@ const make = Effect.gen(function* () {
    */
   const scheduleReadyNodes: WorkflowEngine['scheduleReadyNodes'] = (workflowId) =>
     Effect.gen(function* () {
+      // Freeze out concurrent spawn while a replan is in progress (race guard)
+      if (replanInFlight.has(workflowId)) return { scheduled: 0 }
       const allNodes = yield* sessionService.listNodes(workflowId)
       const completedNodeIds = new Set<string>(
         allNodes.filter((n: DAGNodeSession) => n.status === 'completed').map((n: DAGNodeSession) => n.node_id)
@@ -383,6 +420,229 @@ const make = Effect.gen(function* () {
       }
     }) as Effect.Effect<WorkflowStatusSnapshot, never>
 
+  // ============================================================================
+  // Replan — atomically restructure the tail of a running workflow
+  // ============================================================================
+
+  const replanWorkflow: WorkflowEngine['replanWorkflow'] = (workflowId, patch) =>
+    Effect.gen(function* () {
+      // 0. Freeze out concurrent spawn for the duration of this replan
+      // NOTE: replanInFlight only freezes NEW scheduleReadyNodes calls. Already-forked
+      // spawnReadyNode fibers from a prior tick continue running. If one of them
+      // targets a node this replan removes, the spawn proceeds, runs, and calls
+      // updateNodeStatus on a deleted row — a SQLite no-op. The wasted LLM work is
+      // accepted as a documented-known; full fiber cancellation is out of scope for
+      // this WP (see dag/AGENTS.md "four iron laws": state-machine integrity is
+      // preserved — no status field is ever corrupted by this race).
+      replanInFlight.add(workflowId)
+
+      // 1. Read current state
+      const workflow = yield* sessionService.getWorkflow(workflowId)
+      if (!workflow) return yield* Effect.fail(new Error(`Workflow ${workflowId} not found`))
+      const currentNodes = yield* sessionService.listNodes(workflowId)
+
+      // 2. Reject if workflow is terminal (completed/failed/cancelled)
+      const terminalWorkflowStatuses: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
+      if (terminalWorkflowStatuses.includes(workflow.status)) {
+        return yield* Effect.fail(new Error(`Cannot replan a terminal workflow (${workflow.status})`))
+      }
+
+      // 2b. Reject empty patches (no add/remove/update + no new_max_concurrency)
+      const isEmpty =
+        !(patch.add_nodes?.length) &&
+        !(patch.remove_nodes?.length) &&
+        !(patch.update_nodes?.length) &&
+        patch.new_max_concurrency === undefined
+      if (isEmpty) {
+        return yield* Effect.fail(new Error(`Empty patch: nothing to do`))
+      }
+
+      // 3. Classify nodes: frozen vs mutable (only pending is mutable)
+      const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
+      const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
+      const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
+      const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
+      const frozenIds = new Set(frozen.map((n: DAGNodeSession) => n.node_id))
+
+      // 4. Reject patch ops that touch frozen nodes
+      const touchFrozenRemove = (patch.remove_nodes ?? []).filter(id => frozenIds.has(id))
+      if (touchFrozenRemove.length > 0) {
+        return yield* Effect.fail(new Error(`Cannot remove frozen nodes: ${touchFrozenRemove.join(', ')}`))
+      }
+      const touchFrozenUpdate = (patch.update_nodes ?? []).filter(u => frozenIds.has(u.node_id))
+      if (touchFrozenUpdate.length > 0) {
+        return yield* Effect.fail(new Error(`Cannot update frozen nodes: ${touchFrozenUpdate.map(u => u.node_id).join(', ')}`))
+      }
+
+      // 4b. Reject patch ops that reference non-existent node_ids (DB-side existence guard)
+      const currentNodeIds = new Set(currentNodes.map((n: DAGNodeSession) => n.node_id))
+      const unknownRemoves = (patch.remove_nodes ?? []).filter(id => !currentNodeIds.has(id))
+      if (unknownRemoves.length > 0) {
+        return yield* Effect.fail(new Error(`remove_nodes references unknown ids: ${unknownRemoves.join(', ')}`))
+      }
+      const unknownUpdates = (patch.update_nodes ?? []).filter(u => !currentNodeIds.has(u.node_id))
+      if (unknownUpdates.length > 0) {
+        return yield* Effect.fail(new Error(`update_nodes references unknown ids: ${unknownUpdates.map(u => u.node_id).join(', ')}`))
+      }
+
+      // 5. Snapshot old state for history
+      const oldState = {
+        config: workflow.config,
+        node_ids: currentNodes.map((n: DAGNodeSession) => n.node_id),
+      }
+
+      // 6. Build new config in-memory (fresh copies of all nodes)
+      const wfNs = (cfgId: string) => `${workflowId}::${cfgId}`
+      let newConfigNodes: DAGNodeConfig[] = workflow.config.nodes.map(n => ({ ...n }))
+
+      // remove: strip by configId (reverse namespace lookup)
+      const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
+      newConfigNodes = newConfigNodes.filter(n => !removeCfgIds.has(n.id))
+
+      // update: apply patches
+      for (const upd of patch.update_nodes ?? []) {
+        const cfgId = upd.node_id.split('::').slice(1).join('::')
+        const idx = newConfigNodes.findIndex(n => n.id === cfgId)
+        if (idx < 0) {
+          return yield* Effect.fail(new Error(`update_nodes references unknown node: ${upd.node_id}`))
+        }
+        if (upd.new_config) {
+          newConfigNodes[idx] = {
+            ...newConfigNodes[idx],
+            ...upd.new_config,
+            id: cfgId,
+            dependencies: upd.new_dependencies ?? newConfigNodes[idx].dependencies,
+          }
+        } else if (upd.new_dependencies) {
+          newConfigNodes[idx] = { ...newConfigNodes[idx], dependencies: upd.new_dependencies }
+        }
+      }
+
+      // add: append new nodes (cfg.id stays un-namespaced in config)
+      for (const added of patch.add_nodes ?? []) newConfigNodes.push(added)
+
+      // 7. Validate new config BEFORE any DB writes
+      const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
+      if (newConfigNodes.length > 20) {
+        return yield* Effect.fail(new Error(`node cap exceeded: ${newConfigNodes.length} > 20`))
+      }
+      if (newMaxConcurrency < 1 || newMaxConcurrency > 10) {
+        return yield* Effect.fail(new Error(`max_concurrency must be 1..10, got ${newMaxConcurrency}`))
+      }
+      const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
+      for (const n of newConfigNodes) {
+        for (const dep of n.dependencies) {
+          if (!cfgIdSet.has(dep)) {
+            return yield* Effect.fail(new Error(`unresolved dependency: node '${n.id}' references '${dep}'`))
+          }
+        }
+      }
+      const requiredValidator = new RequiredNodesValidator()
+      const { valid, errors } = requiredValidator.validate({ ...workflow.config, nodes: newConfigNodes })
+      if (!valid) {
+        return yield* Effect.fail(new Error(`Validation errors:\n${errors.join('\n')}`))
+      }
+      // Reject removals of required nodes
+      const removedRequireds = workflow.config.nodes
+        .filter(n => n.required && removeCfgIds.has(n.id))
+        .map(n => n.id)
+      if (removedRequireds.length > 0) {
+        return yield* Effect.fail(new Error(`Cannot remove required nodes: ${removedRequireds.join(', ')}`))
+      }
+      // Cycle check
+      if (detectCycle(newConfigNodes)) {
+        return yield* Effect.fail(new Error(`patch introduces a cycle`))
+      }
+
+      // 8. Build DB-ready inputs
+      const updates: UpdateNodeConfigInput[] = (patch.update_nodes ?? []).map(u => {
+        const cfgId = u.node_id.split('::').slice(1).join('::')
+        const updatedCfg = newConfigNodes.find(n => n.id === cfgId)!
+        // Namespace new_dependencies if provided AND fall back to the node's
+        // EXISTING stored dependencies when absent (preserves scheduler column).
+        // currentNodes[i].dependencies is already the parsed-and-namespaced array,
+        // so it's safe to re-use directly.
+        const existing = currentNodes.find((n: DAGNodeSession) => n.node_id === u.node_id)
+        const depsToWrite = u.new_dependencies
+          ? u.new_dependencies.map(d => wfNs(d))
+          : existing?.dependencies ?? []
+        return { nodeId: u.node_id, newConfig: updatedCfg, newDependencies: depsToWrite }
+      })
+      const newNodesForDb: CreateNodeInput[] = (patch.add_nodes ?? []).map(a => ({
+        workflowId,
+        nodeId: wfNs(a.id),
+        name: a.name,
+        nodeName: a.name,
+        nodeType: a.worker_type,
+        config: a,
+        dependencyNodes: a.dependencies.map(d => wfNs(d)),
+        timeoutMs: a.timeout_ms,
+        maxRetries: a.retry?.max_attempts ?? 0,
+      }))
+      const newConfig: DAGConfig = { ...workflow.config, nodes: newConfigNodes, max_concurrency: newMaxConcurrency }
+
+      // 9. Atomic apply — all 5 DB writes in one transaction
+      if (!sessionService.atomicReplan) {
+        return yield* Effect.fail(new Error(`atomicReplan unavailable on session service`))
+      }
+      const historyRow = yield* sessionService.atomicReplan({
+        workflowId,
+        chatSessionId: workflow.chat_session_id,
+        removeNodeIds: patch.remove_nodes ?? [],
+        updates,
+        newNodes: newNodesForDb,
+        newWorkflowConfig: newConfig,
+        action: 'replan',
+        oldState,
+        newState: {
+          config: newConfig,
+          node_ids: currentNodes
+            .filter((n: DAGNodeSession) => !(patch.remove_nodes ?? []).includes(n.node_id))
+            .map((n: DAGNodeSession) => n.node_id)
+            .concat(newNodesForDb.map(n => n.nodeId!)),
+        },
+        changeDetails: {
+          removed: patch.remove_nodes ?? [],
+          updated: (patch.update_nodes ?? []).map(u => u.node_id),
+          added: (patch.add_nodes ?? []).map(a => wfNs(a.id)),
+          max_concurrency: newMaxConcurrency,
+        },
+        changedBy: patch.changed_by ?? null,
+      })
+
+      // 10. Sync concurrencyRegistry with new cap
+      if (patch.new_max_concurrency !== undefined) {
+        concurrencyRegistry.set(workflowId, patch.new_max_concurrency)
+      }
+
+      // 11. Cleanup spawnedNodes for removed nodes
+      for (const id of patch.remove_nodes ?? []) spawnedNodes.delete(id)
+
+      // 12. Release replan-in-flight (also guaranteed by Effect.ensuring below)
+      replanInFlight.delete(workflowId)
+
+      return {
+        ok: true as const,
+        workflow_id: workflowId,
+        history_id: historyRow.history_id,
+        nodes_added: newNodesForDb.length,
+        nodes_removed: (patch.remove_nodes ?? []).length,
+        nodes_updated: updates.length,
+        final_total: newConfigNodes.length,
+      }
+    }).pipe(
+      // Guarantee replanInFlight cleanup on any failure path
+      Effect.ensuring(Effect.sync(() => replanInFlight.delete(workflowId))),
+      // Collapse any Effect.fail into an { ok: false, reason } result
+      Effect.catchCause((cause) =>
+        Effect.succeed({
+          ok: false as const,
+          reason: String(Cause.squash(cause)),
+          detail: Cause.squash(cause),
+        })
+      ),
+    ) as Effect.Effect<ReplanResult, never, never>
+
   return {
     startWorkflow,
     scheduleReadyNodes,
@@ -390,6 +650,7 @@ const make = Effect.gen(function* () {
     handleNodeFailure,
     cancelWorkflow,
     getWorkflowStatus,
+    replanWorkflow,
     setPromptOps,
     spawnReadyNode,
   } as WorkflowEngine & {

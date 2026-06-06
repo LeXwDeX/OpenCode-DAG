@@ -448,3 +448,55 @@ function generateWorkflowId(): string {
   // 生产环境应使用 crypto.randomUUID() 或类似库
   return `wf-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
+
+// ============================================================================
+// 8. Replan types
+// ============================================================================
+
+/**
+ * Per-node patch applied during replan.
+ * `node_id` is namespaced (${workflowId}::${cfg.id}).
+ * `new_config` patches everything except `id` and `dependencies`.
+ * `new_dependencies` replaces the node's dependency list (namespaced references).
+ */
+export interface ReplanNodePatch {
+  node_id: string
+  new_config?: Partial<Omit<DAGNodeConfig, 'id' | 'dependencies'>>
+  new_dependencies?: string[]
+}
+
+/**
+ * ReplanPatch is the input to `WorkflowEngine.replanWorkflow`.
+ *
+ * - `add_nodes`: array of DAGNodeConfig with `cfg.id` NOT namespaced (materialization
+ *   prefixes with `${workflowId}::` inside the engine).
+ * - `remove_nodes`: namespaced ids of pending nodes to drop.
+ * - `update_nodes`: per-node patches (namespaced ids, applied to pending nodes only).
+ * - `new_max_concurrency`: optional bump within 1..10.
+ * - `changed_by`: free-form audit tag.
+ */
+export interface ReplanPatch {
+  workflow_id: string
+  add_nodes?: DAGNodeConfig[]
+  remove_nodes?: string[]
+  update_nodes?: ReplanNodePatch[]
+  new_max_concurrency?: number
+  changed_by?: string
+}
+
+/**
+ * Result of a replan attempt.
+ * `ok: true` carries the history_id and the diff counts; `ok: false` carries a reason
+ * string and optional detail (typically the thrown Error).
+ */
+export type ReplanResult =
+  | {
+      ok: true
+      workflow_id: string
+      history_id: string
+      nodes_added: number
+      nodes_removed: number
+      nodes_updated: number
+      final_total: number
+    }
+  | { ok: false; reason: string; detail?: unknown }

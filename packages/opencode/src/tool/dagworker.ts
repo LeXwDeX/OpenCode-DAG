@@ -20,7 +20,7 @@ import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import type { WorkflowExecutor } from "../dag/session/workflow-executor"
 import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession } from "../dag/session/types"
+import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
 import { RequiredNodesValidator } from "../dag/session/required-nodes-validator"
 import type { PromptOps } from "@/session/prompt-ops"
 
@@ -31,7 +31,8 @@ export const Parameters = Schema.Struct({
     Schema.Literal("start"),
     Schema.Literal("status"),
     Schema.Literal("cancel"),
-    Schema.Literal("list")
+    Schema.Literal("list"),
+    Schema.Literal("replan"),
   ])).annotate({
     description: "Action to perform. Defaults to 'start' if not specified.",
   }),
@@ -43,6 +44,9 @@ export const Parameters = Schema.Struct({
   }),
   timeout: Schema.optional(Schema.Number).annotate({
     description: "Maximum execution time in milliseconds for the workflow.",
+  }),
+  patch: Schema.optional(Schema.String).annotate({
+    description: "JSON-stringified ReplanPatch for 'replan' action. Shape: {workflow_id, add_nodes?, remove_nodes?, update_nodes?, new_max_concurrency?, changed_by?}",
   }),
 })
 
@@ -309,6 +313,63 @@ export const DAGWorkerTool = Tool.define(
             metadata: {
               action: "list",
               count: workflows.length,
+            } as any,
+            attachments: [],
+          }
+        }
+
+        case "replan": {
+          if (!params.patch) {
+            return yield* Effect.fail(new Error("'replan' action requires 'patch' parameter (JSON ReplanPatch)"))
+          }
+          let parsedPatch: ReplanPatch
+          try {
+            parsedPatch = JSON.parse(params.patch)
+          } catch (e) {
+            return yield* Effect.fail(new Error(`Invalid patch JSON: ${e instanceof Error ? e.message : String(e)}`))
+          }
+          if (!parsedPatch.workflow_id) {
+            return yield* Effect.fail(new Error("patch.workflow_id is required"))
+          }
+
+          const workflowEngine = yield* WorkflowEngine.make
+          const result = yield* workflowEngine.replanWorkflow(parsedPatch.workflow_id, parsedPatch)
+
+          if (!result.ok) {
+            return {
+              title: `Replan rejected: ${parsedPatch.workflow_id}`,
+              output: formatOutput(
+                `Replan rejected for ${parsedPatch.workflow_id}:\n  reason: ${result.reason}${result.detail ? `\n  detail: ${JSON.stringify(result.detail)}` : ''}`
+              ),
+              metadata: {
+                workflowId: parsedPatch.workflow_id,
+                action: 'replan',
+                ok: false,
+                reason: result.reason,
+              } as any,
+              attachments: [],
+            }
+          }
+
+          return {
+            title: `Replan applied: ${result.workflow_id}`,
+            output: formatOutput([
+              `Replan applied for ${result.workflow_id}:`,
+              `  nodes added: ${result.nodes_added}`,
+              `  nodes removed: ${result.nodes_removed}`,
+              `  nodes updated: ${result.nodes_updated}`,
+              `  final total: ${result.final_total}`,
+              `  history_id: ${result.history_id}`,
+            ].join('\n')),
+            metadata: {
+              workflowId: result.workflow_id,
+              action: 'replan',
+              ok: true,
+              historyId: result.history_id,
+              nodesAdded: result.nodes_added,
+              nodesRemoved: result.nodes_removed,
+              nodesUpdated: result.nodes_updated,
+              finalTotal: result.final_total,
             } as any,
             attachments: [],
           }

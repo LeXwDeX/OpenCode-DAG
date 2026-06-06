@@ -63,6 +63,29 @@ Think of the workflow like a background process — you dispatch it, move on, an
 
 Each workflow node spawns a child agent session using the `worker_type` + `worker_config.prompt` you specify. Inside that child session, the agent sees an extra tool `node_complete` — the **only way** a node signals success or failure. If the subagent finishes its turn without calling `node_complete`, the engine marks the node `failed`. This is an explicit-completion design; do not rely on `idle` as success.
 
+## Replan — Restructure a Running Workflow's Tail
+
+**Trigger**: user says "replan", "revise the plan", "adjust the remaining stages", "add a verification step", or "drop the final stage".
+
+**Mechanism**: `dagworker action=replan patch={...}` where `patch` is a JSON string shaped like:
+
+```json
+{
+  "workflow_id": "<required>",
+  "add_nodes": [{ "id": "...", "name": "...", "dependencies": [...], "required": true, "worker_type": "...", "worker_config": {...} }],
+  "remove_nodes": ["<namespaced ids of pending nodes>"],
+  "update_nodes": [{ "node_id": "<namespaced>", "new_dependencies": [...] }],
+  "new_max_concurrency": 5,
+  "changed_by": "main-agent"
+}
+```
+
+**What's safe**: Frozen nodes (status `running` / `completed` / `failed` / `skipped`) are immutable scaffolding — the replan rejects any patch that tries to remove or update them. Terminal workflows (completed/failed/cancelled) reject outright.
+
+**What's allowed**: Remove pending nodes, add new nodes (un-namespaced `cfg.id`), rewire dependencies, bump `max_concurrency` (1..10), patch non-id/non-dependencies fields on pending nodes. Required nodes cannot be removed.
+
+**Atomicity**: All DB writes (node deletes, node updates, node inserts, workflow.config update, one `dag_workflow_history` audit row) are applied in a single `Database.transaction`. The patch either fully applies and returns `ok: true` with a `history_id`, or fully rejects with `ok: false` and a `reason` — no partial outcomes.
+
 ## Detailed Reference
 
 For the complete protocol specification (full JSON schemas, all node status transitions, violation types, retry policies, timeout semantics, event bus integration), read:
