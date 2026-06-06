@@ -27,7 +27,9 @@ import { TuiThreadCommand } from "./cli/cmd/tui/thread"
 import { AcpCommand } from "./cli/cmd/acp"
 import { EOL } from "os"
 import fs from "fs/promises"
-import HOOKS_REFERENCE from "./session/prompt/hooks-reference.md"
+// Bun's built-in .md loader renders markdown → HTML; `type: "text"` keeps it raw
+// so the doc written to ~/.config/opencode/docs/ stays real markdown.
+import HOOKS_REFERENCE from "./session/prompt/hooks-reference.md" with { type: "text" }
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
