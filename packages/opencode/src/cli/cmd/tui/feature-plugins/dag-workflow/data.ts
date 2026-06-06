@@ -14,9 +14,12 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type {
   DAGConfig,
   DAGNodeConfig,
+  DAGNodeError,
+  DAGNodeMetrics,
   DAGNodeSession,
   DAGViolation,
   DAGWorkflowSession,
+  DAGWorkflowStatus,
 } from "@/dag/session/types"
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 
@@ -44,6 +47,25 @@ function numOrNull(v: SdkNumber | null | undefined): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/** SDK DagNodeMetrics → 领域 DAGNodeMetrics（规范化 SdkNumber，丢弃非有限/缺省字段） */
+function mapMetrics(m: {
+  cpu_percent?: SdkNumber | null
+  memory_mb?: SdkNumber | null
+  disk_io_mb?: SdkNumber | null
+  network_io_mb?: SdkNumber | null
+}): DAGNodeMetrics {
+  const out: DAGNodeMetrics = {}
+  const cpu = numOrNull(m.cpu_percent)
+  if (cpu !== null) out.cpu_percent = cpu
+  const mem = numOrNull(m.memory_mb)
+  if (mem !== null) out.memory_mb = mem
+  const disk = numOrNull(m.disk_io_mb)
+  if (disk !== null) out.disk_io_mb = disk
+  const net = numOrNull(m.network_io_mb)
+  if (net !== null) out.network_io_mb = net
+  return out
+}
+
 /** SDK DagNode → 领域 DAGNodeSession */
 export function mapNode(n: {
   node_id: string
@@ -51,6 +73,7 @@ export function mapNode(n: {
   config: unknown
   status: DAGNodeSession["status"]
   output: unknown
+  error_info?: DAGNodeError | null
   retry_count: SdkNumber
   max_retries: SdkNumber
   timeout_ms: SdkNumber
@@ -64,6 +87,13 @@ export function mapNode(n: {
   parent_node: string | null
   created_at: SdkNumber
   updated_at: SdkNumber
+  logs?: ReadonlyArray<string> | null
+  metrics?: {
+    cpu_percent?: SdkNumber | null
+    memory_mb?: SdkNumber | null
+    disk_io_mb?: SdkNumber | null
+    network_io_mb?: SdkNumber | null
+  } | null
 }): DAGNodeSession {
   return {
     node_id: n.node_id,
@@ -71,6 +101,7 @@ export function mapNode(n: {
     config: (n.config ?? {}) as DAGNodeConfig,
     status: n.status,
     output: n.output,
+    ...(n.error_info ? { error_info: n.error_info } : {}),
     retry_count: num(n.retry_count),
     max_retries: num(n.max_retries),
     timeout_ms: num(n.timeout_ms),
@@ -84,7 +115,8 @@ export function mapNode(n: {
     parent_node: n.parent_node ?? null,
     created_at: num(n.created_at),
     updated_at: num(n.updated_at),
-    logs: [],
+    logs: n.logs ? [...n.logs] : [],
+    ...(n.metrics ? { metrics: mapMetrics(n.metrics) } : {}),
   }
 }
 
@@ -126,28 +158,84 @@ export function mapWorkflow(
   }
 }
 
+/** SDK DagViolation → 领域 DAGViolation（规范化可选字段） */
+export function mapViolation(v: {
+  id: string
+  workflowId: string
+  nodeId?: string | null
+  type: DAGViolation["type"]
+  severity: DAGViolation["severity"]
+  message: string
+  timestamp: string
+  details?: Record<string, unknown> | null
+}): DAGViolation {
+  return {
+    id: v.id,
+    workflowId: v.workflowId,
+    ...(v.nodeId ? { nodeId: v.nodeId } : {}),
+    type: v.type,
+    severity: v.severity,
+    message: v.message,
+    timestamp: v.timestamp,
+    ...(v.details ? { details: v.details } : {}),
+  }
+}
+
+/**
+ * 按状态 + 名称/ID 子串过滤工作流列表（纯函数，供 console-route 受控过滤与测试复用）。
+ * search 大小写不敏感，匹配 config.name（缺省回退 id）。
+ */
+export function filterWorkflows(
+  list: DAGWorkflowSession[],
+  statusFilter: DAGWorkflowStatus | null,
+  search: string,
+): DAGWorkflowSession[] {
+  let out = list
+  if (statusFilter) out = out.filter((w) => w.status === statusFilter)
+  const q = search.trim().toLowerCase()
+  if (q) out = out.filter((w) => (w.config?.name ?? w.id).toLowerCase().includes(q))
+  return out
+}
+
+/**
+ * 键盘导航的纯索引数学：在长度 length 的列表中，从当前索引 curIdx 移动 delta。
+ * - length===0 → -1（调用方应先守卫）
+ * - curIdx<0（无选中）→ delta>0 取首项 0，否则取末项
+ * - 否则在 [0, length-1] 内 clamp(curIdx+delta)
+ */
+export function nextIndex(length: number, curIdx: number, delta: number): number {
+  if (length === 0) return -1
+  if (curIdx < 0) return delta > 0 ? 0 : length - 1
+  return Math.min(length - 1, Math.max(0, curIdx + delta))
+}
+
 // ============================================================================
 // Hooks 公共签名
 // ============================================================================
 
 export type WorkflowListApi = {
   list: Accessor<DAGWorkflowSession[]>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
   refresh: () => void
 }
 
-export type WorkflowApi = {
+export type WorkflowDetailApi = {
   workflow: Accessor<DAGWorkflowSession | null>
-  refresh: () => void
-}
-
-export type NodesApi = {
   nodes: Accessor<DAGNodeSession[]>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
   refresh: () => void
 }
 
 export type ViolationsApi = {
   violations: Accessor<DAGViolation[]>
+  error: Accessor<string | null>
   refresh: () => void
+}
+
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e)
 }
 
 // ============================================================================
@@ -157,6 +245,9 @@ export type ViolationsApi = {
 /**
  * useWorkflowList — 获取（可按 chat session 过滤的）workflow 列表。
  * 订阅 dag.workflow.updated 做实时刷新。
+ *
+ * 竞态防护：每次 load 领取自增 generation 令牌，仅最新一次的响应可写回 signal，
+ * 避免快速切换/并发刷新时旧的慢响应覆盖新数据。
  */
 export function useWorkflowList(props: {
   client: Client
@@ -164,14 +255,27 @@ export function useWorkflowList(props: {
   session_id: Accessor<string>
 }): WorkflowListApi {
   const [list, setList] = createSignal<DAGWorkflowSession[]>([])
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
   let cancelled = false
+  let gen = 0
 
   async function load() {
     const sid = props.session_id()
-    const res = await props.client.dag.listWorkflows(sid ? { chatSessionId: sid } : {})
-    if (cancelled) return
-    const data = res.data
-    if (Array.isArray(data)) setList(data.map((w) => mapWorkflow(w)))
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.listWorkflows(sid ? { chatSessionId: sid } : {})
+      if (cancelled || my !== gen) return
+      const data = res.data
+      if (Array.isArray(data)) setList(data.map((w) => mapWorkflow(w)))
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
   }
 
   createEffect(() => {
@@ -185,81 +289,61 @@ export function useWorkflowList(props: {
     off()
   })
 
-  return { list, refresh: () => void load() }
+  return { list, error, loading, refresh: () => void load() }
 }
 
 /**
- * useWorkflow — 获取单个 workflow 详情（含其节点会话）。
+ * useWorkflowDetail — 单次 getWorkflow 同时供给 workflow 详情与节点列表。
+ *
+ * 合并了旧的 useWorkflow + useNodes：二者原本各自独立调用同一 getWorkflow 路由，
+ * 造成每次选中/每个事件 2× 冗余请求。此 hook 单次拉取，workflow 与 nodes 共享。
+ *
  * 订阅该 workflow 的 dag.workflow.updated / dag.node.updated 做实时刷新。
+ * 同样使用 generation 令牌做竞态防护。
  */
-export function useWorkflow(props: {
+export function useWorkflowDetail(props: {
   client: Client
   event: EventBus
   workflowId: Accessor<string | undefined>
-}): WorkflowApi {
+}): WorkflowDetailApi {
   const [workflow, setWorkflow] = createSignal<DAGWorkflowSession | null>(null)
-  let cancelled = false
-
-  async function load() {
-    const id = props.workflowId()
-    if (!id) {
-      setWorkflow(null)
-      return
-    }
-    const res = await props.client.dag.getWorkflow({ workflowId: id })
-    if (cancelled) return
-    const detail = res.data
-    if (detail?.workflow) {
-      const nodes = (detail.nodes ?? []).map(mapNode)
-      setWorkflow(mapWorkflow(detail.workflow, nodes))
-    } else {
-      setWorkflow(null)
-    }
-  }
-
-  createEffect(() => {
-    props.workflowId()
-    void load()
-  })
-
-  const matches = (wfID: string) => wfID === props.workflowId()
-  const offW = props.event.on("dag.workflow.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offW()
-    offN()
-  })
-
-  return { workflow, refresh: () => void load() }
-}
-
-/**
- * useNodes — 获取某个 workflow 的所有节点会话。
- * 与 useWorkflow 共享 getWorkflow 路由，订阅 dag.node.updated 做实时刷新。
- */
-export function useNodes(props: {
-  client: Client
-  event: EventBus
-  workflowId: Accessor<string | undefined>
-}): NodesApi {
   const [nodes, setNodes] = createSignal<DAGNodeSession[]>([])
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
   let cancelled = false
+  let gen = 0
 
   async function load() {
     const id = props.workflowId()
     if (!id) {
+      gen++
+      setWorkflow(null)
       setNodes([])
+      setError(null)
+      setLoading(false)
       return
     }
-    const res = await props.client.dag.getWorkflow({ workflowId: id })
-    if (cancelled) return
-    const detail = res.data
-    setNodes((detail?.nodes ?? []).map(mapNode))
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.getWorkflow({ workflowId: id })
+      if (cancelled || my !== gen) return
+      const detail = res.data
+      const ns = (detail?.nodes ?? []).map(mapNode)
+      if (detail?.workflow) {
+        setWorkflow(mapWorkflow(detail.workflow, ns))
+        setNodes(ns)
+      } else {
+        setWorkflow(null)
+        setNodes([])
+      }
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
   }
 
   createEffect(() => {
@@ -280,14 +364,15 @@ export function useNodes(props: {
     offN()
   })
 
-  return { nodes, refresh: () => void load() }
+  return { workflow, nodes, error, loading, refresh: () => void load() }
 }
 
 /**
  * useViolations — workflow 违规记录。
  *
  * 通过 SDK 只读路由 client.dag.getViolations({workflowId}) 拉取。
- * 订阅 dag.workflow.updated 事件作为刷新信号（违规通常伴随节点状态变更发生）。
+ * 订阅 dag.workflow.updated / dag.node.updated 事件作为刷新信号
+ * （违规通常伴随节点状态变更发生）。
  */
 export function useViolations(props: {
   client: Client
@@ -295,17 +380,28 @@ export function useViolations(props: {
   workflowId: Accessor<string | undefined>
 }): ViolationsApi {
   const [violations, setViolations] = createSignal<DAGViolation[]>([])
+  const [error, setError] = createSignal<string | null>(null)
   let cancelled = false
+  let gen = 0
 
   async function load() {
     const id = props.workflowId()
     if (!id) {
+      gen++
       setViolations([])
+      setError(null)
       return
     }
-    const res = await props.client.dag.getViolations({ workflowId: id })
-    if (cancelled) return
-    setViolations((res.data ?? []) as unknown as DAGViolation[])
+    const my = ++gen
+    try {
+      const res = await props.client.dag.getViolations({ workflowId: id })
+      if (cancelled || my !== gen) return
+      setViolations((res.data ?? []).map(mapViolation))
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    }
   }
 
   createEffect(() => {
@@ -326,5 +422,5 @@ export function useViolations(props: {
     offN()
   })
 
-  return { violations, refresh: () => void load() }
+  return { violations, error, refresh: () => void load() }
 }

@@ -12,12 +12,15 @@ import { createRoot } from "solid-js"
 import {
   mapNode,
   mapWorkflow,
+  mapViolation,
+  filterWorkflows,
+  nextIndex,
   useWorkflowList,
-  useWorkflow,
-  useNodes,
+  useWorkflowDetail,
   useViolations,
 } from "./data"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { DAGWorkflowSession } from "@/dag/session/types"
 
 // ── SDK 样本数据（含 number|"NaN"|"Infinity" 等序列化产物） ──────────────────
 
@@ -25,8 +28,9 @@ const sdkNode = {
   node_id: "n1",
   workflow_id: "wf-1",
   config: { id: "n1", name: "收集" },
-  status: "completed" as const,
+  status: "failed" as const,
   output: null,
+  error_info: { type: "TimeoutError", message: "node timed out", retryable: true },
   retry_count: 0,
   max_retries: 3,
   timeout_ms: 60_000,
@@ -40,6 +44,8 @@ const sdkNode = {
   parent_node: null,
   created_at: 1000,
   updated_at: 1500,
+  logs: ["line 1", "line 2"],
+  metrics: { cpu_percent: 12, memory_mb: 256 },
 }
 
 const sdkWorkflow = {
@@ -98,11 +104,42 @@ describe("WP4 data.ts — mapNode", () => {
   it("maps SDK node to domain node session", () => {
     const n = mapNode(sdkNode)
     expect(n.node_id).toBe("n1")
-    expect(n.status).toBe("completed")
+    expect(n.status).toBe("failed")
     expect(n.dependencies).toEqual(["dep0"])
     expect(n.completed_at).toBe("1500")
     expect(n.duration_ms).toBe(500)
+  })
+
+  it("preserves error_info, metrics and logs (B2 regression)", () => {
+    const n = mapNode(sdkNode)
+    expect(n.error_info).toEqual({ type: "TimeoutError", message: "node timed out", retryable: true })
+    expect(n.metrics).toEqual({ cpu_percent: 12, memory_mb: 256 })
+    expect(n.logs).toEqual(["line 1", "line 2"])
+  })
+
+  it("omits error_info/metrics when absent and defaults logs to []", () => {
+    const { error_info, metrics, logs, ...bare } = sdkNode
+    const n = mapNode(bare)
+    expect(n.error_info).toBeUndefined()
+    expect(n.metrics).toBeUndefined()
     expect(n.logs).toEqual([])
+  })
+})
+
+describe("WP4 data.ts — mapViolation", () => {
+  it("maps SDK violation and drops empty optional fields", () => {
+    const v = mapViolation({
+      id: "v-1",
+      workflowId: "wf-1",
+      type: "timeout_exceeded",
+      severity: "critical",
+      message: "boom",
+      timestamp: "2026-01-01T00:00:00.000Z",
+    })
+    expect(v.id).toBe("v-1")
+    expect(v.nodeId).toBeUndefined()
+    expect(v.details).toBeUndefined()
+    expect(v.severity).toBe("critical")
   })
 })
 
@@ -142,35 +179,64 @@ describe("WP4 data.ts — useWorkflowList", () => {
   })
 })
 
-describe("WP4 data.ts — useWorkflow", () => {
-  it("loads a single workflow with node_sessions", async () => {
+describe("WP4 data.ts — useWorkflowDetail", () => {
+  it("loads a single workflow with node_sessions and nodes from one fetch", async () => {
     const { value, dispose } = await withRoot(() =>
-      useWorkflow({ client: fakeClient(), event: fakeEvent, workflowId: () => "wf-1" }),
+      useWorkflowDetail({ client: fakeClient(), event: fakeEvent, workflowId: () => "wf-1" }),
     )
     const wf = value.workflow()
     expect(wf).not.toBeNull()
     expect(wf!.id).toBe("wf-1")
     expect(Object.keys(wf!.node_sessions)).toEqual(["n1"])
+    expect(value.nodes().length).toBe(1)
+    expect(value.nodes()[0]!.node_id).toBe("n1")
+    expect(value.error()).toBeNull()
     dispose()
   })
 
-  it("returns null when workflowId is undefined", async () => {
+  it("issues exactly one getWorkflow call per load (dedupe)", async () => {
+    let calls = 0
+    const client = {
+      dag: {
+        listWorkflows: async () => ({ data: [sdkWorkflow] }),
+        getWorkflow: async () => {
+          calls++
+          return { data: { workflow: sdkWorkflow, nodes: [sdkNode] } }
+        },
+        getViolations: async () => ({ data: [] }),
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { dispose } = await withRoot(() =>
+      useWorkflowDetail({ client, event: fakeEvent, workflowId: () => "wf-1" }),
+    )
+    expect(calls).toBe(1)
+    dispose()
+  })
+
+  it("returns null/[] when workflowId is undefined", async () => {
     const { value, dispose } = await withRoot(() =>
-      useWorkflow({ client: fakeClient(), event: fakeEvent, workflowId: () => undefined }),
+      useWorkflowDetail({ client: fakeClient(), event: fakeEvent, workflowId: () => undefined }),
     )
     expect(value.workflow()).toBeNull()
+    expect(value.nodes()).toEqual([])
     dispose()
   })
-})
 
-describe("WP4 data.ts — useNodes", () => {
-  it("loads nodes for a workflow", async () => {
+  it("surfaces an error message when the client rejects", async () => {
+    const client = {
+      dag: {
+        listWorkflows: async () => ({ data: [] }),
+        getWorkflow: async () => {
+          throw new Error("network down")
+        },
+        getViolations: async () => ({ data: [] }),
+      },
+    } as unknown as TuiPluginApi["client"]
     const { value, dispose } = await withRoot(() =>
-      useNodes({ client: fakeClient(), event: fakeEvent, workflowId: () => "wf-1" }),
+      useWorkflowDetail({ client, event: fakeEvent, workflowId: () => "wf-1" }),
     )
-    const nodes = value.nodes()
-    expect(nodes.length).toBe(1)
-    expect(nodes[0]!.node_id).toBe("n1")
+    expect(value.error()).toBe("network down")
+    expect(value.workflow()).toBeNull()
     dispose()
   })
 })
@@ -211,5 +277,68 @@ describe("WP4 data.ts — useViolations", () => {
     )
     expect(value.violations()).toEqual([])
     dispose()
+  })
+})
+
+// ── pure helpers: filterWorkflows / nextIndex ────────────────────────────────
+
+function wf(id: string, status: DAGWorkflowSession["status"], name?: string): DAGWorkflowSession {
+  return { id, status, config: name ? { name } : undefined } as unknown as DAGWorkflowSession
+}
+
+describe("WP4 data.ts — filterWorkflows", () => {
+  const list = [
+    wf("a", "running", "Build Flow"),
+    wf("b", "completed", "Deploy"),
+    wf("c", "running", "Test Suite"),
+    wf("orphan-x", "failed"), // no config.name → falls back to id
+  ]
+
+  it("returns all when no filter and empty search", () => {
+    expect(filterWorkflows(list, null, "").map((w) => w.id)).toEqual(["a", "b", "c", "orphan-x"])
+  })
+
+  it("filters by status", () => {
+    expect(filterWorkflows(list, "running", "").map((w) => w.id)).toEqual(["a", "c"])
+  })
+
+  it("filters by name substring, case-insensitive", () => {
+    expect(filterWorkflows(list, null, "deploy").map((w) => w.id)).toEqual(["b"])
+  })
+
+  it("falls back to id when config.name is absent", () => {
+    expect(filterWorkflows(list, null, "orphan").map((w) => w.id)).toEqual(["orphan-x"])
+  })
+
+  it("combines status + search (AND)", () => {
+    expect(filterWorkflows(list, "running", "test").map((w) => w.id)).toEqual(["c"])
+  })
+
+  it("trims whitespace-only search to no-op", () => {
+    expect(filterWorkflows(list, null, "   ").map((w) => w.id)).toEqual(["a", "b", "c", "orphan-x"])
+  })
+})
+
+describe("WP4 data.ts — nextIndex", () => {
+  it("returns -1 for empty list", () => {
+    expect(nextIndex(0, -1, 1)).toBe(-1)
+  })
+
+  it("no selection + forward → first item", () => {
+    expect(nextIndex(3, -1, 1)).toBe(0)
+  })
+
+  it("no selection + backward → last item", () => {
+    expect(nextIndex(3, -1, -1)).toBe(2)
+  })
+
+  it("moves forward and clamps at end", () => {
+    expect(nextIndex(3, 1, 1)).toBe(2)
+    expect(nextIndex(3, 2, 1)).toBe(2)
+  })
+
+  it("moves backward and clamps at start", () => {
+    expect(nextIndex(3, 1, -1)).toBe(0)
+    expect(nextIndex(3, 0, -1)).toBe(0)
   })
 })
