@@ -12,10 +12,12 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
 import PROMPT_HOOKS from "./prompt/hooks.txt"
+import PROMPT_DAG from "./prompt/dag.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
 import { Skill } from "@/skill"
+import { DAGSessionService } from "@/dag/session/session-service"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
@@ -37,6 +39,7 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly hooks: () => Effect.Effect<string[]>
+  readonly dag: (sessionID: string) => Effect.Effect<string[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -80,6 +83,26 @@ export const layer = Layer.effect(
 
       hooks: Effect.fn("SystemPrompt.hooks")(function* () {
         return [PROMPT_HOOKS]
+      }),
+
+      dag: Effect.fn("SystemPrompt.dag")(function* (sessionID: string) {
+        const service = yield* DAGSessionService.make
+        const staticPrompt = [PROMPT_DAG]
+
+        const liveHint = yield* service.listWorkflowsByChatSession(sessionID).pipe(
+          Effect.map((workflows) => {
+            const active = workflows.filter((w) => w.status === "pending" || w.status === "running")
+            if (active.length === 0) return undefined
+            const lines = active.slice(0, 5).map((w) => {
+              const nc = w.config?.nodes?.length ?? 0
+              return `  • ${w.id} "${w.config?.name ?? "<unnamed>"}" — status=${w.status}, nodes=${nc}`
+            })
+            return `## Your DAG status (real-time, session-local)\n${lines.join("\n")}\n\nUse \`dagworker status <workflowId>\` to drill into any of these while you continue other work.`
+          }),
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        )
+
+        return liveHint ? [...staticPrompt, liveHint] : staticPrompt
       }),
     })
   }),

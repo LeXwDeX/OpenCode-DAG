@@ -30,6 +30,7 @@ import fs from "fs/promises"
 // Bun's built-in .md loader renders markdown → HTML; `type: "text"` keeps it raw
 // so the doc written to ~/.config/opencode/docs/ stays real markdown.
 import HOOKS_REFERENCE from "./session/prompt/hooks-reference.md" with { type: "text" }
+import DAGWORKER_REFERENCE from "./session/prompt/dagworker-reference.md" with { type: "text" }
 import { WebCommand } from "./cli/cmd/web"
 import { PrCommand } from "./cli/cmd/pr"
 import { SessionCommand } from "./cli/cmd/session"
@@ -176,6 +177,18 @@ const cli = yargs(args)
       if (!(await Filesystem.exists(hooksRef))) {
         await fs.mkdir(docsDir, { recursive: true })
         await fs.writeFile(hooksRef, HOOKS_REFERENCE, "utf8")
+      }
+    } catch {}
+
+    // Ensure bundled DAG reference is available for model reference.
+    // Writes dagworker-reference.md to ~/.config/opencode/docs/ if not present.
+    // Silent on failure — docs are best-effort, never block startup.
+    try {
+      const docsDir = path.join(Global.Path.config, "docs")
+      const dagRef = path.join(docsDir, "dagworker-reference.md")
+      if (!(await Filesystem.exists(dagRef))) {
+        await fs.mkdir(docsDir, { recursive: true })
+        await fs.writeFile(dagRef, DAGWORKER_REFERENCE, "utf8")
       }
     } catch {}
   })

@@ -1,0 +1,71 @@
+# DAG Workflow Orchestration API
+
+OpenCode runs a **built-in DAG (Directed Acyclic Graph) workflow engine** as a background orchestrator. The engine is always active — every chat session can spawn DAG workflows that execute in the background while you continue other work. Do NOT assume DAG capabilities are unavailable; they exist by default.
+
+## When to Trigger
+
+Use DAG workflows when user intent matches these patterns (in any language):
+- **Keywords**: `DAG工作流`, `工作流`, `DAG 工作流`, `DAGWORKFLOW`, `/DAGWORKFLOW`, `DAGWORKER`, orchestrated multi-step tasks, parallel-but-dependent stages, build pipelines, staged code-repair plans, or any "run these N steps with dependency order" request.
+- **Signals**: ≥2 steps with explicit or implicit dependency ordering; fan-out/fan-in patterns; long-running multi-stage work where later stages depend on earlier outputs.
+
+## The Tool
+
+`dagworker` is a registered tool with four `action` values:
+
+| action | purpose |
+|---|---|
+| `start` | Create and fork a workflow; returns `workflowId` immediately; execution runs in background. |
+| `status` | Poll a workflow's real-time state — which nodes are `pending`/`running`/`completed`/`failed`, violations, duration. |
+| `cancel` | Abort a running workflow. |
+| `list` | See every workflow spawned in the lifetime of this process. |
+
+## The Config Schema
+
+`dagworker start` takes a single `workflow` argument: a **JSON string** of this shape:
+
+```json
+{
+  "name": "string (required, human-readable)",
+  "description": "string (optional)",
+  "max_concurrency": 3,
+  "timeout_ms": 600000,
+  "nodes": [
+    {
+      "id": "build",
+      "name": "Build",
+      "description": "Compile the project",
+      "dependencies": [],
+      "required": true,
+      "timeout_ms": 300000,
+      "retry": { "max_attempts": 2, "delay_ms": 5000 },
+      "worker_type": "string (subagent name, e.g. 'implement')",
+      "worker_config": { "agent": "implement", "prompt": "your task prompt" }
+    }
+  ]
+}
+```
+
+Hard invariants:
+- **Node cap**: ≤ 20 nodes per workflow.
+- **Concurrency cap**: `max_concurrency` ≤ 10.
+- **Required nodes** (`required: true`) cannot be skipped — if they fail, the workflow reports violation.
+- **No cycles** in `dependencies[]` — validated at submit time.
+
+## Async Execution, Live State
+
+`dagworker start` **does not block**. It returns a `workflowId` and the workflow runs in a background fiber. While it runs:
+- Use `dagworker status <workflowId>` to inspect progress (which nodes are `pending` / `running` / `completed` / `failed`, how many ready, how many violated).
+- Use `dagworker list` for a global view across all workflows.
+
+Think of the workflow like a background process — you dispatch it, move on, and peek at it when you need to.
+
+## The Companion Tool: node_complete
+
+Each workflow node spawns a child agent session using the `worker_type` + `worker_config.prompt` you specify. Inside that child session, the agent sees an extra tool `node_complete` — the **only way** a node signals success or failure. If the subagent finishes its turn without calling `node_complete`, the engine marks the node `failed`. This is an explicit-completion design; do not rely on `idle` as success.
+
+## Detailed Reference
+
+For the complete protocol specification (full JSON schemas, all node status transitions, violation types, retry policies, timeout semantics, event bus integration), read:
+```
+~/.config/opencode/docs/dagworker-reference.md
+```
