@@ -124,6 +124,13 @@ export class DAGQuery implements IDAGQuery {
   }
 
   /**
+   * 按 chat_session_id 列出工作流
+   */
+  async listWorkflowsByChatSession(chatSessionId: string): Promise<DAGWorkflowSession[]> {
+    return Effect.runPromise(this.sessionService.listWorkflowsByChatSession(chatSessionId))
+  }
+
+  /**
    * 搜索工作流
    */
   async searchWorkflows(query: string): Promise<DAGWorkflowSession[]> {

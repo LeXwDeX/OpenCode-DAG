@@ -39,6 +39,13 @@ export interface IDAGQuery {
    * 搜索工作流（通过名称或描述）
    */
   searchWorkflows(query: string): Promise<DAGWorkflowSession[]>
+
+  /**
+   * 按 chat_session_id 列出工作流
+   *
+   * 用于在平台 Chat Session 上下文中查找关联的 DAG 工作流。
+   */
+  listWorkflowsByChatSession(chatSessionId: string): Promise<DAGWorkflowSession[]>
 }
 
 /**
