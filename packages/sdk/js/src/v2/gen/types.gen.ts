@@ -15,6 +15,10 @@ export type Event =
   | EventGoalAchieved
   | EventGoalPaused
   | EventGoalCleared
+  | EventDagWorkflowUpdated1
+  | EventDagNodeUpdated1
+  | EventDagNodeProgress1
+  | EventDagNodeAskMain1
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -826,6 +830,10 @@ export type GlobalEvent = {
     | EventGoalAchieved
     | EventGoalPaused
     | EventGoalCleared
+    | EventDagWorkflowUpdated
+    | EventDagNodeUpdated
+    | EventDagNodeProgress
+    | EventDagNodeAskMain
     | EventServerConnected
     | EventGlobalDisposed
     | EventServerInstanceDisposed
@@ -1433,6 +1441,86 @@ export type Provider = {
   models: {
     [key: string]: Model
   }
+}
+
+export type DagWorkflow = {
+  id: string
+  chat_session_id: string
+  config: unknown
+  status: "pending" | "running" | "completed" | "failed" | "cancelled"
+  metadata: {
+    [key: string]: unknown
+  }
+  start_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  end_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  current_node: string
+  created_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  updated_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  completed_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagNode = {
+  node_id: string
+  workflow_id: string
+  config: unknown
+  status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+  output: unknown
+  retry_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  max_retries: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  timeout_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  required_nodes: Array<string>
+  dependencies: Array<string>
+  metadata: {
+    [key: string]: unknown
+  }
+  start_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  completed_at: string
+  end_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  parent_node: string
+  created_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  updated_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagWorkflowDetail = {
+  workflow: DagWorkflow
+  nodes: Array<DagNode>
+}
+
+export type DagTimelineEvent = {
+  type: "node_start" | "node_complete" | "node_failed" | "edge_traversal"
+  nodeId: string
+  timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  duration?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagNodeExecutionTime = {
+  nodeId: string
+  nodeName: string
+  startTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  endTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  duration: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+}
+
+export type DagTimeline = {
+  workflowId: string
+  startTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  endTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  events: Array<DagTimelineEvent>
+  totalDuration: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  nodeExecutionTimes: {
+    [key: string]: DagNodeExecutionTime
+  }
+}
+
+export type DagGraphStatistics = {
+  totalNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  totalEdges: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  criticalPathLength: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  parallelismDegree: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  estimatedCompletionTime: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type ConsoleState = {
@@ -2586,6 +2674,54 @@ export type EventGoalCleared = {
   type: "goal.cleared"
   properties: {
     sessionID: string
+  }
+}
+
+export type EventDagWorkflowUpdated = {
+  id: string
+  type: "dag.workflow.updated"
+  properties: {
+    workflowID: string
+    chatSessionID?: string
+    status: "pending" | "running" | "completed" | "failed" | "cancelled"
+    timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventDagNodeUpdated = {
+  id: string
+  type: "dag.node.updated"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+    timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventDagNodeProgress = {
+  id: string
+  type: "dag.node.progress"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    progress: unknown
+    timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventDagNodeAskMain = {
+  id: string
+  type: "dag.node.ask_main"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    question: string
+    context?: string
+    timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
 }
 
@@ -3844,6 +3980,54 @@ export type EventGoalContinued1 = {
   }
 }
 
+export type EventDagWorkflowUpdated1 = {
+  id: string
+  type: "dag.workflow.updated"
+  properties: {
+    workflowID: string
+    chatSessionID?: string
+    status: "pending" | "running" | "completed" | "failed" | "cancelled"
+    timestamp: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventDagNodeUpdated1 = {
+  id: string
+  type: "dag.node.updated"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+    timestamp: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventDagNodeProgress1 = {
+  id: string
+  type: "dag.node.progress"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    progress: unknown
+    timestamp: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventDagNodeAskMain1 = {
+  id: string
+  type: "dag.node.ask_main"
+  properties: {
+    workflowID: string
+    nodeID: string
+    chatSessionID?: string
+    question: string
+    context?: string
+    timestamp: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
 export type ModelV2Info1 = {
   id: string
   apiID: string
@@ -4318,6 +4502,125 @@ export type ConfigProvidersResponses = {
 }
 
 export type ConfigProvidersResponse = ConfigProvidersResponses[keyof ConfigProvidersResponses]
+
+export type DagListWorkflowsData = {
+  body?: never
+  path?: never
+  query?: {
+    chatSessionId?: string
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows"
+}
+
+export type DagListWorkflowsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagListWorkflowsError = DagListWorkflowsErrors[keyof DagListWorkflowsErrors]
+
+export type DagListWorkflowsResponses = {
+  /**
+   * List of DAG workflows
+   */
+  200: Array<DagWorkflow>
+}
+
+export type DagListWorkflowsResponse = DagListWorkflowsResponses[keyof DagListWorkflowsResponses]
+
+export type DagGetWorkflowData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}"
+}
+
+export type DagGetWorkflowErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetWorkflowError = DagGetWorkflowErrors[keyof DagGetWorkflowErrors]
+
+export type DagGetWorkflowResponses = {
+  /**
+   * DAG workflow with its nodes
+   */
+  200: DagWorkflowDetail
+}
+
+export type DagGetWorkflowResponse = DagGetWorkflowResponses[keyof DagGetWorkflowResponses]
+
+export type DagGetTimelineData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/timeline"
+}
+
+export type DagGetTimelineErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetTimelineError = DagGetTimelineErrors[keyof DagGetTimelineErrors]
+
+export type DagGetTimelineResponses = {
+  /**
+   * DAG workflow execution timeline
+   */
+  200: DagTimeline
+}
+
+export type DagGetTimelineResponse = DagGetTimelineResponses[keyof DagGetTimelineResponses]
+
+export type DagGetStatsData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/stats"
+}
+
+export type DagGetStatsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetStatsError = DagGetStatsErrors[keyof DagGetStatsErrors]
+
+export type DagGetStatsResponses = {
+  /**
+   * DAG workflow graph statistics
+   */
+  200: DagGraphStatistics
+}
+
+export type DagGetStatsResponse = DagGetStatsResponses[keyof DagGetStatsResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never

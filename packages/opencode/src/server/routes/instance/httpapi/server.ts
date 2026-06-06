@@ -57,6 +57,8 @@ import { Workspace } from "@/control-plane/workspace"
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"
+import * as DAGLayer from "@/dag/layer"
+import * as DagBridgeLayer from "@/dag/bridge/bridge-layer"
 import { InstanceHttpApi, RootHttpApi } from "./api"
 import { PublicApi } from "./public"
 import { authorizationLayer, authorizationRouterMiddleware, v2AuthorizationLayer } from "./middleware/authorization"
@@ -64,6 +66,7 @@ import { EventApi } from "./groups/event"
 import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
 import { controlHandlers } from "./handlers/control"
+import { dagHandlers } from "./handlers/dag"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
@@ -124,6 +127,7 @@ const eventApiRoutes = HttpApiBuilder.layer(EventApi).pipe(
 const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
+    dagHandlers,
     experimentalHandlers,
     fileHandlers,
     instanceHandlers,
@@ -238,6 +242,8 @@ export function createRoutes(
       Workspace.defaultLayer,
       Worktree.appLayer,
       Bus.layer,
+      DAGLayer.defaultLayer,
+      DagBridgeLayer.defaultLayer,
       AppFileSystem.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,

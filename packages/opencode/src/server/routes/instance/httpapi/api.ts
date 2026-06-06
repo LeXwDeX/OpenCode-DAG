@@ -2,8 +2,11 @@ import { Schema } from "effect"
 import { HttpApi } from "effect/unstable/httpapi"
 import { BusEvent } from "@/bus/bus-event"
 import { SyncEvent } from "@/sync"
+// Ensure DAG BusEvent.define registrations are in the global registry before effectPayloads()
+import "@/dag/bridge/dag-events"
 import { ConfigApi } from "./groups/config"
 import { ControlApi } from "./groups/control"
+import { DagApi } from "./groups/dag"
 import { EventApi } from "./groups/event"
 import { ExperimentalApi } from "./groups/experimental"
 import { FileApi } from "./groups/file"
@@ -35,6 +38,7 @@ export const RootHttpApi = HttpApi.make("opencode-root")
 
 export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(ConfigApi)
+  .addHttpApi(DagApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(InstanceApi)

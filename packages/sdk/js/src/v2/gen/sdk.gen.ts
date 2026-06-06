@@ -24,6 +24,14 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DagGetStatsErrors,
+  DagGetStatsResponses,
+  DagGetTimelineErrors,
+  DagGetTimelineResponses,
+  DagGetWorkflowErrors,
+  DagGetWorkflowResponses,
+  DagListWorkflowsErrors,
+  DagListWorkflowsResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute2,
   EventTuiPromptAppend2,
@@ -723,6 +731,136 @@ export class Config2 extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ConfigProvidersResponses, ConfigProvidersErrors, ThrowOnError>({
       url: "/config/providers",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class Dag extends HeyApiClient {
+  /**
+   * List DAG workflows
+   *
+   * List all DAG workflows, optionally filtered by chat session ID.
+   */
+  public listWorkflows<ThrowOnError extends boolean = false>(
+    parameters?: {
+      chatSessionId?: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "chatSessionId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagListWorkflowsResponses, DagListWorkflowsErrors, ThrowOnError>({
+      url: "/dag/workflows",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG workflow detail
+   *
+   * Retrieve a single DAG workflow along with all its node sessions.
+   */
+  public getWorkflow<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagGetWorkflowResponses, DagGetWorkflowErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG execution timeline
+   *
+   * Retrieve the execution timeline for a DAG workflow, including node start/end times.
+   */
+  public getTimeline<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagGetTimelineResponses, DagGetTimelineErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/timeline",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG graph statistics
+   *
+   * Retrieve graph-level statistics for a DAG workflow (node count, edges, critical path, parallelism).
+   */
+  public getStats<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagGetStatsResponses, DagGetStatsErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/stats",
       ...options,
       ...params,
     })
@@ -5046,6 +5184,11 @@ export class OpencodeClient extends HeyApiClient {
   private _config?: Config2
   get config(): Config2 {
     return (this._config ??= new Config2({ client: this.client }))
+  }
+
+  private _dag?: Dag
+  get dag(): Dag {
+    return (this._dag ??= new Dag({ client: this.client }))
   }
 
   private _experimental?: Experimental

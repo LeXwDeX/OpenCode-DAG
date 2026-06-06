@@ -157,7 +157,13 @@ export interface DAGNodeSession {
   required_nodes: string[];
   /** 依赖节点 */
   dependencies: string[];
-  /** 节点元数据 */
+  /**
+   * 节点元数据
+   *
+   * 已知字段：
+   * - `chat_session_id?: string` — 由 worker spawn subagent 时写入，在节点进入 RUNNING 前（或同时）必填。
+   *   用于 bridge 层将 DAG node 事件关联到平台 Chat Session（§10）。
+   */
   metadata: Record<string, unknown>;
   /** 开始时间（毫秒时间戳，未开始时为 null） */
   start_time: number | null;
