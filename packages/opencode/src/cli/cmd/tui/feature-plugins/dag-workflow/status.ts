@@ -56,8 +56,8 @@ export function nodeStatusColor<C>(status: DAGNodeStatus, theme: StatusThemeColo
     case "queued":
       return theme.warning
     case "failed":
-    case "skipped":
       return theme.error
+    case "skipped":
     case "pending":
     default:
       return theme.textMuted

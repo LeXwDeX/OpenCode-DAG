@@ -16,13 +16,14 @@
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, createSignal, Show, type JSX } from "solid-js"
-import type { DAGNodeSession } from "@/dag/session/types"
+import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import {
   useWorkflowList,
-  useWorkflow,
-  useNodes,
+  useWorkflowDetail,
   useViolations,
+  filterWorkflows,
+  nextIndex,
 } from "./data"
 import {
   DagWorkflowRenderer,
@@ -64,6 +65,41 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
 
+  // Filter/search state lives here (lifted from Sidebar) so that keyboard
+  // navigation operates on the SAME filtered list the sidebar displays.
+  const [statusFilter, setStatusFilter] = createSignal<DAGWorkflowStatus | null>(null)
+  const [search, setSearch] = createSignal("")
+
+  // ── Data hooks (declared before derived memos to avoid TDZ) ───────────────
+  const { list: workflowList } = useWorkflowList({
+    client: props.api.client,
+    event: props.api.event,
+    session_id: sessionID,
+  })
+
+  // Single getWorkflow fetch feeds both the workflow detail and its nodes
+  // (deduplicates what used to be two independent getWorkflow round-trips).
+  const {
+    workflow: currentWorkflow,
+    nodes,
+    error: workflowError,
+    loading: workflowLoading,
+  } = useWorkflowDetail({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+  })
+
+  const { violations } = useViolations({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+  })
+
+  const filteredWorkflows = createMemo(() =>
+    filterWorkflows(workflowList(), statusFilter(), search()),
+  )
+
   const selectedNode = createMemo<DAGNodeSession | null>(() => {
     const id = selectedNodeID()
     if (!id) return null
@@ -76,16 +112,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   // ── Keyboard navigation helpers ──────────────────────────────────────────
   function moveWorkflowSelection(delta: number) {
-    const list = workflowList()
+    const list = filteredWorkflows()
     if (list.length === 0) return
     const curIdx = list.findIndex((w) => w.id === currentWorkflowID())
-    const nextIdx =
-      curIdx < 0
-        ? delta > 0
-          ? 0
-          : list.length - 1
-        : Math.min(list.length - 1, Math.max(0, curIdx + delta))
-    const next = list[nextIdx]
+    const next = list[nextIndex(list.length, curIdx, delta)]
     if (next) {
       setCurrentWorkflowID(next.id)
       setSelectedNodeID(null)
@@ -96,13 +126,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     const ns = nodes()
     if (ns.length === 0) return
     const curIdx = ns.findIndex((n) => n.node_id === selectedNodeID())
-    const nextIdx =
-      curIdx < 0
-        ? delta > 0
-          ? 0
-          : ns.length - 1
-        : Math.min(ns.length - 1, Math.max(0, curIdx + delta))
-    const next = ns[nextIdx]
+    const next = ns[nextIndex(ns.length, curIdx, delta)]
     if (next) setSelectedNodeID(next.node_id)
   }
 
@@ -135,30 +159,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       { key: "<leader>v", desc: "Toggle DAG view (tree ↔ ASCII)", group: "DAG", cmd() { toggleView() } },
     ],
   }))
-
-  const { list: workflowList } = useWorkflowList({
-    client: props.api.client,
-    event: props.api.event,
-    session_id: sessionID,
-  })
-
-  const { workflow: currentWorkflow } = useWorkflow({
-    client: props.api.client,
-    event: props.api.event,
-    workflowId: currentWorkflowID,
-  })
-
-  const { nodes } = useNodes({
-    client: props.api.client,
-    event: props.api.event,
-    workflowId: currentWorkflowID,
-  })
-
-  const { violations } = useViolations({
-    client: props.api.client,
-    event: props.api.event,
-    workflowId: currentWorkflowID,
-  })
 
   const progress = createMemo(() => {
     const wf = currentWorkflow()
@@ -249,8 +249,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           <scrollbox flexGrow={1} minHeight={0}>
             <Sidebar
               lang={i18n().lang}
-              workflows={workflowList()}
+              workflows={filteredWorkflows()}
+              statusFilter={statusFilter()}
+              search={search()}
               currentWorkflowID={currentWorkflowID()}
+              onStatusFilter={(s) => setStatusFilter(s)}
+              onSearch={(q) => setSearch(q)}
               onSelect={(id: string) => {
                 setCurrentWorkflowID(id)
                 setSelectedNodeID(null)
@@ -262,13 +266,25 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         {/* Middle: 进度条 + 节点树 */}
         <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1} gap={1}>
           <Show
-            when={currentWorkflow()}
+            when={!workflowError()}
             fallback={
               <box flexGrow={1} alignItems="center" justifyContent="center">
-                <text fg={theme.textMuted}>{i18n().t("label_select_workflow")}</text>
+                <text fg={theme.error}>{i18n().t("label_load_error")}: {workflowError()}</text>
               </box>
             }
           >
+            <Show
+              when={currentWorkflow()}
+              fallback={
+                <box flexGrow={1} alignItems="center" justifyContent="center">
+                  <text fg={theme.textMuted}>
+                    {workflowLoading() && currentWorkflowID()
+                      ? i18n().t("label_loading")
+                      : i18n().t("label_select_workflow")}
+                  </text>
+                </box>
+              }
+            >
             {(wf) => (
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
@@ -292,6 +308,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                     }
                   >
                     <AsciiDag
+                      lang={i18n().lang}
                       nodes={nodes()}
                       selectedNodeID={selectedNodeID() ?? undefined}
                       onSelect={(id) => setSelectedNodeID(id)}
@@ -300,6 +317,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 </scrollbox>
               </box>
             )}
+            </Show>
           </Show>
         </box>
 

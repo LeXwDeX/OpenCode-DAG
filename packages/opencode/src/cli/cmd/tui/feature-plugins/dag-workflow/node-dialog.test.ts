@@ -77,7 +77,7 @@ describe("WP4 i18n — workflowStatusLabel", () => {
 
 describe("WP4 i18n — t() dict lookup", () => {
   const cases: Record<I18nKey, [string, string]> = {
-    tab_dialogue: ["对话", "对话"],
+    tab_dialogue: ["Chat", "对话"],
     tab_workflow: ["DAG Workflow", "DAG 工作流"],
     view_tree: ["Tree View", "树状视图"],
     view_ascii: ["ASCII DAG", "ASCII 图"],
@@ -88,6 +88,8 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_no_nodes: ["No nodes in this workflow", "当前工作流没有节点"],
     label_no_workflows: ["No workflows", "没有工作流"],
     label_select_workflow: ["Select a workflow from the list", "请从左侧列表选择一个工作流"],
+    label_loading: ["Loading\u2026", "加载中\u2026"],
+    label_load_error: ["Failed to load", "加载失败"],
     label_search: ["Search:", "搜索："],
     label_retries: ["Retries", "重试"],
     label_deps: ["Deps", "依赖"],

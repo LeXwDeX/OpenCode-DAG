@@ -122,6 +122,32 @@ describe("WP4 ascii-dag — topologicalLayers", () => {
     expect(result[0]).toEqual(["a"])
     expect(result[1]).toEqual(["b"]) // b must not be silently excluded
   })
+
+  it("pure cycle (a↔b): no roots → both appended as leftover layer", () => {
+    const nodes = [
+      makeNode("a", "pending", ["b"]),
+      makeNode("b", "pending", ["a"]),
+    ]
+    const result = topologicalLayers(nodes)
+    // No node has inDegree 0, so Kahn produces no layers; cycle nodes
+    // must still surface (never silently dropped).
+    expect(result).toHaveLength(1)
+    expect(result[0].sort()).toEqual(["a", "b"])
+  })
+
+  it("root feeding a cycle: root placed first, cycle nodes appended last", () => {
+    const nodes = [
+      makeNode("a", "completed", []),
+      makeNode("b", "pending", ["c"]),
+      makeNode("c", "pending", ["b"]),
+    ]
+    const result = topologicalLayers(nodes)
+    expect(result[0]).toEqual(["a"])
+    const leftover = result[result.length - 1]
+    expect(leftover.sort()).toEqual(["b", "c"])
+    // every node appears exactly once across all layers
+    expect(result.flat().sort()).toEqual(["a", "b", "c"])
+  })
 })
 
 describe("WP4 ascii-dag — nodeStatusIcon", () => {

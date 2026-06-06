@@ -14,10 +14,15 @@ import { createMemo, For, Show, type JSX } from "solid-js"
 import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { NODE_STATUS_ICON, nodeStatusColor } from "./status"
+import { nodeStatusLabel, type Lang } from "./i18n"
 
 /**
  * Topological layer computation (Kahn's algorithm).
  * Returns array of layers, each layer an array of node IDs.
+ *
+ * Cycle/orphan safety: nodes that never reach in-degree 0 (because they are
+ * part of a cycle) are appended as a final layer so they are never silently
+ * dropped from the rendered graph.
  */
 export function topologicalLayers(
   nodes: DAGNodeSession[],
@@ -38,12 +43,14 @@ export function topologicalLayers(
   }
 
   const layers: string[][] = []
+  const placed = new Set<string>()
   let queue = nodes
     .filter((n) => inDegree[n.node_id] === 0)
     .map((n) => n.node_id)
 
   while (queue.length > 0) {
     layers.push([...queue])
+    for (const id of queue) placed.add(id)
     const next: string[] = []
     for (const id of queue) {
       for (const dep of dependents[id] ?? []) {
@@ -53,6 +60,11 @@ export function topologicalLayers(
     }
     queue = next
   }
+
+  // Any node not placed is part of a cycle (or otherwise unreachable);
+  // append it so the graph view never silently drops nodes.
+  const leftover = nodes.filter((n) => !placed.has(n.node_id)).map((n) => n.node_id)
+  if (leftover.length > 0) layers.push(leftover)
 
   return layers
 }
@@ -69,6 +81,7 @@ export function nodeStatusIcon(status: DAGNodeStatus): { icon: string } {
  * AsciiDag — renders topological columns (left→right) with node boxes and ──▶ arrows.
  */
 export function AsciiDag(props: {
+  lang: Lang
   nodes: DAGNodeSession[]
   selectedNodeID?: string
   onSelect: (id: string) => void
@@ -120,7 +133,7 @@ export function AsciiDag(props: {
                           {node().config?.name ?? nodeID}
                         </text>
                       </box>
-                      <text fg={theme.textMuted}>{node().status}</text>
+                      <text fg={theme.textMuted}>{nodeStatusLabel(props.lang, node().status)}</text>
                     </box>
                   )
                 }}

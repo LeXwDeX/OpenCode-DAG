@@ -10,7 +10,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { InternalTuiPlugin } from "../../plugin/internal"
 import type { JSX } from "solid-js"
 import { ConsoleRoute } from "./console-route"
-import { t, useLang } from "./i18n"
+import { resolveLang, t, useLang } from "./i18n"
 
 const id = "internal:dag-workflow"
 const ROUTE = "dag-workflow"
@@ -36,7 +36,7 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: "dag.workflow.open",
-        title: t(api.tuiConfig.lang === "zh" ? "zh" : "en", "cmd_open_title"),
+        title: t(resolveLang(api), "cmd_open_title"),
         category: "DAG",
         namespace: "palette",
         run() {

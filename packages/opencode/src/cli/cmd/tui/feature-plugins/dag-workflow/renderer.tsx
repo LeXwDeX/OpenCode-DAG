@@ -13,12 +13,11 @@ import type {
   DAGWorkflowSession,
   DAGWorkflowStatus,
 } from "@/dag/session/types"
-import { calculateWorkflowProgress } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
 import type { Lang } from "./i18n"
-import { t, nodeStatusLabel, workflowStatusLabel } from "./i18n"
+import { t, nodeStatusLabel, workflowStatusLabel, violationSeverityLabel, violationTypeLabel } from "./i18n"
 
 function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "\u2014"
@@ -81,7 +80,6 @@ export function DagWorkflowRenderer(props: {
   onNodeSelect: (nodeId: string) => void
 }): JSX.Element {
   const { theme } = useTheme()
-  const progress = createMemo(() => calculateWorkflowProgress(props.workflow))
   const wfColor = createMemo(() => workflowStatusColor(props.workflow.status, theme))
   const wfStatusLabel = createMemo(() => workflowStatusLabel(props.lang, props.workflow.status))
 
@@ -118,9 +116,6 @@ export function DagWorkflowRenderer(props: {
 
       <box flexDirection="row" gap={2} paddingLeft={1}>
         <text fg={wfColor()}>{t(props.lang, "label_status")}: {wfStatusLabel()}</text>
-        <text fg={theme.textMuted}>
-          {t(props.lang, "label_progress")}: {progress().all_nodes.completed}/{progress().all_nodes.total}
-        </text>
         <Show when={props.workflow.duration_ms !== null}>
           <text fg={theme.textMuted}>{t(props.lang, "label_duration")}: {formatDuration(props.workflow.duration_ms)}</text>
         </Show>
@@ -155,8 +150,8 @@ export function DagWorkflowRenderer(props: {
           {(violation) => (
             <box flexDirection="row" gap={1} paddingLeft={1}>
               <text fg={theme.error}>{"\u26a0"}</text>
-              <text fg={theme.error}>[{violation.severity}]</text>
-              <text fg={theme.text}>{violation.type}:</text>
+              <text fg={theme.error}>[{violationSeverityLabel(props.lang, violation.severity)}]</text>
+              <text fg={theme.text}>{violationTypeLabel(props.lang, violation.type)}:</text>
               <text fg={theme.textMuted}>{violation.message}</text>
             </box>
           )}

@@ -9,7 +9,7 @@
  * - ReadOnly: no state mutations
  * - Status enum imported from types (no hardcoding)
  */
-import { createMemo, createSignal, For, Show, type JSX } from "solid-js"
+import { For, Show, type JSX } from "solid-js"
 import type {
   DAGWorkflowSession,
   DAGWorkflowStatus,
@@ -37,25 +37,22 @@ export function workflowStatusIcon(status: DAGWorkflowStatus): string {
 
 /**
  * Sidebar component — workflow history list with filters.
+ *
+ * Controlled component: filter/search state is owned by the parent
+ * (console-route) so keyboard navigation and the visible list stay in sync.
+ * `workflows` is expected to be already filtered by the parent.
  */
 export function Sidebar(props: {
   lang: Lang
   workflows: DAGWorkflowSession[]
+  statusFilter: DAGWorkflowStatus | null
+  search: string
   currentWorkflowID?: string
+  onStatusFilter: (s: DAGWorkflowStatus | null) => void
+  onSearch: (q: string) => void
   onSelect: (id: string) => void
 }): JSX.Element {
   const { theme } = useTheme()
-  const [statusFilter, setStatusFilter] = createSignal<DAGWorkflowStatus | null>(null)
-  const [search, setSearch] = createSignal("")
-
-  const filtered = createMemo(() => {
-    let list = props.workflows
-    const sf = statusFilter()
-    if (sf) list = list.filter((w) => w.status === sf)
-    const q = search().toLowerCase()
-    if (q) list = list.filter((w) => w.config?.name?.toLowerCase().includes(q))
-    return list
-  })
 
   return (
     <box gap={1}>
@@ -64,8 +61,8 @@ export function Sidebar(props: {
         <For each={[null, ...WORKFLOW_STATUSES]}>
           {(s) => (
             <text
-              fg={statusFilter() === s ? theme.primary : theme.textMuted}
-              onMouseUp={() => setStatusFilter(s)}
+              fg={props.statusFilter === s ? theme.primary : theme.textMuted}
+              onMouseUp={() => props.onStatusFilter(s)}
             >
               {s === null ? t(props.lang, "filter_all") : workflowStatusLabel(props.lang, s)}
             </text>
@@ -73,21 +70,22 @@ export function Sidebar(props: {
         </For>
       </box>
 
-      {/* Search input (plain text; actual input binding in Phase ④ or keymap) */}
+      {/* Search input */}
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>{t(props.lang, "label_search")}</text>
         <input
           flexGrow={1}
-          onInput={(val) => setSearch(val)}
+          value={props.search}
+          onInput={(val) => props.onSearch(val)}
         />
       </box>
 
       {/* Filtered list */}
       <Show
-        when={filtered().length > 0}
+        when={props.workflows.length > 0}
         fallback={<text fg={theme.textMuted}>{t(props.lang, "label_no_workflows")}</text>}
       >
-        <For each={filtered()}>
+        <For each={props.workflows}>
           {(wf) => {
             const isSelected = () => props.currentWorkflowID === wf.id
             return (

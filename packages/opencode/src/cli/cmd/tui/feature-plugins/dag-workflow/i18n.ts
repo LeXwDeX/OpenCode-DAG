@@ -20,7 +20,7 @@ export type NodeStatus = "pending" | "queued" | "running" | "completed" | "faile
 
 const DICT = {
   en: {
-    tab_dialogue: "对话",
+    tab_dialogue: "Chat",
     tab_workflow: "DAG Workflow",
     view_tree: "Tree View",
     view_ascii: "ASCII DAG",
@@ -31,6 +31,8 @@ const DICT = {
     label_no_nodes: "No nodes in this workflow",
     label_no_workflows: "No workflows",
     label_select_workflow: "Select a workflow from the list",
+    label_loading: "Loading\u2026",
+    label_load_error: "Failed to load",
     label_search: "Search:",
     label_retries: "Retries",
     label_deps: "Deps",
@@ -63,6 +65,8 @@ const DICT = {
     label_no_nodes: "当前工作流没有节点",
     label_no_workflows: "没有工作流",
     label_select_workflow: "请从左侧列表选择一个工作流",
+    label_loading: "加载中\u2026",
+    label_load_error: "加载失败",
     label_search: "搜索：",
     label_retries: "重试",
     label_deps: "依赖",
@@ -100,6 +104,45 @@ const NODE_STATUS_ZH: Record<NodeStatus, string> = {
   completed: "已完成",
   failed: "失败",
   skipped: "已跳过",
+}
+
+export type ViolationType =
+  | "required_node_skipped"
+  | "required_node_failed"
+  | "max_nodes_exceeded"
+  | "max_concurrency_exceeded"
+  | "timeout_exceeded"
+
+export type ViolationSeverity = "info" | "warning" | "error" | "critical"
+
+const VIOLATION_TYPE_LABEL: Record<Lang, Record<ViolationType, string>> = {
+  en: {
+    required_node_skipped: "Required node skipped",
+    required_node_failed: "Required node failed",
+    max_nodes_exceeded: "Max nodes exceeded",
+    max_concurrency_exceeded: "Max concurrency exceeded",
+    timeout_exceeded: "Timeout exceeded",
+  },
+  zh: {
+    required_node_skipped: "必需节点被跳过",
+    required_node_failed: "必需节点失败",
+    max_nodes_exceeded: "超出最大节点数",
+    max_concurrency_exceeded: "超出最大并发数",
+    timeout_exceeded: "超时",
+  },
+}
+
+const VIOLATION_SEVERITY_LABEL: Record<Lang, Record<ViolationSeverity, string>> = {
+  en: { info: "info", warning: "warning", error: "error", critical: "critical" },
+  zh: { info: "提示", warning: "警告", error: "错误", critical: "严重" },
+}
+
+export function violationTypeLabel(lang: Lang, type: ViolationType): string {
+  return VIOLATION_TYPE_LABEL[lang][type] ?? type
+}
+
+export function violationSeverityLabel(lang: Lang, severity: ViolationSeverity): string {
+  return VIOLATION_SEVERITY_LABEL[lang][severity] ?? severity
 }
 
 export type I18nKey = keyof typeof DICT.en
