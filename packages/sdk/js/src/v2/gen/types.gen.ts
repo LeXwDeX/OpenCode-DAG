@@ -1461,12 +1461,29 @@ export type DagWorkflow = {
   duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
+export type DagNodeError = {
+  type: string
+  message: string
+  details?: {
+    [key: string]: unknown
+  }
+  retryable: boolean
+}
+
+export type DagNodeMetrics = {
+  cpu_percent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  memory_mb?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  disk_io_mb?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  network_io_mb?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type DagNode = {
   node_id: string
   workflow_id: string
   config: unknown
   status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
   output: unknown
+  error_info?: DagNodeError
   retry_count: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   max_retries: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   timeout_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
@@ -1482,6 +1499,8 @@ export type DagNode = {
   parent_node: string
   created_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   updated_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  logs?: Array<string>
+  metrics?: DagNodeMetrics
 }
 
 export type DagWorkflowDetail = {

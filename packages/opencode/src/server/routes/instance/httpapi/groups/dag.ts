@@ -21,6 +21,20 @@ export const DagWorkflowStatus = Schema.Literals(["pending", "running", "complet
 
 export const DagNodeStatus = Schema.Literals(["pending", "queued", "running", "completed", "failed", "skipped"])
 
+export const DagNodeError = Schema.Struct({
+  type: Schema.String,
+  message: Schema.String,
+  details: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  retryable: Schema.Boolean,
+}).annotate({ identifier: "DagNodeError" })
+
+export const DagNodeMetrics = Schema.Struct({
+  cpu_percent: Schema.optional(Schema.Number),
+  memory_mb: Schema.optional(Schema.Number),
+  disk_io_mb: Schema.optional(Schema.Number),
+  network_io_mb: Schema.optional(Schema.Number),
+}).annotate({ identifier: "DagNodeMetrics" })
+
 export const DagWorkflow = Schema.Struct({
   id: Schema.String,
   chat_session_id: Schema.String,
@@ -42,6 +56,7 @@ export const DagNode = Schema.Struct({
   config: Schema.Unknown,
   status: DagNodeStatus,
   output: Schema.NullOr(Schema.Unknown),
+  error_info: Schema.optional(DagNodeError),
   retry_count: Schema.Number,
   max_retries: Schema.Number,
   timeout_ms: Schema.Number,
@@ -55,6 +70,8 @@ export const DagNode = Schema.Struct({
   parent_node: Schema.NullOr(Schema.String),
   created_at: Schema.Number,
   updated_at: Schema.Number,
+  logs: Schema.optional(Schema.Array(Schema.String)),
+  metrics: Schema.optional(DagNodeMetrics),
 }).annotate({ identifier: "DagNode" })
 
 export const DagWorkflowDetail = Schema.Struct({
