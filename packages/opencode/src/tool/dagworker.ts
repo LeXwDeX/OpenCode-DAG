@@ -15,13 +15,14 @@ import { Schema, Effect } from "effect"
 import { Session } from "@/session/session"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
-import { WorkflowEngine } from "../dag/session/workflow-engine"
+import { WorkflowEngine, registerEngine } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import type { WorkflowExecutor } from "../dag/session/workflow-executor"
 import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGWorkflowSession } from "../dag/session/types"
+import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession } from "../dag/session/types"
 import { RequiredNodesValidator } from "../dag/session/required-nodes-validator"
+import type { PromptOps } from "@/session/prompt-ops"
 
 const id = "dagworker"
 
@@ -151,19 +152,54 @@ export const DAGWorkerTool = Tool.define(
             name: workflowConfig.name,
             config: workflowConfig,
           })
-          
+
+          // Materialize nodes with namespaced IDs (${workflowId}::${cfgId})
+          for (const cfg of workflowConfig.nodes) {
+            yield* dagSessionService.createNode({
+              workflowId: workflow.id,
+              nodeId: `${workflow.id}::${cfg.id}`,
+              name: cfg.name,
+              nodeName: cfg.name,
+              nodeType: cfg.worker_type,
+              config: cfg,
+              dependencyNodes: (cfg.dependencies ?? []).map((d: string) => `${workflow.id}::${d}`),
+              timeoutMs: cfg.timeout_ms,
+              retryCount: 0,
+              maxRetries: cfg.retry?.max_attempts ?? 0,
+            })
+          }
+
+          // Wire promptOps (required for subagent spawning)
+          const promptOps = ctx.extra?.promptOps as PromptOps | undefined
+          if (!promptOps) {
+            return yield* Effect.fail(new Error("dagworker requires promptOps in ctx.extra — must be called inside a session prompt turn"))
+          }
+
           // Create workflow engine and executor
           const workflowEngine = yield* WorkflowEngine.make
+          workflowEngine.setPromptOps(promptOps)
           const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, workflowConfig)
-          
-          // Start workflow
-          yield* executor.start(workflow.id)
-          
+
+          // Register engine in global registry (enables node_complete tool routing)
+          registerEngine(workflow.id, workflowEngine)
+
+          // Start workflow status update
+          yield* workflowEngine.startWorkflow(workflow.id, workflowConfig)
+
+          // Fork executor daemon (dagworker returns immediately)
+          yield* executor.start(workflow.id).pipe(Effect.forkDetach)
+
+          // Abort listener: cancel workflow on parent abort
+          const onAbort = () => {
+            Effect.runPromise(workflowEngine.cancelWorkflow(workflow.id).pipe(Effect.ignore))
+          }
+          ctx.abort.addEventListener("abort", onAbort, { once: true })
+
           return {
             title: `Workflow Started: ${workflow.id}`,
             output: JSON.stringify({
               workflowId: workflow.id,
-              message: "Workflow started successfully",
+              message: "Workflow started in background",
               nodes: workflow.config.nodes.length,
             }),
             metadata: {

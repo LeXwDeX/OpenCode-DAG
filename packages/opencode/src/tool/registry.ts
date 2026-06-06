@@ -32,6 +32,8 @@ import { SandboxTool, SandboxStatusTool } from "./sandbox"
 import { SandboxManager } from "./sandbox/manager"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { DAGWorkerTool } from "./dagworker"
+import { NodeCompleteTool } from "./node_complete"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -143,6 +145,8 @@ export const layer: Layer.Layer<
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const dagworker = yield* DAGWorkerTool
+    const nodeComplete = yield* NodeCompleteTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -250,6 +254,8 @@ export const layer: Layer.Layer<
           repo_overview: Tool.init(repoOverview),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
+          dagworker: Tool.init(dagworker),
+          node_complete: Tool.init(nodeComplete),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           sandbox: Tool.init(sandbox),
@@ -276,6 +282,8 @@ export const layer: Layer.Layer<
             ...(flags.experimentalScout ? [tool.repo_clone, tool.repo_overview] : []),
             tool.skill,
             tool.patch,
+            tool.dagworker,
+            tool.node_complete,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalSandbox ? [tool.sandbox, tool.sandbox_status] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),

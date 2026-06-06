@@ -1,5 +1,6 @@
 import { Effect } from "effect"
 import type { WorkflowEngine, WorkflowStatusSnapshot } from "./workflow-engine"
+import { unregisterEngine } from "./workflow-engine"
 import type { DAGConfig } from "./types"
 
 /** DAG executor default max runtime: 10 minutes */
@@ -66,7 +67,7 @@ export function createWorkflowExecutor(
           yield* engine.scheduleReadyNodes(workflowId)
           yield* Effect.sleep(100)
         }
-      })
+      }).pipe(Effect.ensuring(Effect.sync(() => unregisterEngine(workflowId))))
     },
     
     getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never, never> {

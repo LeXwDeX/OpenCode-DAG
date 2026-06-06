@@ -159,6 +159,8 @@ export interface CreateWorkflowInput {
 
 export interface CreateNodeInput {
   workflowId: string
+  /** caller-provided id (e.g. ${workflowId}::${cfgId}); falls back to auto-generated */
+  nodeId?: string
   name: string
   nodeName: string
   nodeType: string
@@ -201,6 +203,8 @@ export interface IDAGSessionService {
   readonly getNode: (nodeId: string) => Effect.Effect<DAGNodeSession | undefined>
   readonly listNodes: (workflowId: string) => Effect.Effect<DAGNodeSession[]>
   readonly updateNodeStatus: (input: UpdateNodeStatusInput) => Effect.Effect<void>
+  /** Optional: merges metadata into an existing node. Absent in historical mocks. */
+  readonly updateNodeMetadata?: (nodeId: string, metadata: Record<string, unknown>) => Effect.Effect<void>
   
   readonly createViolation: (input: CreateViolationInput) => Effect.Effect<DAGViolation>
   readonly listViolations: (workflowId: string) => Effect.Effect<DAGViolation[]>
@@ -369,7 +373,7 @@ const make = Effect.gen(function* () {
   const createNode: IDAGSessionService["createNode"] = (input) =>
     Effect.sync(() => {
       const now = Date.now()
-      const nodeId = `node_${now}_${Math.random().toString(36).slice(2)}`
+      const nodeId = input.nodeId ?? `node_${now}_${Math.random().toString(36).slice(2)}`
       
       Database.use((db) => {
         db.insert(dagNodes).values({
@@ -557,6 +561,28 @@ const make = Effect.gen(function* () {
       }
     })
   
+  const updateNodeMetadata: IDAGSessionService["updateNodeMetadata"] = (nodeId, metadata) =>
+    Effect.sync(() => {
+      const now = Date.now()
+      let existing: Record<string, unknown> = {}
+      Database.use((db) => {
+        const rows = db.select({ metadata: dagNodes.metadata })
+          .from(dagNodes)
+          .where(eq(dagNodes.node_id, nodeId))
+          .limit(1)
+          .all()
+        if (rows.length > 0) {
+          try { existing = JSON.parse((rows[0].metadata as any) ?? "{}") } catch { existing = {} }
+        }
+      })
+      Database.use((db) => {
+        db.update(dagNodes)
+          .set({ metadata: JSON.stringify({ ...existing, ...metadata }), updated_at: now })
+          .where(eq(dagNodes.node_id, nodeId))
+          .run()
+      })
+    })
+  
   const createViolation: IDAGSessionService["createViolation"] = (input) =>
     Effect.sync(() => {
       const now = new Date().toISOString()
@@ -641,6 +667,7 @@ const make = Effect.gen(function* () {
     getNode,
     listNodes,
     updateNodeStatus,
+    updateNodeMetadata,
     createViolation,
     listViolations,
     listAllWorkflows,

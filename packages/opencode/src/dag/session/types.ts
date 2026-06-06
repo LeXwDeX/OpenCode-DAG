@@ -218,14 +218,18 @@ export interface DAGNodeMetrics {
 // ============================================================================
 
 /**
- * 违规类型
+ * DAG violation categories:
+ * - required_node_skipped / required_node_failed: required-node lifecycle
+ * - max_nodes_exceeded / max_concurrency_exceeded / timeout_exceeded: capacity / time limits
+ * - execution_failed: runtime failures during node spawn or execution
  */
 export type DAGViolationType =
   | 'required_node_skipped'
   | 'required_node_failed'
   | 'max_nodes_exceeded'
   | 'max_concurrency_exceeded'
-  | 'timeout_exceeded';
+  | 'timeout_exceeded'
+  | 'execution_failed';
 
 /**
  * 违规严重性

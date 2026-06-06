@@ -1,0 +1,11 @@
+node_complete — DAG node worker's definitive completion signal.
+
+A DAG node MUST call this tool EXACTLY ONCE when its work is done.
+This is the ONLY way the engine marks a node as completed.
+
+- status='completed': successful completion — provide output.
+- status='failed': fatal error — provide error message.
+
+If you go idle without calling this tool, the node will be marked failed by the engine.
+
+The node_id format is ${workflowId}::${cfgId} — you receive it in your node prompt.

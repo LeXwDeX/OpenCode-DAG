@@ -122,6 +122,7 @@ export const DagViolation = Schema.Struct({
     "max_nodes_exceeded",
     "max_concurrency_exceeded",
     "timeout_exceeded",
+    "execution_failed",
   ]),
   severity: Schema.Literals(["info", "warning", "error", "critical"]),
   message: Schema.String,

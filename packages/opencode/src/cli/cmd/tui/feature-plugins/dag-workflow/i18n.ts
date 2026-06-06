@@ -112,6 +112,7 @@ export type ViolationType =
   | "max_nodes_exceeded"
   | "max_concurrency_exceeded"
   | "timeout_exceeded"
+  | "execution_failed"
 
 export type ViolationSeverity = "info" | "warning" | "error" | "critical"
 
@@ -122,6 +123,7 @@ const VIOLATION_TYPE_LABEL: Record<Lang, Record<ViolationType, string>> = {
     max_nodes_exceeded: "Max nodes exceeded",
     max_concurrency_exceeded: "Max concurrency exceeded",
     timeout_exceeded: "Timeout exceeded",
+    execution_failed: "Execution failed",
   },
   zh: {
     required_node_skipped: "必需节点被跳过",
@@ -129,6 +131,7 @@ const VIOLATION_TYPE_LABEL: Record<Lang, Record<ViolationType, string>> = {
     max_nodes_exceeded: "超出最大节点数",
     max_concurrency_exceeded: "超出最大并发数",
     timeout_exceeded: "超时",
+    execution_failed: "执行失败",
   },
 }
 
