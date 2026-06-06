@@ -99,6 +99,17 @@ describe("WP4 i18n — t() dict lookup", () => {
     node_subsession_unavailable: ["[Sub-session not available]", "[暂不可进入子会话]"],
     node_enter_subsession: ["[Enter Sub-Session \u2192]", "[进入子会话 \u2192]"],
     action_close: ["[Close]", "[关闭]"],
+    hint_hotkey_bar: [
+      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Esc] Back",
+      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [Leader+v] 切换视图  [Esc] 返回",
+    ],
+    label_focus: ["Focus:", "焦点："],
+    focus_history: ["History", "列表"],
+    focus_graph: ["Graph", "图形"],
+    label_node: ["Node:", "节点："],
+    ticker_live: ["Live:", "实时："],
+    ticker_idle: ["Idle", "空闲"],
+    ticker_reasoning: ["reasoning\u2026", "推理中\u2026"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

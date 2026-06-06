@@ -15,6 +15,8 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import type { DAGNodeSession } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
+import type { Lang } from "./i18n"
+import { t as translate } from "./i18n"
 
 const MAX_SUMMARY = 50
 
@@ -22,7 +24,10 @@ const MAX_SUMMARY = 50
  * Extracts a human-readable summary from a Part object.
  * Returns null if the part is not displayable (e.g. step-start, file, etc).
  */
-export function summarizePart(part: { type: string; [key: string]: unknown }): string | null {
+export function summarizePart(
+  part: { type: string; [key: string]: unknown },
+  lang: Lang = "en",
+): string | null {
   if (part.type === "text") {
     const text = String(part.text ?? "")
     if (!text) return null
@@ -35,7 +40,7 @@ export function summarizePart(part: { type: string; [key: string]: unknown }): s
     return `[${tool}] ${state}`
   }
   if (part.type === "reasoning") {
-    return "reasoning\u2026"
+    return translate(lang, "ticker_reasoning")
   }
   return null
 }
@@ -44,6 +49,7 @@ export function summarizePart(part: { type: string; [key: string]: unknown }): s
  * LiveTicker component — shows most recent activity in the workflow.
  */
 export function LiveTicker(props: {
+  lang: Lang
   event: TuiPluginApi["event"]
   nodes: DAGNodeSession[]
   throttleMs?: number
@@ -57,7 +63,7 @@ export function LiveTicker(props: {
 
   function flushPending() {
     if (!pending) return
-    const s = summarizePart(pending)
+    const s = summarizePart(pending, props.lang)
     if (s) setSummary(s)
     pending = null
     timeout = null
@@ -88,11 +94,11 @@ export function LiveTicker(props: {
       <text fg={theme.textMuted}>
         {summary() ? (
           <span>
-            <text fg={theme.primary}>Live: </text>
+            <text fg={theme.primary}>{translate(props.lang, "ticker_live")} </text>
             <text>{summary() ?? ""}</text>
           </span>
         ) : (
-          <span>Idle</span>
+          <span>{translate(props.lang, "ticker_idle")}</span>
         )}
       </text>
     </box>

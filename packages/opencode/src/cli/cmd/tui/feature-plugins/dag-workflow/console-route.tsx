@@ -324,7 +324,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               route={props.api.route}
             />
           </scrollbox>
-          <LiveTicker event={props.api.event} nodes={nodes()} />
+          <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
         </box>
       </box>
 
@@ -338,11 +338,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         paddingRight={2}
         backgroundColor={theme.backgroundPanel}
       >
-        <text fg={theme.textMuted}>[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Esc] Back</text>
+        <text fg={theme.textMuted}>{i18n().t("hint_hotkey_bar")}</text>
         <box flexDirection="row" gap={2}>
-          <text fg={theme.primary}>Focus: {focusPane() === "list" ? "History" : "Graph"}</text>
+          <text fg={theme.primary}>{i18n().t("label_focus")} {focusPane() === "list" ? i18n().t("focus_history") : i18n().t("focus_graph")}</text>
           <Show when={selectedNodeID()}>
-            <text fg={theme.primary}>Node: {selectedNodeID()}</text>
+            <text fg={theme.primary}>{i18n().t("label_node")} {selectedNodeID()}</text>
           </Show>
         </box>
       </box>
