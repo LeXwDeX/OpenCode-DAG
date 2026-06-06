@@ -97,6 +97,7 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
       >
         {!isDagRoute() ? <b>对话</b> : "对话"}
       </text>
+      <text fg={theme().textMuted}>│</text>
       <text
         fg={isDagRoute() ? theme().text : theme().textMuted}
         onMouseUp={isDagRoute() ? undefined : navigateToDagWorkflow}

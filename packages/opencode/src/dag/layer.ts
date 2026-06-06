@@ -11,26 +11,34 @@ export class SharedEventBusTag extends Context.Service<SharedEventBusTag, EventB
 
 // ── Layer: idempotent via Effect Layer memo map ──
 
-export const defaultLayer = Layer.mergeAll(
-  // Provide shared EventBus singleton so bridge-layer can subscribe to the same instance
-  Layer.effect(
-    SharedEventBusTag,
-    Effect.sync(() => {
-      const bus = new EventBus()
-      // Mount to session-service module-level variable (Iron Law #3)
-      setEventBus(bus)
-      return bus
-    }),
-  ),
-  // Provide DAGQuery backed by DAGSessionService
-  Layer.effect(
-    DAGQueryTag,
-    Effect.gen(function* () {
-      const bus = yield* SharedEventBusTag
-      // Ensure event bus is mounted (idempotent: same bus if layer re-runs via memo)
-      setEventBus(bus)
-      const sessionService = yield* DAGSessionService.make
-      return new DAGQuery(sessionService)
-    }),
-  ),
+// Shared EventBus singleton. Exposed as its own layer so bridge-layer can
+// subscribe to the *same* instance (Iron Law #3). When this layer object is
+// referenced in multiple places of the same build, Effect memoizes it by
+// reference -> the EventBus is constructed exactly once.
+export const sharedEventBusLayer = Layer.effect(
+  SharedEventBusTag,
+  Effect.sync(() => {
+    const bus = new EventBus()
+    // Mount to session-service module-level variable (Iron Law #3)
+    setEventBus(bus)
+    return bus
+  }),
 )
+
+// DAGQuery backed by DAGSessionService. Depends on SharedEventBusTag.
+const dagQueryLayer = Layer.effect(
+  DAGQueryTag,
+  Effect.gen(function* () {
+    const bus = yield* SharedEventBusTag
+    // Ensure event bus is mounted (idempotent: same bus if layer re-runs via memo)
+    setEventBus(bus)
+    const sessionService = yield* DAGSessionService.make
+    return new DAGQuery(sessionService)
+  }),
+)
+
+// Self-contained composite: provideMerge feeds the shared bus INTO dagQueryLayer
+// and re-exposes it, so the result outputs BOTH tags with zero residual
+// requirement. `Layer.mergeAll` does not cross-wire siblings, which previously
+// left SharedEventBusTag unsatisfied at runtime ("Service not found").
+export const defaultLayer = dagQueryLayer.pipe(Layer.provideMerge(sharedEventBusLayer))

@@ -11,6 +11,7 @@ import { DAGRenderer, DAGProgressBar } from "./renderer"
 import { DAGNodeDialog } from "./node-dialog"
 import { useTheme } from "@tui/context/theme"
 import { useDialog } from "@tui/ui/dialog"
+import { useBindings } from "../../keymap"
 
 export function DAGConsoleView(props: { api: TuiPluginApi }) {
   const { theme } = useTheme()
@@ -20,7 +21,7 @@ export function DAGConsoleView(props: { api: TuiPluginApi }) {
     ("params" in props.api.route.current
       ? props.api.route.current.params
       : undefined) as
-      | { workflowId?: string; sessionID?: string; returnRoute?: { name: string } }
+      | { workflowId?: string; sessionID?: string; returnRoute?: { name: string; params?: Record<string, unknown> } }
       | undefined
 
   const workflowId = () => params()?.workflowId
@@ -69,14 +70,34 @@ export function DAGConsoleView(props: { api: TuiPluginApi }) {
   })
 
   function goBack() {
-    const returnRoute = params()?.returnRoute
-    if (returnRoute) {
-      props.api.route.navigate(returnRoute.name)
+    const p = params()
+    const returnRoute = p?.returnRoute
+    const fallbackSessionID = p?.sessionID
+    if (returnRoute?.name === "session") {
+      // routeNavigate silently no-ops if sessionID is missing; merge the
+      // top-level sessionID param as a backup so Back always works.
+      const sid = (returnRoute.params?.["sessionID"] as string | undefined) ?? fallbackSessionID
+      if (sid) {
+        props.api.route.navigate("session", { sessionID: sid })
+        dialog.clear()
+        return
+      }
+    }
+    if (returnRoute?.name) {
+      props.api.route.navigate(returnRoute.name, returnRoute.params)
+    } else if (fallbackSessionID) {
+      props.api.route.navigate("session", { sessionID: fallbackSessionID })
     } else {
       props.api.route.navigate("home")
     }
     dialog.clear()
   }
+
+  // Register the Esc keybinding (the "[Esc] Back" hint was previously only a
+  // label with no binding, so the Esc key did nothing).
+  useBindings(() => ({
+    bindings: [{ key: "escape", desc: "Back", group: "DAG", cmd() { goBack() } }],
+  }))
 
   return (
     <box flexDirection="column" flexGrow={1} minHeight={0}>

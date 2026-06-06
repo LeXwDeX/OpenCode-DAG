@@ -3,19 +3,20 @@
  * DAG Workflow 工作台 Console Route
  *
  * 三区布局：
- * - 顶部：[对话 | DAG Workflow] Tab 切换
- * - 左侧：workflow 历史列表
- * - 中间：进度条 + 节点树
- * - 右侧：选中 workflow 详情
+ * - 顶部：[对话 | DAG Workflow] Tab 切换 + [Tree | ASCII DAG] 视图切换
+ * - 左侧：workflow 历史列表（含搜索 + 状态过滤）
+ * - 中间：进度条 + 节点树或 ASCII DAG（按 viewMode 切换）
+ * - 右下：选中节点详情 + 实时 ticker
  *
  * 架构约束：
  * - TUI 只读：任何写必须经 server API
  * - 通过 data.ts hooks 访问数据（禁止直接调 SDK）
  * - signals + event subscription（禁止 createResource）
+ * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, createSignal, Show, type JSX } from "solid-js"
-import type { DAGWorkflowSession } from "@/dag/session/types"
+import type { DAGNodeSession } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import {
   useWorkflowList,
@@ -26,11 +27,16 @@ import {
 import {
   DagWorkflowRenderer,
   DagProgressBar,
-  DagWorkflowSidebar,
-  DagWorkflowDetail,
 } from "./renderer"
+import { AsciiDag } from "./ascii-dag"
+import { LiveTicker } from "./live-ticker"
+import { NodeDialog } from "./node-dialog"
+import { Sidebar } from "./sidebar"
+import { useBindings } from "../../keymap"
 
 const ROUTE = "dag-workflow"
+
+type ViewMode = "tree" | "ascii-dag"
 
 export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const { theme } = useTheme()
@@ -40,7 +46,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       ("params" in props.api.route.current
         ? props.api.route.current.params
         : undefined) as
-        | { sessionID?: string; workflowId?: string; returnRoute?: { name: string } }
+        | {
+            sessionID?: string
+            workflowId?: string
+            returnRoute?: { name: string; params?: Record<string, unknown> }
+          }
         | undefined,
   )
 
@@ -49,7 +59,80 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     routeParams()?.workflowId,
   )
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
-  const [isLoading, setIsLoading] = createSignal(false)
+  const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
+  const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
+
+  const selectedNode = createMemo<DAGNodeSession | null>(() => {
+    const id = selectedNodeID()
+    if (!id) return null
+    return nodes().find((n) => n.node_id === id) ?? null
+  })
+
+  function toggleView() {
+    setViewMode((v) => (v === "tree" ? "ascii-dag" : "tree"))
+  }
+
+  // ── Keyboard navigation helpers ──────────────────────────────────────────
+  function moveWorkflowSelection(delta: number) {
+    const list = workflowList()
+    if (list.length === 0) return
+    const curIdx = list.findIndex((w) => w.id === currentWorkflowID())
+    const nextIdx =
+      curIdx < 0
+        ? delta > 0
+          ? 0
+          : list.length - 1
+        : Math.min(list.length - 1, Math.max(0, curIdx + delta))
+    const next = list[nextIdx]
+    if (next) {
+      setCurrentWorkflowID(next.id)
+      setSelectedNodeID(null)
+    }
+  }
+
+  function moveNodeSelection(delta: number) {
+    const ns = nodes()
+    if (ns.length === 0) return
+    const curIdx = ns.findIndex((n) => n.node_id === selectedNodeID())
+    const nextIdx =
+      curIdx < 0
+        ? delta > 0
+          ? 0
+          : ns.length - 1
+        : Math.min(ns.length - 1, Math.max(0, curIdx + delta))
+    const next = ns[nextIdx]
+    if (next) setSelectedNodeID(next.node_id)
+  }
+
+  function moveSelection(delta: number) {
+    if (focusPane() === "list") moveWorkflowSelection(delta)
+    else moveNodeSelection(delta)
+  }
+
+  function confirmSelection() {
+    if (focusPane() === "list") {
+      // Move focus into the graph and select the first node for keyboard flow.
+      setFocusPane("graph")
+      if (!selectedNodeID()) moveNodeSelection(1)
+      return
+    }
+    // graph focus → enter the node's sub-session if available
+    const sid = selectedNode()?.metadata?.chat_session_id
+    if (typeof sid === "string") {
+      props.api.route.navigate("session", { sessionID: sid })
+    }
+  }
+
+  useBindings(() => ({
+    bindings: [
+      { key: "escape", desc: "Back to session", group: "DAG", cmd() { goToSessionTab() } },
+      { key: "tab", desc: "Switch pane (list ↔ graph)", group: "DAG", cmd() { setFocusPane((p) => (p === "list" ? "graph" : "list")) } },
+      { key: "j,down", desc: "Next", group: "DAG", cmd() { moveSelection(1) } },
+      { key: "k,up", desc: "Previous", group: "DAG", cmd() { moveSelection(-1) } },
+      { key: "return", desc: "Select / Enter sub-session", group: "DAG", cmd() { confirmSelection() } },
+      { key: "<leader>v", desc: "Toggle DAG view (tree ↔ ASCII)", group: "DAG", cmd() { toggleView() } },
+    ],
+  }))
 
   const { list: workflowList } = useWorkflowList({
     kv: props.api.kv,
@@ -82,11 +165,23 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   })
 
   function goToSessionTab() {
-    const returnRoute = routeParams()?.returnRoute
+    const params = routeParams()
+    const returnRoute = params?.returnRoute
+    const fallbackSessionID = params?.sessionID
+    if (returnRoute?.name === "session") {
+      // routeNavigate silently no-ops if sessionID is missing; merge the
+      // top-level sessionID param as a backup so Back always works.
+      const sid =
+        (returnRoute.params?.["sessionID"] as string | undefined) ?? fallbackSessionID
+      if (sid) {
+        props.api.route.navigate("session", { sessionID: sid })
+        return
+      }
+    }
     if (returnRoute?.name) {
-      props.api.route.navigate(returnRoute.name)
-    } else if (sessionID()) {
-      props.api.route.navigate("session", { sessionID: sessionID() })
+      props.api.route.navigate(returnRoute.name, returnRoute.params)
+    } else if (fallbackSessionID) {
+      props.api.route.navigate("session", { sessionID: fallbackSessionID })
     } else {
       props.api.route.navigate("home")
     }
@@ -108,13 +203,28 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
             对话
           </text>
+          <text fg={theme.textMuted}>│</text>
           <text fg={theme.text}>
             <b>DAG Workflow</b>
           </text>
         </box>
-        <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
-          [Esc] Back
-        </text>
+        <box flexDirection="row" gap={3}>
+          <text
+            fg={viewMode() === "tree" ? theme.text : theme.textMuted}
+            onMouseUp={() => setViewMode("tree")}
+          >
+            {viewMode() === "tree" ? <b>Tree View</b> : "Tree View"}
+          </text>
+          <text
+            fg={viewMode() === "ascii-dag" ? theme.text : theme.textMuted}
+            onMouseUp={() => setViewMode("ascii-dag")}
+          >
+            {viewMode() === "ascii-dag" ? <b>ASCII DAG</b> : "ASCII DAG"}
+          </text>
+          <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
+            [Esc] Back
+          </text>
+        </box>
       </box>
 
       {/* 主体：左/中/右三区 */}
@@ -123,18 +233,18 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         <box
           flexGrow={0}
           flexShrink={0}
-          width={30}
+          width={34}
           paddingLeft={1}
           paddingTop={1}
           paddingBottom={1}
           border={["right"]}
-          borderColor={theme.border}
+          borderColor={focusPane() === "list" ? theme.primary : theme.border}
         >
           <scrollbox flexGrow={1} minHeight={0}>
-            <DagWorkflowSidebar
+            <Sidebar
               workflows={workflowList()}
-              selectedId={currentWorkflowID() ?? null}
-              onSelect={(id) => {
+              currentWorkflowID={currentWorkflowID()}
+              onSelect={(id: string) => {
                 setCurrentWorkflowID(id)
                 setSelectedNodeID(null)
               }}
@@ -148,9 +258,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             when={currentWorkflow()}
             fallback={
               <box flexGrow={1} alignItems="center" justifyContent="center">
-                <text fg={theme.textMuted}>
-                  {isLoading() ? "Loading workflow..." : "Select a workflow from the list"}
-                </text>
+                <text fg={theme.textMuted}>Select a workflow from the list</text>
               </box>
             }
           >
@@ -162,34 +270,51 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   status={progress().status}
                 />
                 <scrollbox flexGrow={1} minHeight={0} stickyScroll={false} stickyStart="top">
-                  <DagWorkflowRenderer
-                    workflow={wf()}
-                    nodes={nodes()}
-                    violations={violations()}
-                    selectedNodeId={selectedNodeID()}
-                    onNodeSelect={(nodeId) => setSelectedNodeID(nodeId)}
-                  />
+                  <Show
+                    when={viewMode() === "ascii-dag"}
+                    fallback={
+                      <DagWorkflowRenderer
+                        workflow={wf()}
+                        nodes={nodes()}
+                        violations={violations()}
+                        selectedNodeId={selectedNodeID()}
+                        onNodeSelect={(nodeId) => setSelectedNodeID(nodeId)}
+                      />
+                    }
+                  >
+                    <AsciiDag
+                      nodes={nodes()}
+                      selectedNodeID={selectedNodeID() ?? undefined}
+                      onSelect={(id) => setSelectedNodeID(id)}
+                    />
+                  </Show>
                 </scrollbox>
               </box>
             )}
           </Show>
         </box>
 
-        {/* Right: 选中 workflow 详情 */}
+        {/* Right: 选中节点详情 + 实时 ticker */}
         <box
           flexGrow={0}
           flexShrink={0}
-          width={40}
+          width={42}
           paddingLeft={1}
           paddingRight={1}
           paddingTop={1}
           paddingBottom={1}
           border={["left"]}
           borderColor={theme.border}
+          gap={1}
         >
           <scrollbox flexGrow={1} minHeight={0}>
-            <DagWorkflowDetail workflow={currentWorkflow() ?? null} />
+            <NodeDialog
+              node={selectedNode()}
+              onClose={() => setSelectedNodeID(null)}
+              route={props.api.route}
+            />
           </scrollbox>
+          <LiveTicker event={props.api.event} nodes={nodes()} />
         </box>
       </box>
 
@@ -203,10 +328,13 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         paddingRight={2}
         backgroundColor={theme.backgroundPanel}
       >
-        <text fg={theme.textMuted}>[Tab] Navigate  [Enter] Select  [Esc] Back to Session</text>
-        <Show when={selectedNodeID()}>
-          <text fg={theme.primary}>Selected: {selectedNodeID()}</text>
-        </Show>
+        <text fg={theme.textMuted}>[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Esc] Back</text>
+        <box flexDirection="row" gap={2}>
+          <text fg={theme.primary}>Focus: {focusPane() === "list" ? "History" : "Graph"}</text>
+          <Show when={selectedNodeID()}>
+            <text fg={theme.primary}>Node: {selectedNodeID()}</text>
+          </Show>
+        </box>
       </box>
     </box>
   )

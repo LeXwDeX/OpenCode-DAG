@@ -243,7 +243,12 @@ export function createRoutes(
       Worktree.appLayer,
       Bus.layer,
       DAGLayer.defaultLayer,
-      DagBridgeLayer.defaultLayer,
+      // Bridge requires SharedEventBusTag + Bus.Service. `Layer.provide([...])`
+      // does NOT cross-wire siblings, so feed those deps in explicitly. The same
+      // layer references appear standalone above (Bus.layer, DAGLayer.defaultLayer);
+      // Effect memoizes layers by reference within a single build, so the bridge
+      // shares the *same* EventBus and platform Bus instances (Iron Law #3).
+      DagBridgeLayer.defaultLayer.pipe(Layer.provide([DAGLayer.defaultLayer, Bus.layer])),
       AppFileSystem.defaultLayer,
       FetchHttpClient.layer,
       HttpServer.layerServices,
