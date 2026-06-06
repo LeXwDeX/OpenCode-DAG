@@ -13,27 +13,14 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, Show, type JSX } from "solid-js"
 import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
-
-const STATUS_LABELS: Record<DAGNodeStatus, string> = {
-  completed: "Completed",
-  running: "Running",
-  pending: "Pending",
-  queued: "Queued",
-  failed: "Failed",
-  skipped: "Skipped",
-}
-
-/**
- * Status label for a node.
- */
-export function nodeStatusLabel(status: DAGNodeStatus): string {
-  return STATUS_LABELS[status] ?? status
-}
+import type { Lang } from "./i18n"
+import { t, nodeStatusLabel } from "./i18n"
 
 /**
  * NodeDialog — renders node detail with optional "Enter Sub-Session" action.
  */
 export function NodeDialog(props: {
+  lang: Lang
   node: DAGNodeSession | null
   onClose: () => void
   route: TuiPluginApi["route"]
@@ -56,7 +43,7 @@ export function NodeDialog(props: {
       when={props.node}
       fallback={
         <box alignItems="center" justifyContent="center">
-          <text fg={theme.textMuted}>Select a node</text>
+          <text fg={theme.textMuted}>{t(props.lang, "node_select_hint")}</text>
         </box>
       }
     >
@@ -66,19 +53,19 @@ export function NodeDialog(props: {
             <b>{node().config?.name ?? node().node_id}</b>
           </text>
           <text fg={theme.textMuted}>
-            Status: {nodeStatusLabel(node().status)}
+            {t(props.lang, "label_status")}: {nodeStatusLabel(props.lang, node().status)}
           </text>
           <text fg={theme.textMuted}>
-            Retries: {node().retry_count}/{node().max_retries}
+            {t(props.lang, "label_retries")}: {node().retry_count}/{node().max_retries}
           </text>
           <Show when={node().dependencies.length > 0}>
             <text fg={theme.textMuted}>
-              Deps: {node().dependencies.join(", ")}
+              {t(props.lang, "label_deps")}: {node().dependencies.join(", ")}
             </text>
           </Show>
           <Show when={node().error_info}>
             <text fg={theme.error}>
-              Error: {node().error_info!.type}: {node().error_info!.message}
+              {t(props.lang, "label_error")}: {node().error_info!.type}: {node().error_info!.message}
             </text>
           </Show>
 
@@ -87,7 +74,7 @@ export function NodeDialog(props: {
             when={subSessionID()}
             fallback={
               <text fg={theme.textMuted}>
-                [Sub-session not available]
+                {t(props.lang, "node_subsession_unavailable")}
               </text>
             }
           >
@@ -95,12 +82,12 @@ export function NodeDialog(props: {
               fg={theme.primary}
               onMouseUp={enterSubSession}
             >
-              [Enter Sub-Session →]
+              {t(props.lang, "node_enter_subsession")}
             </text>
           </Show>
 
           <text fg={theme.textMuted} onMouseUp={props.onClose}>
-            [Close]
+            {t(props.lang, "action_close")}
           </text>
         </box>
       )}

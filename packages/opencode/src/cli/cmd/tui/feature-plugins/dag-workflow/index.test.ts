@@ -45,6 +45,7 @@ describe("WP3 DAG Workflow Plugin — registration logic", () => {
       keymap: { registerLayer: () => {} },
       ui: { dialog: { clear: () => {} } },
       kv: { get: () => undefined },
+      tuiConfig: { lang: "en" },
     }
 
     const mod = await import("./index")
@@ -69,6 +70,7 @@ describe("WP3 DAG Workflow Plugin — registration logic", () => {
       keymap: { registerLayer: () => {} },
       ui: { dialog: { clear: () => {} } },
       kv: { get: () => undefined },
+      tuiConfig: { lang: "en" },
     }
 
     const mod = await import("./index")

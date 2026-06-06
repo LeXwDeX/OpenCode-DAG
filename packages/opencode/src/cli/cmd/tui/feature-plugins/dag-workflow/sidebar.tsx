@@ -16,6 +16,8 @@ import type {
 } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { workflowStatusColor, workflowStatusIconChar } from "./status"
+import type { Lang } from "./i18n"
+import { t, workflowStatusLabel } from "./i18n"
 
 /** All valid workflow statuses for the filter radio buttons. */
 export const WORKFLOW_STATUSES: DAGWorkflowStatus[] = [
@@ -37,6 +39,7 @@ export function workflowStatusIcon(status: DAGWorkflowStatus): string {
  * Sidebar component — workflow history list with filters.
  */
 export function Sidebar(props: {
+  lang: Lang
   workflows: DAGWorkflowSession[]
   currentWorkflowID?: string
   onSelect: (id: string) => void
@@ -64,7 +67,7 @@ export function Sidebar(props: {
               fg={statusFilter() === s ? theme.primary : theme.textMuted}
               onMouseUp={() => setStatusFilter(s)}
             >
-              {s ?? "All"}
+              {s === null ? t(props.lang, "filter_all") : workflowStatusLabel(props.lang, s)}
             </text>
           )}
         </For>
@@ -72,7 +75,7 @@ export function Sidebar(props: {
 
       {/* Search input (plain text; actual input binding in Phase ④ or keymap) */}
       <box flexDirection="row" gap={1}>
-        <text fg={theme.textMuted}>Search:</text>
+        <text fg={theme.textMuted}>{t(props.lang, "label_search")}</text>
         <input
           flexGrow={1}
           onInput={(val) => setSearch(val)}
@@ -82,7 +85,7 @@ export function Sidebar(props: {
       {/* Filtered list */}
       <Show
         when={filtered().length > 0}
-        fallback={<text fg={theme.textMuted}>No workflows</text>}
+        fallback={<text fg={theme.textMuted}>{t(props.lang, "label_no_workflows")}</text>}
       >
         <For each={filtered()}>
           {(wf) => {

@@ -10,6 +10,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { InternalTuiPlugin } from "../../plugin/internal"
 import type { JSX } from "solid-js"
 import { ConsoleRoute } from "./console-route"
+import { t, useLang } from "./i18n"
 
 const id = "internal:dag-workflow"
 const ROUTE = "dag-workflow"
@@ -35,7 +36,7 @@ const tui: TuiPlugin = async (api) => {
     commands: [
       {
         name: "dag.workflow.open",
-        title: "打开 DAG 工作流面板",
+        title: t(api.tuiConfig.lang === "zh" ? "zh" : "en", "cmd_open_title"),
         category: "DAG",
         namespace: "palette",
         run() {
@@ -65,6 +66,7 @@ export default plugin
 /** 暴露给 session_topbar 渲染的 Tab 控件: [对话 | DAG 工作流] */
 export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
   const theme = () => props.api.theme.current
+  const i18n = useLang(props.api)
   const isDagRoute = () => props.api.route.current.name === ROUTE
 
   function getCurrentSessionID(): string | undefined {
@@ -95,14 +97,14 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
         fg={!isDagRoute() ? theme().text : theme().textMuted}
         onMouseUp={isDagRoute() ? navigateToSession : undefined}
       >
-        {!isDagRoute() ? <b>对话</b> : "对话"}
+        {!isDagRoute() ? <b>{i18n().t("tab_dialogue")}</b> : i18n().t("tab_dialogue")}
       </text>
       <text fg={theme().textMuted}>│</text>
       <text
         fg={isDagRoute() ? theme().text : theme().textMuted}
         onMouseUp={isDagRoute() ? undefined : navigateToDagWorkflow}
       >
-        {isDagRoute() ? <b>DAG 工作流</b> : "DAG 工作流"}
+        {isDagRoute() ? <b>{i18n().t("tab_workflow")}</b> : i18n().t("tab_workflow")}
       </text>
     </box>
   )

@@ -416,7 +416,7 @@ type TuiAttentionConfigView = {
   sounds: Partial<Record<TuiAttentionSoundName, string>>
 }
 
-type TuiConfigView = Pick<PluginConfig, "$schema" | "theme" | "plugin"> &
+type TuiConfigView = Pick<PluginConfig, "$schema" | "theme" | "plugin" | "lang"> &
   NonNullable<PluginConfig["tui"]> & {
     leader_timeout: number
     attention: TuiAttentionConfigView

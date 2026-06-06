@@ -17,6 +17,8 @@ import { calculateWorkflowProgress } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
+import type { Lang } from "./i18n"
+import { t, nodeStatusLabel, workflowStatusLabel } from "./i18n"
 
 function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "\u2014"
@@ -33,12 +35,14 @@ function DagNodeRow(props: {
   depth: number
   isLast: boolean
   selected: boolean
+  lang: Lang
   onSelect: () => void
 }) {
   const { theme } = useTheme()
   const connector = () => (props.isLast ? "\u2514\u2500" : "\u251c\u2500")
   const iconColor = createMemo(() => nodeStatusColor(props.node.status, theme))
   const icon = createMemo(() => nodeStatusIconChar(props.node.status))
+  const statusLabel = createMemo(() => nodeStatusLabel(props.lang, props.node.status))
 
   return (
     <box
@@ -50,6 +54,7 @@ function DagNodeRow(props: {
         <text fg={theme.textMuted}>{connector()}</text>
         <text fg={iconColor()}>{icon()}</text>
         <text fg={theme.text}>{props.node.config?.name ?? props.node.node_id}</text>
+        <text fg={theme.textMuted}>({statusLabel()})</text>
         <Show when={props.node.duration_ms !== null}>
           <text fg={theme.textMuted}>{formatDuration(props.node.duration_ms)}</text>
         </Show>
@@ -68,6 +73,7 @@ function DagNodeRow(props: {
  * 从而展示 **全部** 节点（含依赖子节点），而非仅根节点。
  */
 export function DagWorkflowRenderer(props: {
+  lang: Lang
   workflow: DAGWorkflowSession
   nodes: DAGNodeSession[]
   violations: DAGViolation[]
@@ -77,6 +83,7 @@ export function DagWorkflowRenderer(props: {
   const { theme } = useTheme()
   const progress = createMemo(() => calculateWorkflowProgress(props.workflow))
   const wfColor = createMemo(() => workflowStatusColor(props.workflow.status, theme))
+  const wfStatusLabel = createMemo(() => workflowStatusLabel(props.lang, props.workflow.status))
 
   // 按拓扑层级排列全部节点，depth = 层级索引（reachable 的所有节点都会出现）
   const orderedNodes = createMemo<{ node: DAGNodeSession; depth: number }[]>(() => {
@@ -110,19 +117,19 @@ export function DagWorkflowRenderer(props: {
       />
 
       <box flexDirection="row" gap={2} paddingLeft={1}>
-        <text fg={wfColor()}>Status: {props.workflow.status}</text>
+        <text fg={wfColor()}>{t(props.lang, "label_status")}: {wfStatusLabel()}</text>
         <text fg={theme.textMuted}>
-          Progress: {progress().all_nodes.completed}/{progress().all_nodes.total}
+          {t(props.lang, "label_progress")}: {progress().all_nodes.completed}/{progress().all_nodes.total}
         </text>
         <Show when={props.workflow.duration_ms !== null}>
-          <text fg={theme.textMuted}>Duration: {formatDuration(props.workflow.duration_ms)}</text>
+          <text fg={theme.textMuted}>{t(props.lang, "label_duration")}: {formatDuration(props.workflow.duration_ms)}</text>
         </Show>
       </box>
 
       <box paddingLeft={1} gap={0}>
         <Show
           when={orderedNodes().length > 0}
-          fallback={<text fg={theme.textMuted}>No nodes in this workflow</text>}
+          fallback={<text fg={theme.textMuted}>{t(props.lang, "label_no_nodes")}</text>}
         >
           <For each={orderedNodes()}>
             {(entry, index) => (
@@ -133,6 +140,7 @@ export function DagWorkflowRenderer(props: {
                   const next = orderedNodes()[index() + 1]
                   return !next || next.depth !== entry.depth
                 })()}
+                lang={props.lang}
                 selected={props.selectedNodeId === entry.node.node_id}
                 onSelect={() => props.onNodeSelect(entry.node.node_id)}
               />
@@ -142,7 +150,7 @@ export function DagWorkflowRenderer(props: {
       </box>
 
       <Show when={props.violations.length > 0}>
-        <box border={["top"]} borderColor={theme.error} title=" Violations " titleAlignment="center" />
+        <box border={["top"]} borderColor={theme.error} title={` ${t(props.lang, "title_violations")} `} titleAlignment="center" />
         <For each={props.violations}>
           {(violation) => (
             <box flexDirection="row" gap={1} paddingLeft={1}>
@@ -162,6 +170,7 @@ export function DagWorkflowRenderer(props: {
  * DagProgressBar — workflow 进度条
  */
 export function DagProgressBar(props: {
+  lang: Lang
   completed: number
   total: number
   status: DAGWorkflowStatus
@@ -177,7 +186,7 @@ export function DagProgressBar(props: {
 
   return (
     <box flexDirection="row" gap={1}>
-      <text fg={theme.textMuted}>Progress:</text>
+      <text fg={theme.textMuted}>{t(props.lang, "label_progress")}:</text>
       <text fg={barColor()}>
         {"["}
         <span style={{ fg: barColor() }}>{"\u25a0".repeat(filled())}</span>

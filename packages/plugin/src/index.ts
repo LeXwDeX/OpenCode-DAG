@@ -69,6 +69,12 @@ export type PluginOptions = Record<string, unknown>
 
 export type Config = Omit<SDKConfig, "plugin"> & {
   plugin?: Array<string | [string, PluginOptions]>
+  /**
+   * User interface language for bilingual plugin surfaces.
+   * Present in opencode.json Info schema; propagated to plugins via api.tuiConfig.lang.
+   * Only the DAG workflow plugin currently honors this setting.
+   */
+  lang?: "en" | "zh"
 }
 
 export type Plugin = (input: PluginInput, options?: PluginOptions) => Promise<Hooks>

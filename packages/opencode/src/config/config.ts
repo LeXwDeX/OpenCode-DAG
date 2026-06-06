@@ -190,6 +190,10 @@ export const Info = Schema.Struct({
   username: Schema.optional(Schema.String).annotate({
     description: "Custom username to display in conversations instead of system username",
   }),
+  lang: Schema.optional(Schema.Literals(["en", "zh"])).annotate({
+    description:
+      "User interface language for bilingual plugin surfaces. Only the DAG workflow plugin currently honors this setting; other surfaces remain English. Defaults to 'en'.",
+  }),
   mode: Schema.optional(
     Schema.StructWithRest(
       Schema.Struct({

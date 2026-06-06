@@ -33,6 +33,7 @@ import { LiveTicker } from "./live-ticker"
 import { NodeDialog } from "./node-dialog"
 import { Sidebar } from "./sidebar"
 import { useBindings } from "../../keymap"
+import { useLang } from "./i18n"
 
 const ROUTE = "dag-workflow"
 
@@ -40,6 +41,7 @@ type ViewMode = "tree" | "ascii-dag"
 
 export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const { theme } = useTheme()
+  const i18n = useLang(props.api)
 
   const routeParams = createMemo(
     () =>
@@ -203,11 +205,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       >
         <box flexDirection="row" gap={2}>
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
-            对话
+            {i18n().t("tab_dialogue")}
           </text>
           <text fg={theme.textMuted}>│</text>
           <text fg={theme.text}>
-            <b>DAG 工作流</b>
+            <b>{i18n().t("tab_workflow")}</b>
           </text>
         </box>
         <box flexDirection="row" gap={3}>
@@ -215,16 +217,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             fg={viewMode() === "tree" ? theme.text : theme.textMuted}
             onMouseUp={() => setViewMode("tree")}
           >
-            {viewMode() === "tree" ? <b>树状视图</b> : "树状视图"}
+            {viewMode() === "tree" ? <b>{i18n().t("view_tree")}</b> : i18n().t("view_tree")}
           </text>
           <text
             fg={viewMode() === "ascii-dag" ? theme.text : theme.textMuted}
             onMouseUp={() => setViewMode("ascii-dag")}
           >
-            {viewMode() === "ascii-dag" ? <b>ASCII 图</b> : "ASCII 图"}
+            {viewMode() === "ascii-dag" ? <b>{i18n().t("view_ascii")}</b> : i18n().t("view_ascii")}
           </text>
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
-            [Esc] 返回
+            {i18n().t("esc_back")}
           </text>
         </box>
       </box>
@@ -244,6 +246,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         >
           <scrollbox flexGrow={1} minHeight={0}>
             <Sidebar
+              lang={i18n().lang}
               workflows={workflowList()}
               currentWorkflowID={currentWorkflowID()}
               onSelect={(id: string) => {
@@ -260,13 +263,14 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             when={currentWorkflow()}
             fallback={
               <box flexGrow={1} alignItems="center" justifyContent="center">
-                <text fg={theme.textMuted}>Select a workflow from the list</text>
+                <text fg={theme.textMuted}>{i18n().t("label_select_workflow")}</text>
               </box>
             }
           >
             {(wf) => (
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
+                  lang={i18n().lang}
                   completed={progress().completed}
                   total={progress().total}
                   status={progress().status}
@@ -276,6 +280,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                     when={viewMode() === "ascii-dag"}
                     fallback={
                       <DagWorkflowRenderer
+                        lang={i18n().lang}
                         workflow={wf()}
                         nodes={nodes()}
                         violations={violations()}
@@ -311,6 +316,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         >
           <scrollbox flexGrow={1} minHeight={0}>
             <NodeDialog
+              lang={i18n().lang}
               node={selectedNode()}
               onClose={() => setSelectedNodeID(null)}
               route={props.api.route}
