@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG 工作流引擎
 
 基于有向无环图（DAG）的工作流编排引擎，支持多分支、多依赖、并发执行、断点恢复等企业级功能。

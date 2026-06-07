@@ -1,0 +1,88 @@
+# NOTICE — 许可边界与归属声明 / License Boundaries & Attribution
+
+This file documents the licensing and attribution boundaries of this fork.
+
+---
+
+## Overview / 概览
+
+This fork contains both **upstream MIT-licensed code** (from the original opencode project by sst / anomalyco) and **newly-authored modules** (by the fork author) licensed under the GNU Affero General Public License v3.
+
+本 fork 同时包含两类代码：**上游 MIT 许可代码**（来自 sst / anomalyco 的 opencode 项目）与 **作者自研模块**（采用 GNU AGPL v3 许可）。
+
+## Upstream Attribution / 上游归属
+
+- **Project**: opencode
+- **Upstream repository**: https://github.com/sst/opencode (also mirrored as https://github.com/anomalyco/opencode)
+- **Upstream license**: MIT License
+- **Upstream copyright**: Copyright (c) 2025 opencode
+- **Upstream license file**: [`LICENSE`](./LICENSE) (preserved verbatim)
+
+This fork retains the upstream copyright notice and permission notice in all copies and substantial portions of upstream-derived code, in compliance with the MIT license.
+
+> **Relationship disclaimer**: This fork is an independent, community enhancement. It is **not affiliated with, endorsed by, or officially supported** by the OpenCode team (sst / anomalyco). The author of this fork makes no claim of being an official opencode release.
+
+## Modules Authored by This Fork / 本 fork 自研模块
+
+The following modules were authored (or substantially rewritten) by the fork author and are licensed under the **GNU Affero General Public License v3** (`AGPL-3.0`). The full text of the license is at [`packages/opencode/src/dag/LICENSE`](./packages/opencode/src/dag/LICENSE).
+
+| Path / 路径 | Description / 描述 |
+|-------------|--------------------|
+| `packages/opencode/src/dag/` (entire directory, 73 files) | Harness-DAG-Workflow engine core (state machine, scheduler, persistence, query, replan, bridge, worktree/worker/group management) |
+| `packages/opencode/src/tool/dagworker.ts` | `dagworker` builtin tool for LLM-driven workflow create/start/replan/list/cancel |
+| `packages/opencode/src/tool/dagworker.txt` | Tool description template (text) |
+| `packages/opencode/src/tool/node_complete.ts` | `node_complete` builtin tool for sub-agent signal back |
+| `packages/opencode/src/tool/node_complete.txt` | Tool description template (text) |
+| `packages/opencode/src/command/template/dag-ctl.txt` | `/dag-ctl` slash command template (text) |
+| `packages/opencode/src/session/prompt/dag.txt` | LLM system prompt DAG injection (text) |
+| `packages/opencode/src/session/prompt/dagworker-reference.md` | LLM reference doc for DAG worker (markdown) |
+| `docs/harness-dag.md` | Harness-DAG-Workflow external docs (markdown) |
+| `docs/localization/zh-hans-fixes.md` | Chinese-language bug-fix changelog (markdown) |
+| `docs/readmes/upstream-features.md` | Upstream-only features retention doc (markdown) |
+| This `NOTICE` file | License boundary and attribution doc (text) |
+| `README.md` (this repo root) | Fork-level README (Chinese primary) |
+| `README_EN.md` (this repo root) | Fork-level README (English) |
+
+These files carry an `SPDX-License-Identifier: AGPL-3.0-or-later` header to make the licensing machine-readable.
+
+## Upstream-Modified Files / 上游修改过的文件
+
+A small set of upstream MIT files have been patched to add integration hooks for the DAG engine. These files **remain under the upstream MIT license**; the tiny amount of hook glue code added to them is released by this fork's author under the same MIT license for consistency.
+
+少量上游 MIT 文件被修改以接入 DAG 引擎的集成钩子。这些文件**仍由上游 MIT 许可覆盖**；其中加入的极少量胶水代码由本 fork 作者以 MIT 许可一并释出，保持一致性。
+
+| File / 文件 | Modification / 修改点 |
+|-------------|------------------------|
+| `packages/opencode/src/session/system.ts` | Added `dag()` entry to the system-prompt builder |
+| `packages/opencode/src/session/prompt.ts` | Called `sys.dag(sessionID)` in the system prompt assembly chain |
+| `packages/opencode/src/tool/registry.ts` | Registered `dagworker` + `node_complete` as builtin tools |
+| `packages/opencode/src/command/index.ts` | Registered `dag-ctl` slash command ID and template wiring |
+
+## How to Comply / 如何合规
+
+### If you use only upstream parts of this fork (no DAG modules)
+
+Follow the upstream MIT license — retain `LICENSE` and copyright notices. No copyleft obligations.
+
+### If you use any of the AGPL-3.0 modules listed above
+
+Per AGPL-3.0 §5 and §13:
+- You must release the **complete Corresponding Source** of any modifications or derivative works that include AGPL-3.0 modules.
+- You must preserve author attribution and license notices on every AGPL-3.0 file.
+- If you run a modified version on a public network server, you must offer users the source of that modified version (AGPL §13's distinctive clause beyond GPL).
+
+### If you redistribute a binary build
+
+- Include a copy of both `LICENSE` (MIT) and `packages/opencode/src/dag/LICENSE` (AGPL-3.0) in the distribution.
+- Preserve this `NOTICE` file.
+- For AGPL modules, provide Corresponding Source alongside (or via written offer per AGPL-3.0 §6).
+
+## Questions
+
+Open an issue on this repository for licensing questions specific to your use case. For general AGPL-3.0 interpretation, see https://www.gnu.org/licenses/agpl-3.0.html .
+
+---
+
+**Author of this fork / 本 fork 作者**: [the fork maintainer]
+
+**Last updated / 最后更新**: 2026-06-07

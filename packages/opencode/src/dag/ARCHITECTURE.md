@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG 工作流引擎架构
 
 ## 0. 跨模块设计模式约束（所有模块必须遵守）

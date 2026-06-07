@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG 工作流用户指南
 
 本指南面向使用 DAG 工作流引擎编排复杂任务的用户。提供从基础概念到高级模式的完整教程。

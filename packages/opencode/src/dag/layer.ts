@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+// Licensed under GNU AGPL v3; modifications must be open-sourced.
+
 import { Context, Effect, Layer } from "effect"
 import { DAGQuery } from "./query/dag-query"
 import { DAGSessionService, setEventBus } from "./session/session-service"

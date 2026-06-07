@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG Worker Reference
 
 Complete protocol specification for OpenCode's DAG workflow engine. This document is the authoritative reference for the `dagworker` and `node_complete` tools, their schemas, state machines, and invariants.

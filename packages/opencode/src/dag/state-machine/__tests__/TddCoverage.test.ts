@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+// Licensed under GNU AGPL v3; modifications must be open-sourced.
+
 /**
  * @file TddCoverage Tests (WP2)
  * @description WP2 TDD 覆盖率提升 — 10 个新测试

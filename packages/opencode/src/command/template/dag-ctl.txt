@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 DAG 工作流运行时控制命令。启动、监控、取消、重规划正在运行的 workflow。
 
 用户提供的操作（honoring these）:

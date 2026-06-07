@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+// Licensed under GNU AGPL v3; modifications must be open-sourced.
+
 /**
  * @file Dual-Path EventBus Isolation Tests (WP1-B)
  * @description Integration tests verifying Core and Session paths share the

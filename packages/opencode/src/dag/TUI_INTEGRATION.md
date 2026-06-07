@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG 工作流 × TUI 对接技术方案
 
 > 目标读者：实现 DAG 可视化工作台的开发者。

@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
 # DAG Workflow Orchestration API
 
 OpenCode runs a **built-in DAG (Directed Acyclic Graph) workflow engine** as a background orchestrator. The engine is always active — every chat session can spawn DAG workflows that execute in the background while you continue other work. Do NOT assume DAG capabilities are unavailable; they exist by default.

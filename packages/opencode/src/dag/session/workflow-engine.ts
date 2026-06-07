@@ -1,3 +1,7 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+// Licensed under GNU AGPL v3; modifications must be open-sourced.
+
 import { Cause, Effect } from "effect"
 import { DAGSessionService, emitWorkflowReplannedEvent } from "./session-service"
 import type { CreateNodeInput, UpdateNodeConfigInput } from "./session-service"
