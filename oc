@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.8"
+OC_VERSION="1.3.9"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -1303,7 +1303,7 @@ _refresh_bunx_package() {
     esac
 
     if [ "$runner" = "npx" ] || ! command -v bun >/dev/null 2>&1; then
-        warn "$name: 需 bun (当前 runner=$runner); 请用 oc plugins install-think 切换到 bunx 后再刷"
+        warn "$name: 需 bun (当前 runner=$runner); 请在 TUI「插件管理」菜单选择「切换 think MCP 到 bunx」后再刷"
         return 0
     fi
 
@@ -1702,82 +1702,6 @@ main() {
     done
 }
 
-case "${1:-}" in
-    -h|--help)
-        cat <<EOF
-oc — opencode (LeXwDeX fork) 版本管理工具
-
-用法：
-  oc                  进入 TUI 选择升级
-  oc latest           直接升级到最新版本
-  oc <tag>            升级到指定 tag（如 oc v1.14.30-fork-2）
-  oc list             列出所有 release
-  oc current          显示当前已安装版本
-  oc plugins          插件管理 (MCP / plugin / NPM 工具)
-  oc plugins check    检查插件状态
-  oc plugins install-think   安装 think MCP
-  oc plugins install-dcp     安装 DCP plugin
-  oc plugins switch-bunx     切换 think MCP 到 bunx
-  oc plugins refresh         刷新 MCP/plugin NPM 工具 + 全局 codegraph
-  oc setup            执行全部系统配置 (AGENTS + config + env)
-  oc setup agents     安装/更新 AGENTS 仓库 (git clone/pull)
-  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/small_model/compaction/模型纠错)
-  oc setup correct-models   仅对已存在模型执行属性纠错 + 体检 (不动其它配置)
-  oc setup env        检查并注入 OPENCODE_EXPERIMENTAL_* 环境变量到 shell RC
-  oc update           自更新本脚本
-  oc -h | --help      显示本帮助
-
-环境变量：
-  OC_INSTALL_DIR       安装目录（默认 /usr/local/bin）
-  OC_OPENCODE_NAME     目标命令名（默认 opencode）
-  OC_LOCAL_DIR         本地包目录（含 VERSION + 平台压缩包）
-                       命中且 hash 与 GitHub 一致时跳过下载；
-                       离线时与 opencode --version 对比决定是否覆盖
-  GITHUB_TOKEN         GitHub API token（可选，避免限流）
-
-升级渠道：${RELEASES_URL}
-EOF
-        ;;
-    latest)
-        tag=$(latest_tag 2>/dev/null || true)
-        if [ -z "$tag" ]; then
-            warn "无法获取最新版本（网络/限流），尝试本地 fallback"
-            ld=$(find_local_dir 2>/dev/null || true)
-            [ -z "$ld" ] && die "且本地无可用包"
-            tag=$(read_version_field "$ld/VERSION" BUNDLED_VERSION || true)
-            [ -z "$tag" ] && die "本地 VERSION 缺 BUNDLED_VERSION"
-            info "回退到本地 BUNDLED_VERSION=$tag"
-        fi
-        do_upgrade "$tag" ;;
-    list)    list_releases ;;
-    current) current_version ;;
-    plugins)
-        case "${2:-}" in
-            check)          plugins_check ;;
-            install-think)  plugins_install_think ;;
-            install-dcp)    plugins_install_dcp ;;
-            switch-bunx)    plugins_switch_think_bunx ;;
-            refresh)        plugins_refresh_cache ;;
-            "")             plugins_tui ;;
-            *)              die "未知 plugins 子命令：$2（用 oc --help 查看）" ;;
-        esac
-        ;;
-    update)  self_update ;;
-    setup)
-        case "${2:-}" in
-            agents)   agents_install_or_update ;;
-            config)           config_apply_defaults ;;
-            correct-models)   config_correct_models ;;
-            env)      env_check_and_inject ;;
-            "")
-                agents_install_or_update || warn "AGENTS 步骤失败，继续..."
-                config_apply_defaults     || warn "Config 步骤失败，继续..."
-                env_check_and_inject      || warn "环境变量步骤失败，继续..."
-                ;;
-            *)  die "未知 setup 子命令：$2（用 oc --help 查看）" ;;
-        esac
-        ;;
-    "")      main ;;
-    v*|*-fork-*) do_upgrade "$1" ;;
-    *) die "未知子命令：$1（用 oc --help 查看）" ;;
-esac
+# OC 不提供 CLI 子命令。所有功能通过 TUI 菜单访问。
+# 无论传入何种参数，均直接进入 TUI 主界面。
+main
