@@ -67,6 +67,7 @@ import { eventHandlers } from "./handlers/event"
 import { configHandlers } from "./handlers/config"
 import { controlHandlers } from "./handlers/control"
 import { dagHandlers } from "./handlers/dag"
+import { dagMutationHandlers } from "./handlers/dag-mutation"
 import { experimentalHandlers } from "./handlers/experimental"
 import { fileHandlers } from "./handlers/file"
 import { globalHandlers } from "./handlers/global"
@@ -128,6 +129,7 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
   Layer.provide([
     configHandlers,
     dagHandlers,
+    dagMutationHandlers,
     experimentalHandlers,
     fileHandlers,
     instanceHandlers,

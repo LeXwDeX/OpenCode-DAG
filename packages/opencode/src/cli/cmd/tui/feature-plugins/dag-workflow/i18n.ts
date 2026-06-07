@@ -15,7 +15,7 @@ import { DAG_VIOLATION_TYPES, type DAGViolationType } from "@/dag/session/types"
 
 export type Lang = "en" | "zh"
 
-export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled"
+export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
 
 export type NodeStatus = "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
 
@@ -96,6 +96,7 @@ const WORKFLOW_STATUS_ZH: Record<WorkflowStatus, string> = {
   completed: "已完成",
   failed: "失败",
   cancelled: "已取消",
+  paused: "已暂停",
 }
 
 const NODE_STATUS_ZH: Record<NodeStatus, string> = {

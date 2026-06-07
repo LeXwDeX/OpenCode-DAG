@@ -54,7 +54,9 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ## 1. state-machine 模块
 
-**定位**: DAG 引擎基础模块，管理 Workflow / Node / ShadowNode 三种实体的状态生命周期。被 scheduler、group-manager 和 session 依赖。
+**定位**: DAG 引擎基础模块，管理 Workflow / Node / ShadowNode 三种实体的状态生命周期。
+
+**装配状态**: 类型（`WorkflowStatus` / `NodeStatus` / `ShadowNodeStatus` / `errors.ts` 转换函数、`IEventBus`）被 scheduler、group-manager、session 引用；`NodeStateMachine` / `WorkflowStateMachine` 实现类为 **Capability reservoir**，未装配到生产路径（生产路径使用 Session 层的 `session-service` + `WorkflowEngine`）。详见 §8 与 §11。
 
 **核心接口**: IStatePersister, IEventBus, IWorkflowStateMachine, INodeStateMachine
 
@@ -68,7 +70,9 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ## 2. group-manager 模块
 
-**定位**: 层级管理模块，负责 Group → Sub-Group → Branch 多层级结构，维护 Group 间依赖关系。被 scheduler 依赖（获取可执行 Group 顺序）。
+**定位**: 层级管理模块，负责 Group → Sub-Group → Branch 多层级结构，维护 Group 间依赖关系。
+
+**装配状态**: 类型（`IGroupManager` / `IDependencyGraph` / `GroupEvent`）被 scheduler 引用（获取可执行 Group 顺序）；`GroupManager` 实现类为 **Capability reservoir**，未装配到生产路径。详见 §11。
 
 **核心接口**: IGroupManager, IDependencyGraph（Kahn 拓扑排序 + DFS 三色环检测）, IGroupStatePersister（可选）
 
@@ -97,6 +101,8 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 **定位**: 执行调度模块，在 state-machine + worktree-manager 之上提供节点生命周期管理和执行调度。
 
+**装配状态**: **Capability reservoir**。`Scheduler` 实现类当前无生产调用方（生产路径使用 `WorkflowEngine`）。保留理由：为未来"影子执行 / 工具路径 / dry-run"等场景提供备选调度能力。详见 §11。
+
 **核心接口**: IScheduler, INodeExecutor（外部注入执行器，禁止硬编码）
 
 **核心职责**: 节点状态管理 → 状态持久化 → 事件广播 → 执行调度 → 错误恢复
@@ -122,10 +128,12 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 **关键差异（有意设计，非遗漏）**:
 | 差异点 | Core 层 | Session 层 | 原因 |
 |--------|---------|-----------|------|
-| Workflow 状态数 | 7 | 5 | 无 paused/archived（DB 层简化视图） |
+| Workflow 状态数 | 7 | 6（P2 扩展） | 含 paused（P2 pause/resume 需要 DB 持久化）；无 archived |
 | Node 状态数 | 8 | 6 | 无 aborted（shadow 概念不属 DB 层） |
 | PENDING→FAILED | ❌ 禁止 | ✅ 允许 | 支持取消前未完成的工作流标记失败 |
 | FAILED→RUNNING | ✅ 允许 | ❌ 不允许 | DB 层无 fallback_rerun 语义 |
+| RUNNING→PAUSED | ✅ 允许 | ✅ 允许（P2） | P2 pause/resume 需要 Session 层支持暂停 |
+| PAUSED→RUNNING | ✅ 允许 | ✅ 允许（P2） | P2 pause/resume 需要 Session 层支持恢复 |
 
 **事件注入**: `setEventBus()` 是模块级 setter（非构造函数注入），因为 Effect.gen 工厂模式下构造函数注入不自然，属于 §0.1 的合理变通。
 
@@ -195,11 +203,12 @@ DAG 模块采用**双路径设计**：Core 路径（内存/工具）与 Session 
 | Core | `WorkflowStatus` | 7（PENDING / RUNNING / PAUSED / COMPLETED / FAILED / CANCELLED / ARCHIVED） | 状态机内部工作流状态 |
 | Core | `NodeStatus` | 8（含 ABORTED） | 状态机内部普通节点状态 |
 | Core | `ShadowNodeStatus` | 4（PENDING / RUNNING / COMPLETED / FAILED） | 状态机内部 Shadow 节点状态 |
-| Session | `DAGWorkflowStatus` | 5（无 PAUSED / ARCHIVED） | DB 持久化工作流状态（简化版） |
+| Session | `DAGWorkflowStatus` | 6（含 PAUSED，P2 扩展；无 ARCHIVED） | DB 持久化工作流状态（P2 需暂停语义） |
 | Session | `DAGNodeStatus` | 6（无 ABORTED） | DB 持久化节点状态（简化版） |
 
 **差异原因**:
-- Session 层省略 `PAUSED` / `ARCHIVED`（DB 无需区分暂停/归档）
+- Session 层 P2 起支持 `PAUSED`（DB 需区分暂停/运行/终态，用于 pause/resume 控制面）
+- Session 层省略 `ARCHIVED`（DB 无归档生命周期需求）
 - Session 层省略 `ABORTED`（DB 不维护 Shadow 节点特殊状态）
 - Core 与 Session 状态转移规则**独立实现**（`getValidNextWorkflowStatuses` vs `getValidNextSessionWorkflowStatuses`），非共享函数，符合 §1.5 中描述的架构意图
 
@@ -284,6 +293,7 @@ bus.subscribe('workflow.started', (event) => {
 | **D1** | FAILED 作为半终态（允许 → RUNNING / ABORTED） | 地基代码 `errors.ts` 锚定 | 2026-06-05 |
 | **D6** | `node.reset` 纳入 NodeEvent union（方案 C） | admin bypass 仍应发事件（保留铁律 #3/#4） | 2026-06-05 |
 | **D7** | 不提升 writeNodeState / readNodeState 到公共 IStatePersister | 接口隔离；仅 NodeStateMachine 自身使用 | 2026-06-05 |
+| **D-PAUSE-SESSION** | Session 层扩展 `DAGWorkflowStatus` 加入 `'paused'`；HTTP 层新增 §10 DAG Mutation API（pause/resume POST endpoint） | P2 pause/resume 控制面需要 DB 持久化暂停状态；§5「有意省略」假设不再成立；Core 与 Session 状态转移规则仍独立实现；HTTP 写操作通过独立的 §10 DAG Mutation API 路由（绕过 §9 只读约束）| 2026-06-07 |
 
 更多设计决策详见 `.task_state/dag-completion/taskplan.md` 与 `.task_state/findings.md`。
 
@@ -309,7 +319,7 @@ bus.subscribe('workflow.started', (event) => {
 
 | DAG 内部事件 | 平台 Bus 事件 | payload 关键差异 |
 |--------------|--------------|-----------------|
-| `workflow.created/started/completed/failed/cancelled` | `dag.workflow.updated` | payload 含 `workflow_id`、`status: DAGWorkflowStatus`、`chat_session_id` |
+| `workflow.created/started/completed/failed/cancelled/paused/resumed` | `dag.workflow.updated` | payload 含 `workflow_id`、`status: DAGWorkflowStatus`、`chat_session_id`；paused/resumed 为 P2 扩展 |
 | `node.started/completed/failed/paused/resumed/restarted/aborted/skipped` | `dag.node.updated` | payload 含 `workflow_id`、`node_id`、`status: DAGNodeStatus`、`chat_session_id?` |
 | `node.progress` | `dag.node.progress` | payload 含 `node_id`、`progress` 数值/消息 |
 | `node.ask_main` | `dag.node.ask_main` | payload 含 `node_id`、`question` |
@@ -344,7 +354,123 @@ server/routes/dag（新增 HTTP 路由组） ← DAGQuery（注入为 Effect 服
                                       ← DagEventBridge（进程启动时挂上共享 IEventBus）
 ```
 
-## 10. 节点↔子会话绑定（点节点进上下文的字段约定）
+**HTTP 写操作状态（P1-补 后状态）**: 
+- `server/routes/dag`（§9 只读路由）：提供 `listWorkflows` / `getWorkflow` / `getNodeStatus` / `getExecutionTimeline` / `searchWorkflows` 等只读 endpoint，绑定 `DAGQuery`。**严禁任何写操作**。
+- `server/routes/dag/control`（§10 Mutation 路由，P2 引入）：提供 `POST /pause/:workflowId`、`POST /resume/:workflowId` 等控制 endpoint，直接绑定 `WorkflowEngine.pauseWorkflow` / `resumeWorkflow`（绕过 `DAGQuery` 只读边界）。
+
+> 创建/启动/取消 workflow 等操作仍经由 `WorkflowEngine` 的 tool 层调用（`dagworker` tool），不经过 HTTP；§10 Mutation API 仅暴露暂停/恢复控制面。
+
+## 10. DAG Mutation API（P2 扩展：HTTP 写操作控制面）
+
+**定位**：P2 pause/resume 需求引入的 HTTP 控制 API。与 §9 bridge 只读层并列，专用于**workflow 生命周期控制操作**。
+
+**包**：`src/server/routes/instance/httpapi/` 下新增 `groups/dag-mutation.ts` 与 `handlers/dag-mutation.ts`（flat file 模式，与现有 `groups/dag.ts` / `handlers/dag.ts` 一致；独立子路由组，与 §9 只读路由分离）
+
+### 10.a 职责边界
+
+| 允许 | 禁止 |
+|------|------|
+| 提供 POST /pause/:workflowId、POST /resume/:workflowId 等控制 endpoint | 状态机直接修改（必须经 `WorkflowEngine.pauseWorkflow` / `resumeWorkflow`） |
+| 直接绑定 `WorkflowEngine`（非 `DAGQuery`） | 任何 SQLite 直接读写（必须经 `WorkflowEngine` 内部调用 `session-service`） |
+| Effect 风格 handler（`Effect.fn("DagMutation.<method>")`） | 绕过状态机合法性校验 |
+| 接受来自 TUI / 外部集成方 / 调度器的控制请求 | 接受来自 `dagworker` tool 的请求（tool 层直接调用 `WorkflowEngine`，不经过 HTTP） |
+
+### 10.b Endpoint 清单
+
+| Method | Path | Handler | 绑定的 `WorkflowEngine` 方法 |
+|--------|------|---------|---|
+| POST | `/dag/workflows/:workflowId/pause` | `DagMutation.pause` | `pauseWorkflow(workflowId)` |
+| POST | `/dag/workflows/:workflowId/resume` | `DagMutation.resume` | `resumeWorkflow(workflowId)` |
+
+**扩展策略**：未来如需 `cancel` / `restart` 等操作，按同一模式加入 `dag-mutation` 路由，保持与 §9 只读路由完全分离。
+
+### 10.c Session 层状态扩展（P2 配套）
+
+#### 10.c.1 `DAGWorkflowStatus` 扩展（workflow 级）
+
+| 类型 | 扩展前 | 扩展后 | 影响 |
+|------|--------|--------|------|
+| `session/types.ts:DAGWorkflowStatus` | 5 值（无 `paused`） | 6 值（含 `paused`） | DB schema 加列（见 §10.d） |
+| `getValidNextSessionWorkflowStatuses('running')` | `[completed, failed, cancelled]` | `[completed, failed, cancelled, paused]` | Session 状态机合法集扩展 |
+| `getValidNextSessionWorkflowStatuses('paused')` | 不存在 | `[running, cancelled]` | 新增状态转移规则 |
+| `buildSessionWorkflowEvent` switch | 无 `paused` case | 加 `paused` case（触发 `workflow.paused` 事件） | Bridge 已支持（§9.b 表格更新） |
+
+#### 10.c.2 `DAGNodeStatus` 不变（node 级）
+
+**关键设计决策（Option A）**：`DAGNodeStatus` **不扩展**，仍是 6 值（pending/queued/running/completed/failed/skipped，无 `paused`）。
+
+**理由**：
+- pause 是 workflow-level 操作，node-level 状态变化不符合 §8.b 状态类型归属表（Session Node 状态数固定在 6）
+- Option C no-interrupt 协议（§10.e）下，pausing workflow 不中断 running 节点；pending 节点只需"不被 dispatch 直到 resume"，不需新增 `paused` 状态
+- 避免扩展 `DAGNodeStatus` 需要同步更新 Core 层 `NodeStatus`（8→9 值）、`getValidNextSessionNodeStatuses`、`buildSessionNodeEvent` 等多处，违反最小变更原则
+
+#### 10.c.3 只读 response schema 同步扩展
+
+`server/routes/instance/httpapi/groups/dag.ts:21` 的 `DagWorkflowStatus = Schema.Literals(["pending", "running", "completed", "failed", "cancelled"])` 也必须加 `"paused"`，否则 GET endpoint 返回 paused 状态的 workflow 时 schema 校验失败。
+
+#### 10.c.4 Bus event payload schema 同步扩展
+
+`bridge/dag-events.ts` 中 `DAGWorkflowStatusSchema`（定义 `dag.workflow.updated` payload 中的 status 字段）也必须加 `"paused"`，否则 workflow.paused → dag.workflow.updated 翻译后 platform Bus 接收端 schema 校验失败。
+
+### 10.d Drizzle Schema 扩展（P2 配套，sync 模式）
+
+`packages/opencode/src/dag/persistence/schema.ts` 中 `dagWorkflows` 表新增 Drizzle 列：
+
+```typescript
+paused_at: integer(),      // Unix timestamp (ms), nullable
+resumed_at: integer(),     // Unix timestamp (ms), nullable
+```
+
+**Drizzle 字段命名约定**（AGENTS.md style guide）：
+- TS 字段名用 **snake_case**（`paused_at`、`resumed_at`），与 `created_at`、`started_at`、`completed_at` 一致
+- SQL 列名从 TS 字段名自动推断（Drizzle 默认行为），无需显式指定字符串参数
+- **禁止**使用 camelCase TS 字段名（如 `pausedAt`）+ SQL 列名（如 `'paused_at'`）的混合风格，违反 AGENTS.md snake_case 唯一约定
+
+**注意**：本项目使用 Drizzle sync 模式（`drizzle().sync()`），**不使用 SQL migration 文件**。schema 变更通过直接修改 `schema.ts` 实现，运行时由 Drizzle 自动同步到 SQLite。
+
+### 10.e Fiber 中断协议（P2 配套 — Option A + Option C）
+
+`workflow-engine.ts` 中 `Effect.forkDetach(spawnReadyNode)` 创建的 fiber **不支持强制中断**（`Effect.InterruptFiber` 会破坏 spawnReadyNode 主流程）。
+
+**P2 策略**：采用 **Option A（节点状态不变）+ Option C（无强制中断）** 组合：
+
+#### 10.e.1 设计选择
+- **Option A**（§10.c.2）：`DAGNodeStatus` 不扩展，节点保持原状态
+- **Option C**：禁止对 `spawnReadyNode` fiber 强制中断
+
+#### 10.e.2 实现语义
+- pause 操作**仅更新 workflow 状态**（`session-service.updateWorkflowStatus(workflowId, 'paused')`），**不改变任何 node 状态**
+- 正在 `running` 的节点继续完成（不被中断），完成后按正常逻辑触发下游节点调度
+- `spawnReadyNode` 入口新增 `workflow.paused` 标志检查（workflow-engine.ts 在 spawnReadyNode 入口处读取 `workflow.status`）：
+  - 若 `workflow.status === 'paused'`，spawnReadyNode **提前 return**，pending 节点**保持 pending 状态不变**
+  - **不触发**任何 node 事件（因为 node 状态未变化）
+- resume 操作：`updateWorkflowStatus(workflowId, 'running')` 后，`spawnReadyNode` 入口检查通过，pending 节点按正常逻辑被 dispatch
+- 已 dispatch 但未进入 spawnReadyNode 主体的 fiber：在入口处检查 `workflow.status` 后提前 return
+
+**禁止操作**：
+- ❌ 对 `spawnReadyNode` fiber 调用 `Effect.interrupt()`
+- ❌ 强制 kill sub-agent 子进程
+- ❌ 修改 `DAGNodeStatus` 为 7 值（违反 §8.b 状态归属表）
+- ❌ 在 pause/resume 时触发 `node.paused` / `node.resumed` 事件（`DAGNodeStatus` 无该状态）
+- ❌ 让 pending 节点"假性转为 paused"（不存在该状态转换，必须保持 pending 直到被 dispatch 或 workflow 取消）
+
+### 10.f 与 §9 bridge 的关系
+
+`workflow.paused` / `workflow.resumed` 事件通过 §9 bridge 单向转发到平台 Bus（已在 §9.b 事件命名表中登记）。§10 Mutation API **不**直接向 bridge 写事件；事件由 `WorkflowEngine.pauseWorkflow` 内部触发（经 `session-service.updateWorkflowStatus` → `emit('workflow.paused')` → bridge → 平台 Bus）。
+
+### 10.g 与 `dagworker` tool 的关系
+
+`dagworker` tool（`src/tool/dagworker.ts`）是 LLM 调度入口，直接调用 `WorkflowEngine.pauseWorkflow` / `resumeWorkflow`（不经过 HTTP）。§10 HTTP Mutation API 与 `dagworker` tool **并行存在**，共用同一个 `WorkflowEngine` 服务：
+
+```
+LLM tool:    dagworker tool → WorkflowEngine.pauseWorkflow  (tool 层直连)
+HTTP client: POST /pause/:id → DagMutation.pause → WorkflowEngine.pauseWorkflow  (HTTP 层路由)
+TUI button:  调用 HTTP API (POST /pause/:id)
+```
+
+两者通过 `WorkflowEngine` 内部同步（单 `WorkflowEngine` 实例，按 workflow_id 隔离）。
+
+## 11. 节点↔子会话绑定（点节点进上下文的字段约定）
 
 **定位**：TUI 「点节点进入子 agent 会话并递归下钻」的唯一契约字段。
 
@@ -358,6 +484,32 @@ server/routes/dag（新增 HTTP 路由组） ← DAGQuery（注入为 Effect 服
 - 未绑定子会话的节点（如纯函数 worker）：字段为 `undefined`，TUI 降级为 `node-dialog` 日志视图
 - 不新增独立字段，复用现有 `metadata` JSON 列
 
+## 12. Core 路径定位说明（Capability Reservoir Doctrine）
+
+**背景**: `state-machine/`、`group-manager/`、`scheduler/`、`worktree-manager/` 中的实现类（`NodeStateMachine`、`WorkflowStateMachine`、`GroupManager`、`Scheduler`、`WorktreeManager`）在代码库中存在但**未装配到生产路径**。生产路径使用 `session-service` + `WorkflowEngine`（Session 路径，§5）。
+
+**这些实现类不是死代码**。它们被设计为 **Capability reservoir**（能力储备池），为以下未来场景预留：
+
+| 场景 | 使用的 Core 路径模块 | 理由 |
+|------|----------------------|------|
+| 影子执行（dry-run / 预览） | `NodeStateMachine` + `WorkflowStateMachine` | 无需 SQLite，纯内存，速度快 |
+| 工具路径（MCP 外部调用） | Core 路径（按场景选取） | 无需 Effect 包装，接口更简单 |
+| 丰富状态转移（`FAILED→RUNNING` 重试） | `state-machine` | Core 层支持，Session 层省略 |
+| 层级调度（Group 级并发） | `GroupManager` | Core 层有完整 DependencyGraph，Session 层简化 |
+| 文件隔离（Git worktree） | `WorktreeManager` | Core 层完整实现，供 Session 层按需注入 |
+
+**类型共享规则**: Core 路径的**类型**（枚举、接口、错误类）被 Session 路径引用（例如 `WorkflowStatus` / `IEventBus`），这是有意设计。仅**实现类**（具体 `new Xxx(...)` 调用）保持隔离。
+
+**禁止操作**:
+- ❌ 从 `workflow-engine.ts`（Session 路径）直接 `new NodeStateMachine(...)`
+- ❌ 从 `session-service.ts` 调用 Core 路径实现类的 `transition()` 等方法
+- ❌ 删除 Core 路径实现类（它们是有意的 Capability reservoir）
+- ✅ Core 路径类型（`WorkflowStatus` / `NodeStatus` / `IGroupManager` 接口定义等）可被 Session 路径引用
+
+**判定流程**:
+1. 是类型/接口/枚举引用？ → ✅ 允许
+2. 是 `new Xxx()` 实例化？ → ❌ 禁止（除非新建 D-PLAN-xxx 设计决策并经 archgate 审批）
+
 ---
 
-*最后更新: 2026-06-06*
+*最后更新: 2026-06-07（P2 pause/resume 架构扩展）*

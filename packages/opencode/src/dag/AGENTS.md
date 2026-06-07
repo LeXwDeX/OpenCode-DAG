@@ -93,6 +93,28 @@ DAG 引擎所有状态变更模块必须遵守：
 | `USER_GUIDE.md` | 用户使用教程、配置参考、常见模式 |
 | `README.md` | 项目概述、快速开始、约束限制 |
 
+## Core 路径定位（Capability Reservoir Doctrine）
+
+`state-machine/`、`group-manager/`、`scheduler/`、`worktree-manager/` 中的实现类**不是死代码**。它们是 **Capability reservoir**（能力储备池），当前未装配到生产路径，但为未来场景（影子执行、工具路径、dry-run、丰富状态转移）保留。
+
+**生产路径**: `session/workflow-engine.ts` + `session/session-service.ts`（Session 路径，§5）
+
+**Core 路径模块清单**:
+
+| 模块 | 实现类 | 当前状态 | 详情 |
+|------|--------|----------|------|
+| `state-machine/` | `NodeStateMachine` / `WorkflowStateMachine` | 实现未装配；类型/errors 被 Session 引用 | ARCHITECTURE.md §1 §11 |
+| `group-manager/` | `GroupManager` | 实现未装配；类型被引用 | ARCHITECTURE.md §2 §11 |
+| `scheduler/` | `Scheduler` | 无生产调用方 | ARCHITECTURE.md §4 §11 |
+| `worktree-manager/` | `WorktreeManager` | 实现未装配；接口可选注入 Session | ARCHITECTURE.md §3 §11 |
+
+**判定规则**:
+- ✅ 引用 Core 路径的**类型/接口/枚举**（`WorkflowStatus`、`IEventBus`、`IGroupManager` 接口等）
+- ❌ 从 Session 路径 `new NodeStateMachine(...)` 或调用 Core 实现类方法
+- ❌ 删除 Core 路径实现类（它们是有意的 Capability reservoir）
+
+完整判定流程见 `ARCHITECTURE.md` §11。
+
 ### 铁律执行覆盖验证
 
 2026-06-05 archgate 回归审阅判定 **PASS**：
@@ -109,4 +131,4 @@ DAG 引擎所有状态变更模块必须遵守：
 
 ---
 
-*最后更新: 2026-06-05*
+*最后更新: 2026-06-07*

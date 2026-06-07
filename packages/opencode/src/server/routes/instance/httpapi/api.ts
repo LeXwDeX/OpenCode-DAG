@@ -7,6 +7,7 @@ import "@/dag/bridge/dag-events"
 import { ConfigApi } from "./groups/config"
 import { ControlApi } from "./groups/control"
 import { DagApi } from "./groups/dag"
+import { DagMutationApi } from "./groups/dag-mutation"
 import { EventApi } from "./groups/event"
 import { ExperimentalApi } from "./groups/experimental"
 import { FileApi } from "./groups/file"
@@ -39,6 +40,7 @@ export const RootHttpApi = HttpApi.make("opencode-root")
 export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(ConfigApi)
   .addHttpApi(DagApi)
+  .addHttpApi(DagMutationApi)
   .addHttpApi(ExperimentalApi)
   .addHttpApi(FileApi)
   .addHttpApi(InstanceApi)

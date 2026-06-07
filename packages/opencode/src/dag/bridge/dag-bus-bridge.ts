@@ -238,11 +238,11 @@ function workflowEventToStatus(event: WorkflowEvent): string | null {
     case "workflow.cancelled":
       return "cancelled"
     case "workflow.paused":
+      return "paused"
     case "workflow.resumed":
+      return "running"
     case "workflow.archived":
     case "workflow.replanned":
-      // dead code: handled by early return in translateWorkflowEvent (L137)
-      // kept for exhaustiveness defense
       return null // not forwarded to platform
   }
 }

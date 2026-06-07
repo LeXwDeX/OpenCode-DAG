@@ -401,4 +401,46 @@ describe("DagEventBridge", () => {
 
     bridge.dispose()
   })
+
+  test("workflow.paused → publishes dag.workflow.updated with status='paused'", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus, {
+      chatSessionID: "chat-1",
+    })
+    bridge.subscribe(mock.fn)
+
+    dagEventBus.emit({
+      type: "workflow.paused",
+      workflow_id: "wf-1",
+      paused_at: new Date(1700000000000),
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].type).toBe("dag.workflow.updated")
+    expect(mock.events[0].properties.status).toBe("paused")
+    expect(mock.events[0].properties.workflowID).toBe("wf-1")
+    expect(mock.events[0].properties.timestamp).toBe(1700000000000)
+
+    bridge.dispose()
+  })
+
+  test("workflow.resumed → publishes dag.workflow.updated with status='running'", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus, {
+      chatSessionID: "chat-1",
+    })
+    bridge.subscribe(mock.fn)
+
+    dagEventBus.emit({
+      type: "workflow.resumed",
+      workflow_id: "wf-1",
+      timestamp: new Date(1700000000000),
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].type).toBe("dag.workflow.updated")
+    expect(mock.events[0].properties.status).toBe("running")
+    expect(mock.events[0].properties.workflowID).toBe("wf-1")
+    expect(mock.events[0].properties.timestamp).toBe(1700000000000)
+
+    bridge.dispose()
+  })
 })

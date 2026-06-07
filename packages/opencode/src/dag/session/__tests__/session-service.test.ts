@@ -115,13 +115,15 @@ describe('DAG Session Types - Shape Validation', () => {
         'completed',
         'failed',
         'cancelled',
+        'paused',
       ];
-      expect(statuses).toHaveLength(5);
+      expect(statuses).toHaveLength(6);
       expect(statuses).toContain('pending');
       expect(statuses).toContain('running');
       expect(statuses).toContain('completed');
       expect(statuses).toContain('failed');
       expect(statuses).toContain('cancelled');
+      expect(statuses).toContain('paused');
     });
   });
 
@@ -195,6 +197,10 @@ describe('DAG Session Logic - Terminal Status Guards', () => {
 
     it('should return false for running workflows', () => {
       expect(isTerminalStatus('running')).toBe(false);
+    });
+
+    it('should return false for paused workflows (resume is possible)', () => {
+      expect(isTerminalStatus('paused')).toBe(false);
     });
   });
 
@@ -377,9 +383,10 @@ describe('DAG Session Logic - calculateWorkflowProgress', () => {
 
 describe('DAG Session - Status State Machine (Iron Law)', () => {
   describe('Workflow status transitions', () => {
-    const validTransitions = {
+    const validTransitions: Record<DAGWorkflowStatus, DAGWorkflowStatus[]> = {
       'pending': ['running', 'cancelled', 'failed'],
-      'running': ['completed', 'failed', 'cancelled'],
+      'running': ['completed', 'failed', 'cancelled', 'paused'],
+      'paused': ['running', 'cancelled'],
       'completed': [], // terminal
       'failed': [], // terminal
       'cancelled': [], // terminal
@@ -411,6 +418,22 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
 
     it('cancelled is terminal (no outgoing transitions)', () => {
       expect(validTransitions['cancelled']).toHaveLength(0);
+    });
+
+    it('paused is a valid transition from running', () => {
+      expect(validTransitions['running']).toContain('paused');
+    });
+
+    it('paused can transition to running (resume)', () => {
+      expect(validTransitions['paused']).toContain('running');
+    });
+
+    it('paused cannot transition to completed directly', () => {
+      expect(validTransitions['paused']).not.toContain('completed');
+    });
+
+    it('paused cannot transition to failed directly', () => {
+      expect(validTransitions['paused']).not.toContain('failed');
     });
 
   });
@@ -643,11 +666,32 @@ describe('Iron Law #1/#2: getValidNextSessionWorkflowStatuses', () => {
     expect(valid).toContain('cancelled')
   })
 
-  it('running can transition to completed, failed, cancelled', () => {
+  it('running can transition to completed, failed, cancelled, paused', () => {
     const valid = getValidNextSessionWorkflowStatuses('running')
     expect(valid).toContain('completed')
     expect(valid).toContain('failed')
     expect(valid).toContain('cancelled')
+    expect(valid).toContain('paused')
+  })
+
+  it('paused can transition to running (resume)', () => {
+    const valid = getValidNextSessionWorkflowStatuses('paused')
+    expect(valid).toContain('running')
+  })
+
+  it('paused can transition to cancelled', () => {
+    const valid = getValidNextSessionWorkflowStatuses('paused')
+    expect(valid).toContain('cancelled')
+  })
+
+  it('paused cannot transition to completed', () => {
+    const valid = getValidNextSessionWorkflowStatuses('paused')
+    expect(valid).not.toContain('completed')
+  })
+
+  it('paused cannot transition to failed', () => {
+    const valid = getValidNextSessionWorkflowStatuses('paused')
+    expect(valid).not.toContain('failed')
   })
 
   it('completed is terminal (Iron Law #2)', () => {
@@ -728,6 +772,20 @@ describe('Iron Law #3: buildSessionWorkflowEvent', () => {
   it('pending transition emits null (no event)', () => {
     const event = buildSessionWorkflowEvent(wfId, 'running', 'pending', now)
     expect(event).toBeNull()
+  })
+
+  it('paused transition emits workflow.paused', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'running', 'paused', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.paused')
+    expect(event!.workflow_id).toBe(wfId)
+  })
+
+  it('resume (paused→running) emits workflow.resumed', () => {
+    const event = buildSessionWorkflowEvent(wfId, 'paused', 'running', now)
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('workflow.resumed')
+    expect(event!.workflow_id).toBe(wfId)
   })
 });
 

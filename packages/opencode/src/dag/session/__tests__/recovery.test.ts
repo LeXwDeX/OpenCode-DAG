@@ -171,6 +171,8 @@ describe("recoverOrphanedWorkflows", () => {
       cancelWorkflow: () => Effect.succeed({}),
       getWorkflowStatus: () => Effect.succeed({} as any),
       replanWorkflow: () => Effect.succeed({} as any),
+      pauseWorkflow: () => Effect.succeed('paused' as any),
+      resumeWorkflow: () => Effect.succeed('running' as any),
     } as WorkflowEngine
     registerEngine(wid, fakeEngine)
 

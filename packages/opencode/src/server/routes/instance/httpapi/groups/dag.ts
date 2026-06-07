@@ -18,7 +18,7 @@ const root = "/dag"
 // Response Schemas (for OpenAPI / SDK generation)
 // ============================================================================
 
-export const DagWorkflowStatus = Schema.Literals(["pending", "running", "completed", "failed", "cancelled"])
+export const DagWorkflowStatus = Schema.Literals(["pending", "running", "completed", "failed", "cancelled", "paused"])
 
 export const DagNodeStatus = Schema.Literals(["pending", "queued", "running", "completed", "failed", "skipped"])
 

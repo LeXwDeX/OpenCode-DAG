@@ -2,6 +2,11 @@
 // Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
+// @dead_code RequiredNodesMonitor is defined but never instantiated anywhere in the codebase.
+// Candidate for removal. Required-nodes validation is handled by RequiredNodesValidator
+// (see required-nodes-validator.ts) via workflow-engine.ts, not this event-driven monitor.
+// Kept as reference for potential future async monitoring needs.
+
 import { Effect } from "effect"
 import { EventBus } from "../state-machine/EventBus"
 import type { IDAGSessionService } from "./session-service"
@@ -12,6 +17,8 @@ import type { DAGNodeConfig } from "./types"
  * 
  * 在 Workflow 执行期间监控 required_nodes 的完成状态
  * 检测违规并记录到数据库
+ *
+ * @dead_code — Not instantiated anywhere. See required-nodes-validator.ts for the active implementation.
  */
 export class RequiredNodesMonitor {
   constructor(

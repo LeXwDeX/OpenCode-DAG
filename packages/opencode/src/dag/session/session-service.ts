@@ -53,7 +53,9 @@ export function getValidNextSessionWorkflowStatuses(
     case "pending":
       return ["running", "failed", "cancelled"]
     case "running":
-      return ["completed", "failed", "cancelled"]
+      return ["completed", "failed", "cancelled", "paused"]
+    case "paused":
+      return ["running", "cancelled"]
     case "completed":
     case "failed":
     case "cancelled":
@@ -100,10 +102,14 @@ export function buildSessionWorkflowEvent(
   reason?: string,
   failedNodes?: string[],
 ): WorkflowEvent | null {
-  // Note: Session layer DAGWorkflowStatus omits "paused", so workflow.resumed is unreachable here.
   switch (newStatus) {
     case "running":
+      if (oldStatus === "paused") {
+        return { type: "workflow.resumed", workflow_id: workflowId, timestamp: new Date(timestamp) }
+      }
       return { type: "workflow.started", workflow_id: workflowId, timestamp: new Date(timestamp) }
+    case "paused":
+      return { type: "workflow.paused", workflow_id: workflowId, paused_at: new Date(timestamp) }
     case "completed":
       return { type: "workflow.completed", workflow_id: workflowId, duration_ms: durationMs ?? 0, accumulated_diff: accumulatedDiff ?? "" }
     case "failed":
@@ -429,8 +435,16 @@ const make = Effect.gen(function* () {
         updated_at: now,
       }
       
-      if (status === "running") {
+      if (status === "running" && currentStatus !== "paused") {
         updates.started_at = now
+      }
+
+      if (status === "paused") {
+        updates.paused_at = now
+      }
+
+      if (status === "running" && currentStatus === "paused") {
+        updates.resumed_at = now
       }
       
       if (status === "completed" || status === "failed" || status === "cancelled") {

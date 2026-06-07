@@ -20,6 +20,8 @@ export const dagWorkflows = sqliteTable("dag_workflow", {
   updated_at: integer("updated_at").notNull(),
   started_at: integer("started_at"),
   completed_at: integer("completed_at"),
+  paused_at: integer(),
+  resumed_at: integer(),
 })
 
 // ============================================================================

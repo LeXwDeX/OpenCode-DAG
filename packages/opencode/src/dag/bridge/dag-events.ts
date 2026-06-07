@@ -26,6 +26,7 @@ export const DAGWorkflowStatusSchema = Schema.Literals([
   "completed",
   "failed",
   "cancelled",
+  "paused",
 ])
 
 export const DAGNodeStatusSchema = Schema.Literals([

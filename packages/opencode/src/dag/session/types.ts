@@ -30,7 +30,8 @@ export type DAGWorkflowStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'paused';
 
 /**
  * DAG 节点状态

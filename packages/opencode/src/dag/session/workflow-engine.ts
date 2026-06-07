@@ -78,11 +78,23 @@ export interface WorkflowEngine {
   cancelWorkflow(workflowId: string): Effect.Effect<unknown>
   getWorkflowStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot>
   replanWorkflow(workflowId: string, patch: ReplanPatch): Effect.Effect<ReplanResult>
+  pauseWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
+  resumeWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
 }
 
 // ============================================================================
 // Module-Level Engine Registry (mirrors session-service.ts:26 _eventBus pattern)
 // Enables static WorkflowEngine.get() lookups from tool layer without Effect context
+//
+// Concurrency Model:
+// - engineRegistry / spawnedNodes / concurrencyRegistry / replanInFlight rely
+//   on Bun's single-threaded event loop for atomicity of read-modify-write sequences.
+// - No explicit mutex or lock protects these module-level structures.
+// - DO NOT port to multi-thread runtimes (Node.js worker_threads, Deno workers,
+//   or any environment with shared-memory threads) without introducing
+//   Effect.Ref / AsyncLocalStorage / OS-level mutex for each registry mutation.
+// - Within Bun's cooperative scheduler, all Effect.sync / Effect.promise blocks
+//   are serialized between await points — this is the implicit correctness guarantee.
 // ============================================================================
 
 const engineRegistry = new Map<string, WorkflowEngine>()
@@ -437,6 +449,13 @@ const make = Effect.gen(function* () {
     let worktreeCleanup: (() => Promise<void>) | undefined
 
     const body = Effect.gen(function* () {
+      // 0. Paused guard (§10.e Option C): if workflow is paused, bail out
+      //    without changing node status (pending stays pending).
+      const wf = yield* sessionService.getWorkflow(workflowId)
+      if (wf && wf.status === 'paused') {
+        return
+      }
+
       // 1. Validate promptOps available
       if (!_promptOps) {
         yield* sessionService.updateNodeStatus({
@@ -844,6 +863,25 @@ const make = Effect.gen(function* () {
     }) as Effect.Effect<{ success: boolean }, never>
 
   /**
+   * 暂停工作流 (§10.e Option A+C: pause 不中断 fiber，不改变 node 状态)
+   */
+  const pauseWorkflow: WorkflowEngine['pauseWorkflow'] = (workflowId) =>
+    Effect.gen(function* () {
+      yield* sessionService.updateWorkflowStatus(workflowId, 'paused')
+      return 'paused' as DAGWorkflowStatus
+    }) as Effect.Effect<DAGWorkflowStatus, never>
+
+  /**
+   * 恢复工作流：状态改回 running 并显式触发调度
+   */
+  const resumeWorkflow: WorkflowEngine['resumeWorkflow'] = (workflowId) =>
+    Effect.gen(function* () {
+      yield* sessionService.updateWorkflowStatus(workflowId, 'running')
+      yield* scheduleReadyNodes(workflowId)
+      return 'running' as DAGWorkflowStatus
+    }) as Effect.Effect<DAGWorkflowStatus, never>
+
+  /**
    * 获取工作流状态
    */
   const getWorkflowStatus: WorkflowEngine['getWorkflowStatus'] = (workflowId) =>
@@ -1049,6 +1087,8 @@ const make = Effect.gen(function* () {
     cancelWorkflow,
     getWorkflowStatus,
     replanWorkflow,
+    pauseWorkflow,
+    resumeWorkflow,
     setPromptOps,
     spawnReadyNode,
   } as WorkflowEngine & {

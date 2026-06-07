@@ -18,14 +18,15 @@ describe("WP4 sidebar — WORKFLOW_STATUSES", () => {
       "completed",
       "failed",
       "cancelled",
+      "paused",
     ]
     for (const s of allStatuses) {
       expect(WORKFLOW_STATUSES).toContain(s)
     }
   })
 
-  it("has exactly 5 statuses", () => {
-    expect(WORKFLOW_STATUSES).toHaveLength(5)
+  it("has exactly 6 statuses", () => {
+    expect(WORKFLOW_STATUSES).toHaveLength(6)
   })
 })
 
@@ -57,11 +58,16 @@ describe("WP4 sidebar — workflowStatusIcon", () => {
       "completed",
       "failed",
       "cancelled",
+      "paused",
     ]
     for (const s of allStatuses) {
       const icon = workflowStatusIcon(s)
       expect(typeof icon).toBe("string")
       expect(icon.length).toBeGreaterThan(0)
     }
+  })
+
+  it("returns ⏸ for paused", () => {
+    expect(workflowStatusIcon("paused")).toBe("\u23f8")
   })
 })

@@ -56,6 +56,7 @@ describe("WP4 i18n — workflowStatusLabel", () => {
     completed: "completed",
     failed: "failed",
     cancelled: "cancelled",
+    paused: "paused",
   }
   const zhExpected: Record<DAGWorkflowStatus, string> = {
     pending: "等待中",
@@ -63,6 +64,7 @@ describe("WP4 i18n — workflowStatusLabel", () => {
     completed: "已完成",
     failed: "失败",
     cancelled: "已取消",
+    paused: "已暂停",
   }
 
   for (const s of Object.keys(enExpected) as DAGWorkflowStatus[]) {

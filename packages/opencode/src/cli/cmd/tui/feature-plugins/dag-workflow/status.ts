@@ -35,6 +35,7 @@ export const WORKFLOW_STATUS_ICON: Record<DAGWorkflowStatus, string> = {
   failed: "\u2717", // ✗
   cancelled: "\u2298", // ⊘
   pending: "\u25cb", // ○
+  paused: "\u23f8", // ⏸
 }
 
 /** Icon character for a node status (falls back to "?"). */
@@ -75,6 +76,7 @@ export function workflowStatusColor<C>(status: DAGWorkflowStatus, theme: StatusT
       return theme.error
     case "cancelled":
     case "pending":
+    case "paused":
     default:
       return theme.textMuted
   }

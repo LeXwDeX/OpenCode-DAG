@@ -26,6 +26,7 @@ export const WORKFLOW_STATUSES: DAGWorkflowStatus[] = [
   "completed",
   "failed",
   "cancelled",
+  "paused",
 ]
 
 /**
