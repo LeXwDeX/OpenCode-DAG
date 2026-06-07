@@ -17,6 +17,7 @@ import * as Tool from "./tool"
 import DESCRIPTION from "./dagworker.txt"
 import { Schema, Effect } from "effect"
 import { Session } from "@/session/session"
+import { Agent } from "@/agent/agent"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
 import { WorkflowEngine, registerEngine } from "../dag/session/workflow-engine"
@@ -113,12 +114,43 @@ function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, 
   return lines.join("\n")
 }
 
+export type WorkerTypeAgentRegistry = {
+  readonly get: (agent: string) => Effect.Effect<Agent.Info | undefined, unknown>
+  readonly list: () => Effect.Effect<Agent.Info[], unknown>
+}
+
+export const validateWorkerTypes = (
+  agentService: WorkerTypeAgentRegistry,
+  nodes: DAGNodeConfig[],
+) =>
+  Effect.gen(function* () {
+    const unique = [...new Set(nodes.map((n) => n.worker_type))]
+    const missing: string[] = []
+    for (const workerType of unique) {
+      const found = yield* agentService.get(workerType).pipe(
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      )
+      if (!found) missing.push(workerType)
+    }
+    if (missing.length === 0) return
+    const registered = yield* agentService.list().pipe(
+      Effect.catchCause(() => Effect.succeed([] as Agent.Info[])),
+    )
+    const names = registered.map((a) => a.name).sort()
+    return yield* Effect.fail(
+      new Error(
+        `Unknown DAG worker_type: ${missing.join(", ")}. Currently registered agents: ${names.length ? names.join(", ") : "<none>"}. Configure custom agents in opencode.json agent.* or change worker_type before starting DAG.`,
+      ),
+    )
+  })
+
 export const DAGWorkerTool = Tool.define(
   id,
   Effect.gen(function* () {
     const sessions = yield* Session.Service
     const settingsHook = yield* SettingsHook.Service
     const dagSessionService = yield* DAGSessionService.make
+    const agentService = yield* Agent.Service
     
     const run = Effect.fn("DAGWorkerTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -177,6 +209,9 @@ export const DAGWorkerTool = Tool.define(
             const warningsText = validationResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
             console.warn(`Workflow configuration warnings:\n${warningsText}`)
           }
+
+          // Fail-fast: ensure every worker_type resolves to a registered agent
+          yield* validateWorkerTypes(agentService, workflowConfig.nodes)
           
           // Create workflow
           const workflow = yield* dagSessionService.createWorkflow({
