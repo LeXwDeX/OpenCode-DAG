@@ -12,7 +12,7 @@ $ARGUMENTS
 ## 操作类型
 
 本命令是 **运行时控制器** —— 负责启动和管控 workflow 生命周期。
-如需 **创建/编辑 YAML 配置**（list/create/update/validate 等），改用 `/dagworker`。
+如需 **创建/编辑 YAML 配置**（list/create/update/validate 等），改用 `/dag-worker`。
 如需 **打开 TUI DAG 面板**（实时可视化），改用 `/dag open`（路由到 DAG workflow tab）。
 
 ### start 操作（默认）
@@ -148,6 +148,6 @@ $ARGUMENTS
 | 命令 | 职责 |
 |---|---|
 | `/dag` | 运行时控制（start/status/cancel/list/replan/open） |
-| `/dagworker` | 配置管理（YAML 编辑、validate、preview、diff、inherit） |
+| `/dag-worker` | 配置管理（YAML 编辑、validate、preview、diff、inherit） |
 | `/init` | 引导生 AGENTS.md（无关） |
 | `/review` | 代码审查（无关） |

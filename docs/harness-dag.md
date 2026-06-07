@@ -30,7 +30,7 @@ Harness-DAG-Workflow lets an LLM agent inside an opencode session spin up and dr
 
 | Interface | Purpose |
 |-----------|---------|
-| `/dagworker` slash command | Configure workflows: `list` / `create` / `update` / `validate` / `preview` / `diff` / `inherit` / `register` |
+| `/dag-worker` slash command | Configure workflows: `list` / `create` / `update` / `validate` / `preview` / `diff` / `inherit` / `register` |
 | `/dag-ctl` slash command | Runtime control: `start` / `status` / `cancel` / `list` / `replan` / `open` |
 | `dagworker` builtin tool | LLM invokes to spawn a workflow |
 | `node_complete` builtin tool | Sub-agent signals node result back to engine |

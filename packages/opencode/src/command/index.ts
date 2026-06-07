@@ -9,7 +9,7 @@ import { MCP } from "../mcp"
 import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
-import PROMPT_DAGWORKER from "./template/dagworker.txt"
+import PROMPT_DAGWORKER from "./template/dag-worker.txt"
 import PROMPT_DAG_CTL from "./template/dag-ctl.txt"
 
 type State = {
@@ -57,7 +57,7 @@ export const Default = {
   REVIEW: "review",
   GOAL: "goal",
   SUBGOAL: "subgoal",
-  DAGWORKER: "dagworker",
+  DAGWORKER: "dag-worker",
   DAG_CTL: "dag-ctl",
 } as const
 

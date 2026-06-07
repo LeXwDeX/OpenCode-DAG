@@ -1,0 +1,303 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
+DAG 工作流配置的创建、调整、校验命令。
+
+`/dag-worker` 命令提供工作流配置的声明式管理（YAML 配置作为外部可读格式，内部调用 dagworker 工具时转为 JSON 入参）。遵守 DAG 铁律四原则（状态机不可绕过、终态不可逆、事件必广播、持久化优先）——详见 [AGENTS.md](../../dag/AGENTS.md)。
+
+用户提供的操作或约束（honoring these）:
+$ARGUMENTS
+
+## How to investigate
+
+根据用户请求的操作类型，执行相应逻辑：
+
+### list 操作
+列出所有可用的 DAG 工作流模板和已创建的配置。
+
+### create 操作
+1. 解析用户输入的参数（name, nodes, max_concurrency 等）
+2. 验证目标路径是否在允许的范围内
+3. 如果指定了 extends，验证基础模板是否存在
+4. 合并基础模板和覆盖参数
+5. 验证合并结果是否符合 DAGConfig schema（详见下方 Validation rules）
+6. 写入目标路径
+7. 如果 auto_validate=true，自动调用 dag_validate
+
+### update 操作
+1. 解析用户输入的修改内容
+2. 验证现有配置是否存在
+3. 应用修改
+4. 验证修改结果是否合规
+5. 写入更新后的配置
+
+### validate 操作
+1. 读取指定路径的配置（YAML 或 JSON）
+2. 执行完整验证：
+   - **node.id 唯一性**：同 workflow 内不可重复（RequiredNodesValidator 通过 nodeIds 数组隐式覆盖；replan 路径通过 cfgIdSet 显式检查 — workflow-engine.ts:206）
+   - **dependencies 引用存在性**：每个 dependency id 必须指向已定义的 node.id（validateReplanPostConfig — workflow-engine.ts:207-211）
+   - **循环依赖检测**：通过 detectCycle DFS 遍历 dependencies 图（workflow-engine.ts:287-303）
+   - **max_concurrency 合法性**：必须为 1..10 的正整数（validateReplanPostConfig — workflow-engine.ts:203-204）
+   - **required 节点合理性**：required 节点不能仅依赖 optional 节点（警告，非错误 — RequiredNodesValidator.validate — required-nodes-validator.ts:47-49）
+   - **worker_type 合法性**：在 agent registry 中存在（运行时验证，spawnReadyNode — workflow-engine.ts:423-432；validate 阶段可标记警告）
+   - **timeout / retry 合法性**：timeout_ms > 0，retry.max_attempts >= 0，retry.delay_ms >= 0
+   - **命名规范**：node.id 不允许包含 `::`（runtime 保留分隔符，materialization 格式为 `${workflowId}::${cfgId}` — dagworker.ts:168）
+3. 返回验证报告（errors + warnings）
+
+### preview 操作
+1. 读取配置
+2. 模拟 DAG 执行流程
+3. 生成执行计划（节点顺序、依赖关系、并发度）
+4. 输出预览结果
+
+### diff 操作
+1. 读取两个配置文件
+2. 对比差异（节点、依赖、参数等）
+3. 输出差异报告
+
+### inherit 操作
+1. 读取基础配置
+2. 应用用户指定的覆盖参数
+3. 生成新配置
+4. 验证新配置合规性
+
+### register hook 操作
+1. 验证 hook 名称和定义
+2. 追加到项目级配置的 registry.hooks
+
+### register mcp 操作
+1. 验证 mcp 名称和 URL
+2. 追加到项目级配置的 registry.mcp_servers
+
+## Questions
+
+仅在缺少必要信息时询问用户：
+- 未指定模板时，询问继承哪个基础模板
+- 未指定覆盖参数时，询问需要修改的字段
+- 验证失败时，询问是否自动修复或手动调整
+
+使用 `question` tool 进行一次性批量询问（最多 5 个问题）。
+
+## Writing rules
+
+生成的配置必须：
+- 符合 DAGConfig / DAGNodeConfig schema（见 types.ts:60-98）
+- 使用清晰的命名（kebab-case for node.id）
+- 包含必要的注释说明关键决策
+- YAML 格式规范（缩进、对齐）——作为辅助可读格式，喂给 dagworker tool 时转 JSON
+
+排除：
+- 违反 schema 约束的配置（循环依赖、缺失引用、非法 max_concurrency 等）
+- 未经验证的自定义参数
+- 可能导致死锁或无限循环的依赖关系
+
+## 非法 DAG 流程（绝对禁止创建）
+
+以下流程在测试中被验证为绝对非法，任何情况下都不能创建。
+
+YAML 示例基于真实 `DAGConfig` / `DAGNodeConfig` schema（types.ts:60-98）。
+喂给 dagworker tool 时，将 YAML 转为 JSON 字符串传入 `workflow` 参数（dagworker.ts:43-44）。
+
+### 1. 合法线性依赖链 A → B → C
+
+```yaml
+# ✅ 合法：线性依赖链 A → B → C
+name: "linear-pipeline"
+description: "三步线性流水线"
+max_concurrency: 1
+nodes:
+  - id: "a"
+    name: "Step A"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "执行第一步任务"
+  - id: "b"
+    name: "Step B"
+    required: true
+    dependencies: ["a"]
+    worker_type: "general"
+    worker_config:
+      prompt: "在 A 完成后执行第二步"
+  - id: "c"
+    name: "Step C"
+    required: true
+    dependencies: ["b"]
+    worker_type: "general"
+    worker_config:
+      prompt: "在 B 完成后执行第三步"
+```
+
+**为什么合法**：无循环，所有依赖引用存在，max_concurrency 为正整数。
+
+### 2. 合法扇入扇出（Diamond）A → (B, C) → D
+
+```yaml
+# ✅ 合法：Diamond 结构 A → (B, C) → D
+name: "diamond-parallel"
+description: "扇出并行后扇入汇聚"
+max_concurrency: 3
+nodes:
+  - id: "a"
+    name: "Init"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "初始化并产出共享数据"
+  - id: "b"
+    name: "Branch B"
+    required: true
+    dependencies: ["a"]
+    worker_type: "general"
+    worker_config:
+      prompt: "处理分支 B"
+  - id: "c"
+    name: "Branch C"
+    required: true
+    dependencies: ["a"]
+    worker_type: "general"
+    worker_config:
+      prompt: "处理分支 C"
+  - id: "d"
+    name: "Merge"
+    required: true
+    dependencies: ["b", "c"]
+    worker_type: "general"
+    worker_config:
+      prompt: "汇聚 B 和 C 的结果"
+```
+
+**为什么合法**：B 和 C 可并行（max_concurrency: 3 满足），D 等待 B、C 都完成后才调度（scheduleReadyNodes — workflow-engine.ts:601-634）。
+
+### 3. 非法循环依赖 A → B → A
+
+```yaml
+# ❌ 非法：A → B → A 形成循环（被 detectCycle 拒绝）
+name: "cycle-bad"
+max_concurrency: 2
+nodes:
+  - id: "a"
+    name: "Step A"
+    required: true
+    dependencies: ["b"]
+    worker_type: "general"
+    worker_config:
+      prompt: "依赖 B"
+  - id: "b"
+    name: "Step B"
+    required: true
+    dependencies: ["a"]
+    worker_type: "general"
+    worker_config:
+      prompt: "依赖 A"
+```
+
+**为什么非法**：detectCycle（workflow-engine.ts:287-303）通过 DFS 检测到 A→B→A 环路，返回 `patch introduces a cycle`，阻止 workflow 创建。RequiredNodesValidator 同样会拒绝（required-nodes-validator.ts:41-43）。
+
+### 4. 非法：依赖引用不存在的节点
+
+```yaml
+# ❌ 非法：依赖引用不存在的节点 ghost
+name: "dangling-ref-bad"
+max_concurrency: 1
+nodes:
+  - id: "a"
+    name: "Step A"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "独立步骤"
+  - id: "b"
+    name: "Step B"
+    required: true
+    dependencies: ["ghost"]
+    worker_type: "general"
+    worker_config:
+      prompt: "引用了不存在的节点"
+```
+
+**为什么非法**：validateReplanPostConfig 检查每个 dependency 是否在 cfgIdSet 中（workflow-engine.ts:207-211），不存在则拒绝：`unresolved dependency: node 'b' references 'ghost'`。scheduleReadyNodes 也无法为 ghost 找到 completed 记录，导致 B 永不就绪。
+
+### 5. 合法：required + optional 混合
+
+```yaml
+# ✅ 合法：required + optional 混合
+# optional 节点失败只记 violation（severity: error），
+# 不阻止 workflow 终态收敛为 completed（只要所有 required 节点完成）
+name: "mixed-required"
+description: "核心步骤必需，锦上添花步骤可选"
+max_concurrency: 2
+nodes:
+  - id: "skeleton"
+    name: "Skeleton"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "生成代码骨架"
+  - id: "test"
+    name: "Test"
+    required: true
+    dependencies: ["skeleton"]
+    worker_type: "general"
+    worker_config:
+      prompt: "编写并运行测试"
+  - id: "docs"
+    name: "Documentation"
+    required: false
+    dependencies: ["skeleton"]
+    worker_type: "general"
+    worker_config:
+      prompt: "生成文档（可选）"
+```
+
+**终态收敛规则**（workflow-engine.ts:553-575）：
+- 所有 required 节点 completed → workflow **completed**
+- 任一 required 节点 failed → workflow **failed**
+- optional 节点 failed → 记录 `execution_failed` violation（非 `required_node_failed`），workflow 仍可 completed
+
+### 6. 非法：同 workflow 内 node id 重复
+
+```yaml
+# ❌ 非法：node id "a" 重复
+name: "dup-id-bad"
+max_concurrency: 1
+nodes:
+  - id: "a"
+    name: "First A"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "第一个 A"
+  - id: "a"
+    name: "Second A"
+    required: true
+    dependencies: []
+    worker_type: "general"
+    worker_config:
+      prompt: "第二个 A（id 重复）"
+```
+
+**为什么非法**：同 workflow 内 node.id 必须唯一。Runtime materialization 使用 `${workflowId}::${cfgId}` 格式（dagworker.ts:168），重复 id 导致 namespaced ID 冲突和依赖图混乱。validateReplanPostConfig 通过 `cfgIdSet = new Set(...)` 隐式检测（workflow-engine.ts:206）。
+
+## Validation rules
+
+所有生成的配置必须通过以下验证：
+
+1. **node.id 唯一性** — 同 workflow 内无重复 id（RequiredNodesValidator 的 nodeIds 数组；validateReplanPostConfig 的 cfgIdSet — workflow-engine.ts:206）
+2. **dependencies 引用存在性** — 每个 dependency 引用的 id 必须在 nodes 中已定义（validateReplanPostConfig — workflow-engine.ts:207-211）
+3. **循环依赖检测** — DFS 遍历 dependencies 图，无环（detectCycle — workflow-engine.ts:287-303）
+4. **max_concurrency 合法性** — 正整数 1..10（validateReplanPostConfig — workflow-engine.ts:203-204）
+5. **required 节点完整性** — required 节点存在且引用合法（RequiredNodesValidator — required-nodes-validator.ts:23-56）
+6. **required 节点不可删除** — replan 不允许移除 required 节点（validateReplanPostConfig — workflow-engine.ts:220-226）
+7. **节点数量上限** — 不超过 20 个节点（validateReplanPostConfig — workflow-engine.ts:200-201）
+8. **timeout / retry 合理性** — timeout_ms > 0，retry.max_attempts >= 0，retry.delay_ms >= 0
+
+如果验证失败，输出详细的错误信息和修复建议。

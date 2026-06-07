@@ -10,7 +10,7 @@
 ### 1.1 核心功能
 
 #### 功能 1: SlashCommand 触发
-- **入口**: 用户在 Chat Session 中输入 `/dagworker` 命令
+- **入口**: 用户在 Chat Session 中输入 `/dag-worker` 命令
 - **执行**: 异步执行，不阻塞原始对话
 - **反馈**: Hooks 写入 synthetic message（巨型工具调用）到 Chat Session
 - **目的**: 让 Chat Session 的 LLM 可以"感知" DAG 执行过程
@@ -607,7 +607,7 @@ export function setupDAGSync(api: TuiPluginAPI, session_id: string) {
 ### 5.1 数据流图
 
 ```
-用户输入 /dagworker
+用户输入 /dag-worker
     ↓
 SlashCommmand 解析
     ↓
@@ -977,7 +977,7 @@ export class StatusInjector {
 
 **渲染示例**:
 ```
-User: /dagworker refactor-module
+User: /dag-worker refactor-module
 AI: 🚀 DAG Worker 已启动 (wf-3f2a1c)
 
     Workflow: refactor-module
@@ -1006,7 +1006,7 @@ AI: 🚀 DAG Worker 已启动 (wf-3f2a1c)
 | **P0** | Phase 8.1 | DAG Persistence (SQLite schema + operations) |
 | **P0** | Phase 8.1 | DAG EventBus 事件定义 |
 | **P1** | Phase 8.2 | RequiredNodesValidator + Monitor |
-| **P1** | Phase 8.4 | `/dagworker` slashcommand + 状态注入 |
+| **P1** | Phase 8.4 | `/dag-worker` slashcommand + 状态注入 |
 | **P1** | Phase 8.4 | Chat tool_call 插入（StatusInjector） |
 | **P1** | Phase 8.4 | TUI 入口 1: tool_call 点击事件 |
 | **P1** | Phase 8.4 | TUI 入口 2: 右侧 DAG-Worker 按钮 |

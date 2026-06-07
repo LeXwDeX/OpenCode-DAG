@@ -45,7 +45,7 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
 │                      命令接口层                               │
-│                      (/dagworker 命令)                        │
+│                      (/dag-worker 命令)                        │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -191,18 +191,18 @@ step-a              │
 
 ## 命令接口
 
-### /dagworker 命令
+### /dag-worker 命令
 
-**注册路径**: `packages/opencode/src/command/template/dagworker.txt`
+**注册路径**: `packages/opencode/src/command/template/dag-worker.txt`
 
 **支持的子命令**:
 
 ```
-/dagworker validate <path>    # 验证 DAG 配置
-/dagworker create <name>      # 创建工作流实例
-/dagworker run <workflow-id>  # 执行工作流
-/dagworker status <workflow-id>  # 查询状态
-/dagworker list               # 列出所有工作流
+/dag-worker validate <path>    # 验证 DAG 配置
+/dag-worker create <name>      # 创建工作流实例
+/dag-worker run <workflow-id>  # 执行工作流
+/dag-worker status <workflow-id>  # 查询状态
+/dag-worker list               # 列出所有工作流
 ```
 
 **配置示例**:
@@ -452,7 +452,7 @@ await worktreeManager.remove(workflowId)
 
 - ✅ 四个核心模块：状态机、分组管理、调度器、Worktree 管理器
 - ✅ 单元测试覆盖所有模块（231 个测试全部通过）
-- ✅ /dagworker 命令完整集成
+- ✅ /dag-worker 命令完整集成
 - ✅ 支持多分支并行执行
 - ✅ 支持 Fallback 机制
 - ✅ 支持断点恢复
