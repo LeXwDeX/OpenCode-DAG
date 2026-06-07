@@ -266,8 +266,8 @@ const make = Effect.gen(function* () {
           workflow_id: workflowId,
           chat_session_id: input.chatSessionId,
           name: input.name,
-          config: JSON.stringify(input.config),
-          metadata: JSON.stringify(input.metadata ?? {}),
+          config: input.config,
+          metadata: input.metadata ?? {},
           status: "pending",
           created_at: now,
           updated_at: now,
@@ -308,8 +308,8 @@ const make = Effect.gen(function* () {
       return {
         id: row.workflow_id,
         chat_session_id: row.chat_session_id,
-        config: JSON.parse(row.config),
-        metadata: JSON.parse(row.metadata ?? "{}"),
+        config: row.config,
+        metadata: row.metadata ?? {},
         status: row.status as DAGWorkflowStatus,
         start_time: row.started_at ?? row.created_at,
         end_time: row.completed_at,
@@ -336,8 +336,8 @@ const make = Effect.gen(function* () {
       return results.map(row => ({
         id: row.workflow_id,
         chat_session_id: row.chat_session_id,
-        config: JSON.parse(row.config),
-        metadata: JSON.parse(row.metadata ?? "{}"),
+        config: row.config,
+        metadata: row.metadata ?? {},
         status: row.status as DAGWorkflowStatus,
         start_time: row.started_at ?? row.created_at,
         end_time: row.completed_at,
@@ -419,16 +419,16 @@ const make = Effect.gen(function* () {
         db.insert(dagNodes).values({
           node_id: nodeId,
           workflow_id: input.workflowId,
-          config: JSON.stringify(input.config),
+          config: input.config,
           status: "pending",
           output: null,
           error_info: null,
           retry_count: input.retryCount ?? 0,
           max_retries: input.maxRetries ?? 3,
           timeout_ms: input.timeoutMs ?? 300000,
-          required_nodes: JSON.stringify([]),
-          dependencies: JSON.stringify(input.dependencyNodes ?? []),
-          metadata: JSON.stringify({}),
+          required_nodes: [],
+          dependencies: input.dependencyNodes ?? [],
+          metadata: {},
           start_time: null,
           end_time: null,
           parent_node: null,
@@ -476,15 +476,15 @@ const make = Effect.gen(function* () {
       return {
         node_id: row.node_id,
         workflow_id: row.workflow_id,
-        config: JSON.parse(row.config),
+        config: row.config,
         status: row.status as DAGNodeStatus,
-        output: row.output ? JSON.parse(row.output) : null,
+        output: row.output ?? null,
         retry_count: row.retry_count,
         max_retries: row.max_retries,
         timeout_ms: row.timeout_ms,
-        required_nodes: JSON.parse(row.required_nodes),
-        dependencies: JSON.parse(row.dependencies),
-        metadata: JSON.parse(row.metadata),
+        required_nodes: row.required_nodes ?? [],
+        dependencies: row.dependencies ?? [],
+        metadata: row.metadata ?? {},
         start_time: row.start_time,
         completed_at: row.completed_at?.toString() ?? null,
         end_time: row.end_time,
@@ -493,7 +493,7 @@ const make = Effect.gen(function* () {
         created_at: row.created_at,
         updated_at: row.updated_at,
         logs: [],
-        error_info: row.error_info ? JSON.parse(row.error_info) : undefined,
+        error_info: row.error_info ?? undefined,
       }
     })
   
@@ -510,15 +510,15 @@ const make = Effect.gen(function* () {
       return results.map(row => ({
         node_id: row.node_id,
         workflow_id: row.workflow_id,
-        config: JSON.parse(row.config),
+        config: row.config,
         status: row.status as DAGNodeStatus,
-        output: row.output ? JSON.parse(row.output) : null,
+        output: row.output ?? null,
         retry_count: row.retry_count,
         max_retries: row.max_retries,
         timeout_ms: row.timeout_ms,
-        required_nodes: JSON.parse(row.required_nodes),
-        dependencies: JSON.parse(row.dependencies),
-        metadata: JSON.parse(row.metadata),
+        required_nodes: row.required_nodes ?? [],
+        dependencies: row.dependencies ?? [],
+        metadata: row.metadata ?? {},
         start_time: row.start_time,
         completed_at: row.completed_at?.toString() ?? null,
         end_time: row.end_time,
@@ -527,7 +527,7 @@ const make = Effect.gen(function* () {
         created_at: row.created_at,
         updated_at: row.updated_at,
         logs: [],
-        error_info: row.error_info ? JSON.parse(row.error_info) : undefined,
+        error_info: row.error_info ?? undefined,
       }))
     })
   
@@ -582,7 +582,7 @@ const make = Effect.gen(function* () {
       }
       
       if (input.outputData !== undefined) {
-        updates.output = JSON.stringify(input.outputData)
+        updates.output = input.outputData
       }
       
       Database.use((db) => {
@@ -612,12 +612,12 @@ const make = Effect.gen(function* () {
           .limit(1)
           .all()
         if (rows.length > 0) {
-          try { existing = JSON.parse((rows[0].metadata as any) ?? "{}") } catch { existing = {} }
+          existing = (rows[0].metadata as Record<string, unknown>) ?? {}
         }
       })
       Database.use((db) => {
         db.update(dagNodes)
-          .set({ metadata: JSON.stringify({ ...existing, ...metadata }), updated_at: now })
+          .set({ metadata: { ...existing, ...metadata }, updated_at: now })
           .where(eq(dagNodes.node_id, nodeId))
           .run()
       })
@@ -637,7 +637,7 @@ const make = Effect.gen(function* () {
           violation_type: input.type,
           severity: input.severity,
           message: input.message,
-          details: JSON.stringify(input.details ?? {}),
+          details: input.details ?? {},
           created_at: Date.now(),
         }).run()
       })
@@ -669,7 +669,7 @@ const make = Effect.gen(function* () {
         severity: row.severity as DAGViolationSeverity,
         message: row.message,
         timestamp: new Date(row.created_at).toISOString(),
-        details: row.details ? JSON.parse(row.details) : undefined,
+        details: row.details ?? undefined,
       }))
     })
   
@@ -683,8 +683,8 @@ const make = Effect.gen(function* () {
       return results.map(row => ({
         id: row.workflow_id,
         chat_session_id: row.chat_session_id,
-        config: row.config ? JSON.parse(row.config) : {},
-        metadata: row.metadata ? JSON.parse(row.metadata) : {},
+        config: row.config ?? {},
+        metadata: row.metadata ?? {},
         status: row.status as DAGWorkflowStatus,
         start_time: row.started_at ?? row.created_at,
         end_time: row.completed_at,
@@ -765,7 +765,7 @@ const make = Effect.gen(function* () {
           .all()
         if (rows.length > 0) {
           currentStatus = rows[0].status as DAGNodeStatus
-          try { existingDeps = JSON.parse((rows[0].dependencies as any) ?? "[]") } catch { existingDeps = [] }
+          existingDeps = (rows[0].dependencies as unknown as string[]) ?? []
         }
       })
       if (currentStatus && currentStatus !== 'pending') {
@@ -775,8 +775,8 @@ const make = Effect.gen(function* () {
       Database.use((db) => {
         db.update(dagNodes)
           .set({
-            config: JSON.stringify(input.newConfig),
-            dependencies: JSON.stringify(input.newDependencies ?? existingDeps),
+            config: input.newConfig,
+            dependencies: input.newDependencies ?? existingDeps,
             updated_at: now,
           })
           .where(eq(dagNodes.node_id, input.nodeId))
@@ -798,8 +798,8 @@ const make = Effect.gen(function* () {
           tx
             .update(dagNodes)
             .set({
-              config: JSON.stringify(u.newConfig),
-              dependencies: JSON.stringify(u.newDependencies ?? []),
+              config: u.newConfig,
+              dependencies: u.newDependencies ?? [],
               updated_at: now,
             })
             .where(eq(dagNodes.node_id, u.nodeId))
@@ -811,16 +811,16 @@ const make = Effect.gen(function* () {
           tx.insert(dagNodes).values({
             node_id: nodeId,
             workflow_id: input.workflowId,
-            config: JSON.stringify(n.config),
+            config: n.config,
             status: "pending",
             output: null,
             error_info: null,
             retry_count: n.retryCount ?? 0,
             max_retries: n.maxRetries ?? 0,
             timeout_ms: n.timeoutMs ?? 300000,
-            required_nodes: JSON.stringify([]),
-            dependencies: JSON.stringify(n.dependencyNodes ?? []),
-            metadata: JSON.stringify({}),
+            required_nodes: [],
+            dependencies: n.dependencyNodes ?? [],
+            metadata: {},
             start_time: null,
             end_time: null,
             parent_node: null,
@@ -833,7 +833,7 @@ const make = Effect.gen(function* () {
         // 4. UPDATE dag_workflow.config to the new merged config
         tx
           .update(dagWorkflows)
-          .set({ config: JSON.stringify(input.newWorkflowConfig), updated_at: now })
+          .set({ config: input.newWorkflowConfig, updated_at: now })
           .where(eq(dagWorkflows.workflow_id, input.workflowId))
           .run()
         // 5. INSERT dag_workflow_history row (the durable audit record)
