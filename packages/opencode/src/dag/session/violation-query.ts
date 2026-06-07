@@ -165,7 +165,7 @@ function mapRow(row: any): DAGViolation {
     severity: row.severity,
     message: row.message,
     timestamp: new Date(row.created_at).toISOString(),
-    details: row.details ? JSON.parse(row.details) : undefined,
+    details: row.details ?? undefined,
   }
 }
 
