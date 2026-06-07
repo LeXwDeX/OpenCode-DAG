@@ -9,6 +9,7 @@ import type {
   DAGNodeSession,
   DAGNodeStatus,
   DAGViolation,
+  DAGViolationType,
   DAGWorkflowStatus,
   ReplanPatch,
   ReplanResult,
@@ -297,6 +298,45 @@ export function detectCycle(nodes: DAGNodeConfig[]): boolean {
   return false
 }
 
+/**
+ * 纯函数：从 failedNodeId 出发，沿 dependencies 反向图 BFS，收集所有 status === 'pending'
+ * 的可达下游节点（被失败阻塞的节点）。用于 handleNodeFailure 中级联 skip。
+ */
+export function findPendingDescendants(
+  allNodes: DAGNodeSession[],
+  failedNodeId: string,
+): DAGNodeSession[] {
+  const reverseGraph = new Map<string, string[]>()
+  for (const n of allNodes) {
+    for (const dep of n.dependencies ?? []) {
+      const existing = reverseGraph.get(dep)
+      if (existing) existing.push(n.node_id)
+      else reverseGraph.set(dep, [n.node_id])
+    }
+  }
+  const pendingMap = new Map<string, DAGNodeSession>()
+  for (const n of allNodes) {
+    if (n.status === 'pending') pendingMap.set(n.node_id, n)
+  }
+  const result: DAGNodeSession[] = []
+  const seen = new Set<string>([failedNodeId])
+  const queue: string[] = [failedNodeId]
+  while (queue.length > 0) {
+    const cur = queue.shift()!
+    const downstream = reverseGraph.get(cur) ?? []
+    for (const dId of downstream) {
+      if (seen.has(dId)) continue
+      seen.add(dId)
+      const pendingNode = pendingMap.get(dId)
+      if (pendingNode) {
+        result.push(pendingNode)
+        queue.push(dId)
+      }
+    }
+  }
+  return result
+}
+
 export function registerEngine(workflowId: string, engine: WorkflowEngine): void {
   engineRegistry.set(workflowId, engine)
 }
@@ -477,6 +517,60 @@ const make = Effect.gen(function* () {
     ) as Effect.Effect<void, never, never>
 
   // ============================================================================
+  // Workflow Terminal Convergence Helpers
+  // ============================================================================
+
+  /**
+   * 级联 skip：将 failedNodeId 所有下游 pending 节点标记为 skipped。
+   * pending→skipped 是合法转移（session-service.ts:70）。
+   * buildSessionNodeEvent 含 node.skipped case（铁律#3）。
+   */
+  const cascadeSkipDownstream = (
+    workflowId: string,
+    failedNodeId: string,
+  ): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const allNodes = yield* sessionService.listNodes(workflowId)
+      const descendants = findPendingDescendants(allNodes, failedNodeId)
+      for (const d of descendants) {
+        yield* sessionService.updateNodeStatus({
+          sessionId: d.node_id,
+          status: 'skipped',
+        }).pipe(Effect.ignore)
+      }
+    }).pipe(Effect.catchCause(() => Effect.void))
+
+  /**
+   * 检测所有节点是否已进入终态，若是则收敛 workflow.status。
+   * workflow 收敛决策：任一 required 节点 failed → 'failed'；否则 → 'completed'。
+   * 幂等守卫：先读 workflow.status，若已终态则 no-op（铁律#2 + 并发 fork 竞态）。
+   * Session 层隔离：使用 DAGWorkflowStatus 数组，不引用 Core 层 WorkflowStatus。
+   */
+  const maybeFinalizeWorkflow = (
+    workflowId: string,
+  ): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const workflow = yield* sessionService.getWorkflow(workflowId)
+      if (!workflow) return
+
+      const SESSION_TERMINAL: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
+      if (SESSION_TERMINAL.includes(workflow.status)) return
+
+      const allNodes = yield* sessionService.listNodes(workflowId)
+      const hasInProgress = allNodes.some((n: DAGNodeSession) =>
+        n.status === 'pending' || n.status === 'queued' || n.status === 'running'
+      )
+      if (hasInProgress) return
+
+      const hasRequiredFailed = allNodes.some((n: DAGNodeSession) =>
+        n.config.required === true && n.status === 'failed'
+      )
+      const targetStatus: DAGWorkflowStatus = hasRequiredFailed ? 'failed' : 'completed'
+
+      yield* sessionService.updateWorkflowStatus(workflowId, targetStatus)
+    }).pipe(Effect.catchCause(() => Effect.void))
+
+  // ============================================================================
   // 核心方法
   // ============================================================================
 
@@ -549,6 +643,9 @@ const make = Effect.gen(function* () {
       
       // 2. 调度下一批准备就绪的节点
       yield* scheduleReadyNodes(workflowId)
+
+      // 3. Workflow terminal convergence
+      yield* maybeFinalizeWorkflow(workflowId)
       
       return { success: true }
     }) as Effect.Effect<{ success: boolean }, never>
@@ -558,24 +655,36 @@ const make = Effect.gen(function* () {
    */
   const handleNodeFailure: WorkflowEngine['handleNodeFailure'] = (workflowId, nodeId, error) =>
     Effect.gen(function* () {
-      // 1. 更新节点状态
+      // 1. Mark node failed
       yield* sessionService.updateNodeStatus({
         sessionId: nodeId,
         status: 'failed',
         error: error.message
       })
-      
-      // 2. 创建违规记录
+
+      // 2. Conditional violation type (required vs optional)
+      const allNodesForViolation = yield* sessionService.listNodes(workflowId)
+      const failedNode = allNodesForViolation.find((n: DAGNodeSession) => n.node_id === nodeId)
+      const violationType: DAGViolationType = failedNode?.config?.required
+        ? 'required_node_failed'
+        : 'execution_failed'
+
       yield* sessionService.createViolation({
         workflowId,
         nodeId,
-        type: 'required_node_failed',
+        type: violationType,
         severity: 'error',
         message: error.message
       })
-      
-      // 3. 调度下一批准备就绪的节点（其他分支可能继续）
+
+      // 3. Cascade skip downstream pending nodes BEFORE scheduleReadyNodes
+      yield* cascadeSkipDownstream(workflowId, nodeId)
+
+      // 4. Schedule other independent branches
       yield* scheduleReadyNodes(workflowId)
+
+      // 5. Workflow terminal convergence
+      yield* maybeFinalizeWorkflow(workflowId)
       
       return { success: true }
     }) as Effect.Effect<{ success: boolean }, never>
