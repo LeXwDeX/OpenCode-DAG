@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.4"
+OC_VERSION="1.3.5"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -340,25 +340,42 @@ _center_pad() {
 # 装饰横线（固定宽度，居中）
 _divider() {
     local pad
-    pad=$(_center_pad 50)
-    echo "${pad}${C_CYAN}━━━━━━━━━━━━━━━━━━━━ ✦ ━━━━━━━━━━━━━━━━━━━━${C_RESET}"
+    pad=$(_center_pad 64)
+    echo "${pad}${C_CYAN}╭─────────────────────── ✦ ───────────────────────╮${C_RESET}"
+}
+
+_divider_bottom() {
+    local pad
+    pad=$(_center_pad 64)
+    echo "${pad}${C_CYAN}╰──────────────────────────────────────────────────╯${C_RESET}"
+}
+
+_panel_title() {
+    local title="$1" subtitle="${2:-}"
+    local pad
+    pad=$(_center_pad 64)
+    _divider
+    echo "${pad}${C_CYAN}│${C_RESET} ${C_BOLD}${title}${C_RESET}"
+    [ -n "$subtitle" ] && echo "${pad}${C_CYAN}│${C_RESET} ${C_DIM}${subtitle}${C_RESET}"
+    _divider_bottom
+}
+
+_status_row() {
+    local icon="$1" label="$2" value="$3" color="${4:-$C_CYAN}"
+    local pad
+    pad=$(_center_pad 64)
+    printf '%s  %b%-2s%b %-16s %b%s%b\n' "$pad" "$color" "$icon" "$C_RESET" "$label" "$color" "$value" "$C_RESET"
 }
 
 banner() {
     local cur="$1" latest="$2" oc_ver="$3"
     clear
-    local pad
-    pad=$(_center_pad 50)
     echo
-    _divider
+    _panel_title "OPENCODE CONTROL // oc v${oc_ver}" "LeXwDeX fork release manager"
     echo
-    echo "${pad}${C_BOLD}${C_CYAN}🚀 opencode 管理工具 (oc v${oc_ver})${C_RESET}"
-    echo
-    _divider
-    echo
-    echo "${pad}  ${C_DIM}📦 当前版本：${C_RESET}${C_CYAN}${cur}${C_RESET}"
-    echo "${pad}  ${C_DIM}✨ 最新版本：${C_RESET}${C_GREEN}${latest}${C_RESET}"
-    echo "${pad}  ${C_DIM}🔗 上游仓库：${C_RESET}${C_DIM}${RELEASES_URL}${C_RESET}"
+    _status_row "◆" "Current" "$cur" "$C_CYAN"
+    _status_row "▲" "Latest" "$latest" "$C_GREEN"
+    _status_row "●" "Channel" "$RELEASES_URL" "$C_DIM"
     echo
 }
 
@@ -373,10 +390,10 @@ choose_action() {
         "⚙️  系统配置 (AGENTS / config / 环境变量)" \
         "🔄 自更新 oc 脚本" \
         "❌ 退出")
-    printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
-        --header="↑/↓ 移动，Enter 确认，Esc/Ctrl-C 退出" \
-        --border rounded --border-label=" 主菜单 " --border-label-pos=center \
-        --margin=1,20
+    printf '%s' "$options" | fzf --ansi --height=55% --prompt="oc ▸ " --pointer="▶" --marker="◆" --no-info \
+        --header=" ↑/↓ navigate   Enter run   Esc quit " \
+        --border rounded --border-label=" COMMANDS " --border-label-pos=center \
+        --margin=1,18
 }
 
 choose_release() {
@@ -529,18 +546,19 @@ agents_install_or_update() {
 
 # ---------- Config 管理 ----------
 
-# config_apply_defaults — 应用基础配置 + 智能 compaction + 已有模型配置纠错
+# config_apply_defaults — 应用基础配置 + small_model/compaction + 配置体检
 # 逻辑：
 #   1. 确保 lsp=true, autoupdate=false, default_agent="main"
-#   2. Compaction: 扫描 provider.*.models，找到 deepseek-v4-pro 或 flash → 设置 compaction
+#   2. small_model: 未配置时，仅从已存在的 OpenAI-compatible deepseek 模型中选择
+#   3. Compaction: 未配置时，仅从已存在的 OpenAI-compatible deepseek 模型中选择
 #      已有 compaction 则不覆盖
-#   3. 模型纠错：仅修正已存在模型；不添加/删除/重命名模型
+#   4. 模型体检：只报告明显问题，不按内置模板覆盖用户模型属性
 config_apply_defaults() {
     if ! command -v python3 &>/dev/null; then
         die "python3 未安装"
     fi
     python3 - "$OC_CONFIG_FILE" <<'PYEOF'
-import copy, json, sys
+import json, sys
 
 config_file = sys.argv[1]
 
@@ -555,6 +573,18 @@ except json.JSONDecodeError as e:
     sys.exit(1)
 
 changes = []
+warnings = []
+providers = cfg.get("provider", {})
+if not isinstance(providers, dict):
+    warnings.append("  ! provider: provider 配置不是 object")
+    providers = {}
+agent_missing = "agent" not in cfg
+agent_cfg = cfg.get("agent", {})
+agent_bad_type = False
+if not isinstance(agent_cfg, dict):
+    warnings.append("  ! agent: agent 配置不是 object")
+    agent_bad_type = True
+    agent_cfg = {}
 
 # 1. 基础配置
 defaults = {
@@ -571,35 +601,55 @@ for key, val in defaults.items():
         cfg[key] = val
         changes.append(f"  ~ {key}: {json.dumps(old)} → {json.dumps(val)}")
 
-# 2. Compaction 配置
-compaction_model = cfg.get("agent", {}).get("compaction", {}).get("model", None)
-
-if compaction_model is None:
-    provider_name = None
-    model_key = None
-
-    for pname, prov in cfg.get("provider", {}).items():
+def find_openai_compatible_deepseek(prefer):
+    fallback = None
+    for pname, prov in providers.items():
+        if not isinstance(prov, dict):
+            continue
+        if prov.get("npm") != "@ai-sdk/openai-compatible":
+            continue
         models = prov.get("models", {})
-        # 优先找 deepseek-v4-pro
-        for mkey in models:
-            if "deepseek-v4-pro" in mkey:
-                provider_name = pname
-                model_key = mkey
-                break
-        if model_key:
-            break
-        # 备选：找 flash
-        for mkey in models:
-            if "flash" in mkey:
-                provider_name = pname
-                model_key = mkey
-                break
-        if model_key:
-            break
+        if not isinstance(models, dict):
+            continue
+        for key in prefer:
+            if key in models:
+                return pname, key
+        for key in models:
+            if "deepseek" in key:
+                fallback = (pname, key)
+    return fallback
 
-    if provider_name and model_key:
-        compaction_model = f"{provider_name}/{model_key}"
-        cfg.setdefault("agent", {})
+# 2. small_model 配置：仅 key 缺失时补；key 已存在则不覆盖。
+if "small_model" not in cfg:
+    found = find_openai_compatible_deepseek(["deepseek-v4-flash", "deepseek-v4-pro"])
+    if found:
+        cfg["small_model"] = f"{found[0]}/{found[1]}"
+        changes.append(f"  + small_model: {cfg['small_model']}")
+    else:
+        print("  (跳过 small_model: 未找到 OpenAI-compatible deepseek model)")
+else:
+    print(f"  (small_model 已配置: {cfg.get('small_model')})")
+    if not isinstance(cfg.get("small_model"), str) or not cfg.get("small_model"):
+        warnings.append("  ! small_model: 已存在但不是有效 model string，未自动覆盖")
+
+# 3. Compaction 配置
+compaction_missing = "compaction" not in agent_cfg
+compaction_cfg = agent_cfg.get("compaction", {})
+compaction_bad_type = False
+if not isinstance(compaction_cfg, dict):
+    warnings.append("  ! agent.compaction: compaction 配置不是 object")
+    compaction_bad_type = True
+    compaction_cfg = {}
+compaction_model = compaction_cfg.get("model", None)
+
+if agent_bad_type or compaction_bad_type:
+    print("  (跳过 compaction: agent/compaction 配置类型异常，未自动覆盖)")
+elif compaction_missing:
+    found = find_openai_compatible_deepseek(["deepseek-v4-pro", "deepseek-v4-flash"])
+    if found:
+        compaction_model = f"{found[0]}/{found[1]}"
+        if agent_missing:
+            cfg["agent"] = {}
         cfg["agent"]["compaction"] = {
             "model": compaction_model,
             "temperature": 0,
@@ -607,121 +657,44 @@ if compaction_model is None:
         }
         changes.append(f"  + agent.compaction.model: {compaction_model}")
     else:
-        print("  (跳过 compaction: 未找到 deepseek-v4-pro 或 flash model)")
+        print("  (跳过 compaction: 未找到 OpenAI-compatible deepseek model)")
 else:
     print(f"  (compaction 已配置: {compaction_model})")
+    if not compaction_model:
+        warnings.append("  ! agent.compaction.model: compaction 已存在但缺少 model，未自动覆盖")
 
-# 3. 模型配置纠错（只改已存在模型，不新增/删除模型）
-# 通道范围：API 原厂模式 (@ai-sdk/openai / @ai-sdk/anthropic / @ai-sdk/google)
-#          GitHub Copilot (@ai-sdk/github-copilot 或 provider id=github-copilot*)
-API_NATIVE_MODEL_TEMPLATES = {
-    "@ai-sdk/openai": {
-        "gpt-5.5": {
-            "name": "GPT-5.5",
-            "reasoning": True,
-            "tool_call": True,
-            "attachment": True,
-            "limit": {"context": 1000000, "output": 128000},
-            "cost": {"input": 5, "output": 30, "cache_read": 0.5},
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-            "interleaved": {"field": "reasoning_content"},
-            "variants": {
-                "none": {"reasoningEffort": "none"},
-                "low": {"reasoningEffort": "low"},
-                "medium": {"reasoningEffort": "medium"},
-                "high": {"reasoningEffort": "high"},
-                "xhigh": {"reasoningEffort": "xhigh"},
-            },
-        },
-    },
-    "@ai-sdk/anthropic": {
-        "claude-opus-4-6": {
-            "name": "Claude Opus 4.6",
-            "limit": {"context": 1000000, "output": 128000},
-            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-        },
-        "claude-opus-4-8": {
-            "name": "Claude Opus 4.8",
-            "limit": {"context": 1000000, "output": 128000},
-            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
-        },
-    },
-}
-
-COPILOT_MODEL_TEMPLATES = {
-    "claude-opus-4.6": {
-        "name": "Claude Opus 4.6",
-        "family": "claude-opus",
-        "release_date": "2026-02-05",
-        "status": "active",
-        "reasoning": True,
-        "tool_call": True,
-        "attachment": True,
-        "temperature": True,
-        "limit": {"context": 144000, "input": 128000, "output": 64000},
-        "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
-        "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "variants": {
-            "low": {"reasoningEffort": "low"},
-            "medium": {"reasoningEffort": "medium"},
-            "high": {"reasoningEffort": "high"},
-        },
-    },
-    "claude-opus-4.8": {
-        "name": "Claude Opus 4.8",
-        "family": "claude-opus",
-        "status": "active",
-        "reasoning": True,
-        "tool_call": True,
-        "attachment": True,
-        "temperature": True,
-        "limit": {"context": 200000, "output": 64000},
-        "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
-        "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "variants": {"medium": {"reasoningEffort": "medium"}},
-    },
-    "gpt-5.5": {
-        "name": "GPT-5.5",
-        "family": "gpt",
-        "release_date": "2026-04-22",
-        "status": "active",
-        "reasoning": True,
-        "tool_call": True,
-        "attachment": False,
-        "temperature": False,
-        "limit": {"context": 400000, "input": 272000, "output": 128000},
-        "cost": {"input": 5, "output": 30, "cache_read": 0.5},
-        "modalities": {"input": ["text", "image"], "output": ["text"]},
-        "variants": {
-            "none": {"reasoningEffort": "none"},
-            "low": {"reasoningEffort": "low"},
-            "medium": {"reasoningEffort": "medium"},
-            "high": {"reasoningEffort": "high"},
-            "xhigh": {"reasoningEffort": "xhigh"},
-        },
-    },
-}
-
-def apply_model_template(provider_name, model_key, model, template):
-    for field, expected in template.items():
-        if model.get(field) != expected:
-            model[field] = copy.deepcopy(expected)
-            changes.append(f"  ~ provider.{provider_name}.models.{model_key}.{field}: 已按模板纠正")
-
-for provider_name, provider in cfg.get("provider", {}).items():
+# 4. 模型体检（不修改模型属性）
+configured_models = set()
+for p, prov in providers.items():
+    if not isinstance(prov, dict):
+        warnings.append(f"  ! provider.{p}: provider 配置不是 object")
+        continue
+    models = prov.get("models", {})
+    if not isinstance(models, dict):
+        warnings.append(f"  ! provider.{p}.models: models 配置不是 object")
+        continue
+    for m in models:
+        configured_models.add(f"{p}/{m}")
+for ref_key in ("model", "small_model"):
+    ref = cfg.get(ref_key)
+    if ref and ref not in configured_models:
+        warnings.append(f"  ! {ref_key}: 指向不存在模型 {ref}")
+for provider_name, provider in providers.items():
     if not isinstance(provider, dict):
         continue
     models = provider.get("models", {})
     if not isinstance(models, dict):
         continue
-    provider_npm = provider.get("npm", "")
-    is_copilot = provider_name.startswith("github-copilot") or provider_npm == "@ai-sdk/github-copilot"
-    templates = COPILOT_MODEL_TEMPLATES if is_copilot else API_NATIVE_MODEL_TEMPLATES.get(provider_npm, {})
     for model_key, model in models.items():
-        if isinstance(model, dict) and model_key in templates:
-            apply_model_template(provider_name, model_key, model, templates[model_key])
+        if not isinstance(model, dict):
+            warnings.append(f"  ! provider.{provider_name}.models.{model_key}: 模型配置不是 object")
+            continue
+        if "limit" in model and isinstance(model["limit"], dict):
+            if "context" not in model["limit"] or "output" not in model["limit"]:
+                warnings.append(f"  ! provider.{provider_name}.models.{model_key}.limit: 缺少 context/output")
+        if "cost" in model and isinstance(model["cost"], dict):
+            if "input" not in model["cost"] or "output" not in model["cost"]:
+                warnings.append(f"  ! provider.{provider_name}.models.{model_key}.cost: 缺少 input/output")
 
 # 仅在确有变更时写回，避免无谓的 JSON 格式重排
 if changes:
@@ -735,6 +708,10 @@ if changes:
         print(c)
 else:
     print("[ok] 配置已是最新，无需修改")
+if warnings:
+    print("[warn] 模型体检发现非阻塞问题（未自动修改）:")
+    for w in warnings:
+        print(w)
 PYEOF
 }
 
@@ -788,14 +765,8 @@ env_check_and_inject() {
 setup_tui() {
     while true; do
         clear
-        local pad
-        pad=$(_center_pad 50)
         echo
-        _divider
-        echo
-        echo "${pad}${C_BOLD}${C_CYAN}⚙️  系统配置${C_RESET}"
-        echo
-        _divider
+        _panel_title "SYSTEM SETUP" "AGENTS · config · environment"
         echo
 
         # AGENTS 状态
@@ -806,9 +777,9 @@ setup_tui() {
             local agents_branch agents_hash
             agents_branch=$(echo "$agents_status" | cut -d'|' -f2)
             agents_hash=$(echo "$agents_status" | cut -d'|' -f3)
-            echo "${pad}  ${C_GREEN}✓${C_RESET} AGENTS: ${C_CYAN}${agents_branch}${C_RESET} (${agents_hash})"
+            _status_row "✓" "AGENTS" "${agents_branch} (${agents_hash})" "$C_GREEN"
         else
-            echo "${pad}  ${C_RED}✗${C_RESET} AGENTS: 未安装"
+            _status_row "×" "AGENTS" "not installed" "$C_RED"
         fi
 
         # Config 状态
@@ -828,12 +799,12 @@ except Exception:
 PYEOF
 )
             case "$cfg_status" in
-                ok)      echo "${pad}  ${C_GREEN}✓${C_RESET} Config: 基础配置已就绪" ;;
-                partial) echo "${pad}  ${C_YELLOW}!${C_RESET} Config: 部分配置缺失" ;;
-                *)       echo "${pad}  ${C_RED}✗${C_RESET} Config: 读取失败" ;;
+                ok)      _status_row "✓" "Config" "ready" "$C_GREEN" ;;
+                partial) _status_row "!" "Config" "partial" "$C_YELLOW" ;;
+                *)       _status_row "×" "Config" "read failed" "$C_RED" ;;
             esac
         else
-            echo "${pad}  ${C_RED}✗${C_RESET} Config: 文件不存在"
+            _status_row "×" "Config" "missing" "$C_RED"
         fi
 
         # 环境变量状态
@@ -845,9 +816,9 @@ PYEOF
             fi
         done
         if [ "$env_missing" -eq 0 ]; then
-            echo "${pad}  ${C_GREEN}✓${C_RESET} 环境变量: 全部已设置"
+            _status_row "✓" "Env" "all experimental flags set" "$C_GREEN"
         else
-            echo "${pad}  ${C_YELLOW}!${C_RESET} 环境变量: ${env_missing} 个缺失"
+            _status_row "!" "Env" "${env_missing} missing" "$C_YELLOW"
         fi
         echo
 
@@ -859,9 +830,9 @@ PYEOF
             "⬅  返回主菜单")
 
         local action
-        action=$(printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
-            --border rounded --border-label=" 系统配置 " --border-label-pos=center \
-            --margin=1,20)
+        action=$(printf '%s' "$options" | fzf --ansi --height=55% --prompt="setup ▸ " --pointer="▶" --marker="◆" --no-info \
+            --border rounded --border-label=" SYSTEM " --border-label-pos=center \
+            --margin=1,18)
 
         case "${action:-}" in
             *"AGENTS"*)
@@ -1274,14 +1245,8 @@ plugins_tui() {
 
     while true; do
         clear
-        local pad
-        pad=$(_center_pad 50)
         echo
-        _divider
-        echo
-        echo "${pad}${C_BOLD}${C_CYAN}🔌 插件管理${C_RESET}"
-        echo
-        _divider
+        _panel_title "PLUGIN TOOLING" "MCP · plugins · npm tools"
         echo
 
         local status_output
@@ -1297,29 +1262,28 @@ plugins_tui() {
         dcp_status=$(echo "$status_output" | grep "^dcp|" | cut -d'|' -f2)
         bun_status=$(echo "$status_output" | grep "^bun|" | cut -d'|' -f2)
 
-        echo "${pad}${C_BOLD}当前状态：${C_RESET}"
         if [ "$think_status" = "found" ]; then
             if [ "$think_enabled" = "enabled" ]; then
-                echo "${pad}  ${C_GREEN}✓${C_RESET} think MCP: ${C_CYAN}$think_runner${C_RESET} $think_pkg"
+                _status_row "✓" "think MCP" "$think_runner $think_pkg" "$C_GREEN"
             else
-                echo "${pad}  ${C_YELLOW}!${C_RESET} think MCP: 已禁用"
+                _status_row "!" "think MCP" "disabled" "$C_YELLOW"
             fi
         else
-            echo "  ${C_RED}✗${C_RESET} think MCP: 未配置"
+            _status_row "×" "think MCP" "missing" "$C_RED"
         fi
 
         if [ "$dcp_status" = "found" ]; then
-            echo "  ${C_GREEN}✓${C_RESET} DCP plugin: ${C_CYAN}$DCP_PKG${C_RESET}"
+            _status_row "✓" "DCP plugin" "$DCP_PKG" "$C_GREEN"
         else
-            echo "  ${C_RED}✗${C_RESET} DCP plugin: 未配置"
+            _status_row "×" "DCP plugin" "missing" "$C_RED"
         fi
 
         if [ "$bun_status" = "ok" ]; then
             local bun_ver
             bun_ver=$(bun --version 2>/dev/null || echo "?")
-            echo "  ${C_GREEN}✓${C_RESET} bun: v${bun_ver}"
+            _status_row "✓" "bun" "v${bun_ver}" "$C_GREEN"
         else
-            echo "  ${C_YELLOW}!${C_RESET} bun: 未安装"
+            _status_row "!" "bun" "not installed" "$C_YELLOW"
         fi
         echo
 
@@ -1368,9 +1332,9 @@ PYEOF
         options+=("⬅  返回主菜单")
 
         local action
-        action=$(printf '%s\n' "${options[@]}" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
-            --border rounded --border-label=" 插件管理 " --border-label-pos=center \
-            --margin=1,20)
+        action=$(printf '%s\n' "${options[@]}" | fzf --ansi --height=55% --prompt="plugins ▸ " --pointer="▶" --marker="◆" --no-info \
+            --border rounded --border-label=" PLUGINS " --border-label-pos=center \
+            --margin=1,18)
 
         case "${action:-}" in
             *"安装 think MCP"*)
@@ -1538,7 +1502,7 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc plugins refresh         刷新 MCP/plugin NPM 工具 + 全局 codegraph
   oc setup            执行全部系统配置 (AGENTS + config + env)
   oc setup agents     安装/更新 AGENTS 仓库 (git clone/pull)
-  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/compaction)
+  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/small_model/compaction)
   oc setup env        检查并注入 OPENCODE_EXPERIMENTAL_* 环境变量到 shell RC
   oc update           自更新本脚本
   oc -h | --help      显示本帮助
