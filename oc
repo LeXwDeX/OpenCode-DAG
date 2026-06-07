@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.7"
+OC_VERSION="1.3.8"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -546,7 +546,9 @@ agents_install_or_update() {
 
 # ---------- Config 管理 ----------
 
-# config_apply_defaults — 应用基础配置 + small_model/compaction + 模型纠错 + 体检
+# _config_apply <mode> — 应用 opencode.json 配置
+#   mode=all:          执行 1-5 步骤（基础配置 + small_model + compaction + 模型纠错 + 体检）
+#   mode=models-only:  仅执行 4-5 步骤（模型纠错 + 体检）
 # 逻辑：
 #   1. 确保 lsp=true, autoupdate=false, default_agent="main"
 #   2. small_model: 未配置时，仅从已存在的 OpenAI-compatible deepseek 模型中选择
@@ -554,14 +556,16 @@ agents_install_or_update() {
 #      已有 compaction 则不覆盖
 #   4. 模型属性纠错：按模板纠正已存在模型（不新增/删除/改名 model key，不碰 URL/API Key）
 #   5. 模型体检：对坏类型 / 引用缺失等只 warning，不自动修改
-config_apply_defaults() {
+_config_apply() {
+    local mode="${1:-all}"
     if ! command -v python3 &>/dev/null; then
         die "python3 未安装"
     fi
-    python3 - "$OC_CONFIG_FILE" <<'PYEOF'
+    python3 - "$OC_CONFIG_FILE" "$mode" <<'PYEOF'
 import copy, json, sys
 
 config_file = sys.argv[1]
+mode = sys.argv[2] if len(sys.argv) > 2 else "all"
 
 try:
     with open(config_file, encoding="utf-8") as f:
@@ -587,20 +591,21 @@ if not isinstance(agent_cfg, dict):
     agent_bad_type = True
     agent_cfg = {}
 
-# 1. 基础配置
-defaults = {
-    "lsp": True,
-    "autoupdate": False,
-    "default_agent": "main",
-}
-for key, val in defaults.items():
-    if key not in cfg:
-        cfg[key] = val
-        changes.append(f"  + {key}: {json.dumps(val)}")
-    elif cfg[key] != val:
-        old = cfg[key]
-        cfg[key] = val
-        changes.append(f"  ~ {key}: {json.dumps(old)} → {json.dumps(val)}")
+if mode == "all":
+    # 1. 基础配置
+    defaults = {
+        "lsp": True,
+        "autoupdate": False,
+        "default_agent": "main",
+    }
+    for key, val in defaults.items():
+        if key not in cfg:
+            cfg[key] = val
+            changes.append(f"  + {key}: {json.dumps(val)}")
+        elif cfg[key] != val:
+            old = cfg[key]
+            cfg[key] = val
+            changes.append(f"  ~ {key}: {json.dumps(old)} → {json.dumps(val)}")
 
 def find_openai_compatible_deepseek(prefer):
     fallback = None
@@ -620,49 +625,51 @@ def find_openai_compatible_deepseek(prefer):
                 fallback = (pname, key)
     return fallback
 
-# 2. small_model 配置：仅 key 缺失时补；key 已存在则不覆盖。
-if "small_model" not in cfg:
-    found = find_openai_compatible_deepseek(["deepseek-v4-flash", "deepseek-v4-pro"])
-    if found:
-        cfg["small_model"] = f"{found[0]}/{found[1]}"
-        changes.append(f"  + small_model: {cfg['small_model']}")
+if mode == "all":
+    # 2. small_model 配置：仅 key 缺失时补；key 已存在则不覆盖。
+    if "small_model" not in cfg:
+        found = find_openai_compatible_deepseek(["deepseek-v4-flash", "deepseek-v4-pro"])
+        if found:
+            cfg["small_model"] = f"{found[0]}/{found[1]}"
+            changes.append(f"  + small_model: {cfg['small_model']}")
+        else:
+            print("  (跳过 small_model: 未找到 OpenAI-compatible deepseek model)")
     else:
-        print("  (跳过 small_model: 未找到 OpenAI-compatible deepseek model)")
-else:
-    print(f"  (small_model 已配置: {cfg.get('small_model')})")
-    if not isinstance(cfg.get("small_model"), str) or not cfg.get("small_model"):
-        warnings.append("  ! small_model: 已存在但不是有效 model string，未自动覆盖")
+        print(f"  (small_model 已配置: {cfg.get('small_model')})")
+        if not isinstance(cfg.get("small_model"), str) or not cfg.get("small_model"):
+            warnings.append("  ! small_model: 已存在但不是有效 model string，未自动覆盖")
 
-# 3. Compaction 配置
-compaction_missing = "compaction" not in agent_cfg
-compaction_cfg = agent_cfg.get("compaction", {})
-compaction_bad_type = False
-if not isinstance(compaction_cfg, dict):
-    warnings.append("  ! agent.compaction: compaction 配置不是 object")
-    compaction_bad_type = True
-    compaction_cfg = {}
-compaction_model = compaction_cfg.get("model", None)
+if mode == "all":
+    # 3. Compaction 配置
+    compaction_missing = "compaction" not in agent_cfg
+    compaction_cfg = agent_cfg.get("compaction", {})
+    compaction_bad_type = False
+    if not isinstance(compaction_cfg, dict):
+        warnings.append("  ! agent.compaction: compaction 配置不是 object")
+        compaction_bad_type = True
+        compaction_cfg = {}
+    compaction_model = compaction_cfg.get("model", None)
 
-if agent_bad_type or compaction_bad_type:
-    print("  (跳过 compaction: agent/compaction 配置类型异常，未自动覆盖)")
-elif compaction_missing:
-    found = find_openai_compatible_deepseek(["deepseek-v4-pro", "deepseek-v4-flash"])
-    if found:
-        compaction_model = f"{found[0]}/{found[1]}"
-        if agent_missing:
-            cfg["agent"] = {}
-        cfg["agent"]["compaction"] = {
-            "model": compaction_model,
-            "temperature": 0,
-            "variant": "disabled"
-        }
-        changes.append(f"  + agent.compaction.model: {compaction_model}")
+    if agent_bad_type or compaction_bad_type:
+        print("  (跳过 compaction: agent/compaction 配置类型异常，未自动覆盖)")
+    elif compaction_missing:
+        found = find_openai_compatible_deepseek(["deepseek-v4-pro", "deepseek-v4-flash"])
+        if found:
+            compaction_model = f"{found[0]}/{found[1]}"
+            if agent_missing:
+                cfg["agent"] = {}
+            cfg["agent"]["compaction"] = {
+                "model": compaction_model,
+                "temperature": 0,
+                "variant": "disabled"
+            }
+            changes.append(f"  + agent.compaction.model: {compaction_model}")
+        else:
+            print("  (跳过 compaction: 未找到 OpenAI-compatible deepseek model)")
     else:
-        print("  (跳过 compaction: 未找到 OpenAI-compatible deepseek model)")
-else:
-    print(f"  (compaction 已配置: {compaction_model})")
-    if not compaction_model:
-        warnings.append("  ! agent.compaction.model: compaction 已存在但缺少 model，未自动覆盖")
+        print(f"  (compaction 已配置: {compaction_model})")
+        if not compaction_model:
+            warnings.append("  ! agent.compaction.model: compaction 已存在但缺少 model，未自动覆盖")
 
 # 4. 模型属性纠错：只纠正已存在模型的内部字段（limit/cost/modalities/variants 等）；
 #    不新增/删除/改名 model key；不新增 provider；不触碰 URL/API Key。
@@ -910,6 +917,18 @@ if warnings:
 PYEOF
 }
 
+# config_apply_defaults —— TUI 菜单 "Config.json 应用默认配置"
+# 完整模式：基础配置 + small_model + compaction + 模型纠错 + 体检
+config_apply_defaults() {
+    _config_apply all
+}
+
+# config_correct_models —— TUI 菜单 "模型属性纠错"
+# 仅执行模型纠错 + 体检；不动基础配置 / small_model / compaction
+config_correct_models() {
+    _config_apply models-only
+}
+
 # ---------- 环境变量管理 ----------
 
 # env_check_and_inject — 检查所需环境变量，缺失则注入 RC 文件
@@ -1021,6 +1040,7 @@ PYEOF
         options=$(printf '%s\n' \
             "📦 AGENTS 安装/更新" \
             "⚙️  Config.json 应用默认配置" \
+            "🔧 模型属性纠错" \
             "🔑 环境变量检查与注入" \
             "⬅  返回主菜单")
 
@@ -1036,6 +1056,10 @@ PYEOF
                 ;;
             *"Config"*)
                 config_apply_defaults
+                echo; read -rp "按 Enter 继续..." _
+                ;;
+            *"模型属性纠错"*)
+                config_correct_models
                 echo; read -rp "按 Enter 继续..." _
                 ;;
             *"环境变量"*)
@@ -1697,7 +1721,8 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc plugins refresh         刷新 MCP/plugin NPM 工具 + 全局 codegraph
   oc setup            执行全部系统配置 (AGENTS + config + env)
   oc setup agents     安装/更新 AGENTS 仓库 (git clone/pull)
-  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/small_model/compaction)
+  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/small_model/compaction/模型纠错)
+  oc setup correct-models   仅对已存在模型执行属性纠错 + 体检 (不动其它配置)
   oc setup env        检查并注入 OPENCODE_EXPERIMENTAL_* 环境变量到 shell RC
   oc update           自更新本脚本
   oc -h | --help      显示本帮助
@@ -1741,7 +1766,8 @@ EOF
     setup)
         case "${2:-}" in
             agents)   agents_install_or_update ;;
-            config)   config_apply_defaults ;;
+            config)           config_apply_defaults ;;
+            correct-models)   config_correct_models ;;
             env)      env_check_and_inject ;;
             "")
                 agents_install_or_update || warn "AGENTS 步骤失败，继续..."
