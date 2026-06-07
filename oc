@@ -9,13 +9,22 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.2.3"
+OC_VERSION="1.3.0"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
 THINK_PKG="think-mcp-tool"
 DCP_PKG="@lexwdex-org/opencode-dcp"
 OC_RAW_URL="https://raw.githubusercontent.com/${REPO}/stable/oc"
+
+# ---------- 系统配置管理 ----------
+AGENTS_REPO="git@github.com:LeXwDeX/opencode-agents.git"
+AGENTS_DIR="${HOME}/.config/opencode/agents-repo"
+OC_ENV_VARS=(
+    "OPENCODE_EXPERIMENTAL_SANDBOX=true"
+    "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"
+    "OPENCODE_EXPERIMENTAL_SCOUT=true"
+)
 
 # 本地包目录候选（按顺序尝试）：
 #   1) $OC_LOCAL_DIR  显式指定
@@ -36,6 +45,31 @@ die()  { printf "%s[err]%s %s\n" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 info() { printf "%s[oc]%s %s\n" "$C_CYAN" "$C_RESET" "$*"; }
 warn() { printf "%s[warn]%s %s\n" "$C_YELLOW" "$C_RESET" "$*" >&2; }
 ok()   { printf "%s[ok]%s %s\n" "$C_GREEN" "$C_RESET" "$*"; }
+
+# _run_with_timeout <seconds> <command...>
+# 跨平台超时：优先用系统 timeout (Linux GNU coreutils / macOS brew coreutils)，
+# 不存在则降级为纯 bash 实现（& sleep kill）。
+_run_with_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        # Linux (GNU coreutils) 或 macOS brew install coreutils (gtimeout 软链到 timeout)
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        # macOS brew install coreutils 但无 PATH 别名
+        gtimeout "$secs" "$@"
+    else
+        # 纯 bash 降级：后台执行 + sleep + kill
+        "$@" &
+        local _tid=$!
+        (sleep "$secs"; kill "$_tid" 2>/dev/null) &
+        local _killer=$!
+        wait "$_tid" 2>/dev/null
+        local _rc=$?
+        kill "$_killer" 2>/dev/null || true
+        wait "$_killer" 2>/dev/null || true
+        return "$_rc"
+    fi
+}
 
 need() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
 need curl
@@ -291,6 +325,7 @@ choose_action() {
         "📋 手工选择具体版本号..." \
         "👁  仅查看已发布版本（不安装）" \
         "🔌 插件管理 (MCP / plugin / NPM 缓存)" \
+        "⚙️  系统配置 (AGENTS / config / 环境变量 / 包更新)" \
         "🔄 自更新 oc 脚本" \
         "❌ 退出")
     printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
@@ -403,6 +438,485 @@ self_update() {
 
     ok "已更新到 v${remote_version}"
     return 2  # 特殊返回值：需要重启
+}
+
+# ---------- AGENTS 管理 ----------
+
+# agents_check — 检查 agents 仓库状态，输出 TSV:
+#   installed|<branch>|<short_hash>|<date>|<path>
+# 或
+#   missing|||
+agents_check() {
+    if [ -d "$AGENTS_DIR/.git" ]; then
+        local branch hash date
+        branch=$(git -C "$AGENTS_DIR" branch --show-current 2>/dev/null || echo "unknown")
+        hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+        date=$(git -C "$AGENTS_DIR" log -1 --format=%ci 2>/dev/null | head -c10 || echo "unknown")
+        echo "installed|${branch}|${hash}|${date}|${AGENTS_DIR}"
+    else
+        echo "missing|||"
+    fi
+}
+
+agents_install_or_update() {
+    need git
+    if [ -d "$AGENTS_DIR/.git" ]; then
+        info "已存在：$AGENTS_DIR，执行 git pull..."
+        if git -C "$AGENTS_DIR" pull --ff-only 2>&1; then
+            ok "AGENTS 已更新"
+            local hash
+            hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            info "当前 commit: $hash"
+        else
+            warn "git pull 失败，可能需要手动解决冲突"
+        fi
+    else
+        info "克隆 AGENTS 仓库到 $AGENTS_DIR..."
+        mkdir -p "$(dirname "$AGENTS_DIR")"
+        if git clone "$AGENTS_REPO" "$AGENTS_DIR" 2>&1; then
+            ok "AGENTS 已安装"
+            local hash
+            hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+            info "当前 commit: $hash"
+        else
+            die "克隆失败，请检查 SSH 密钥和网络连接"
+        fi
+    fi
+}
+
+# ---------- Config 管理 ----------
+
+# config_apply_defaults — 应用基础配置 + 智能 compaction
+# 逻辑：
+#   1. 确保 lsp=true, autoupdate=false, default_agent="main"
+#   2. Compaction: 扫描 provider.*.models，找到 deepseek-v4-pro 或 flash → 设置 compaction
+#      已有 compaction 则不覆盖
+config_apply_defaults() {
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+    python3 - "$OC_CONFIG_FILE" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+
+try:
+    with open(config_file, encoding="utf-8") as f:
+        cfg = json.load(f)
+except FileNotFoundError:
+    print(f"[err] 配置文件不存在: {config_file}")
+    sys.exit(1)
+except json.JSONDecodeError as e:
+    print(f"[err] JSON 解析失败: {e}")
+    sys.exit(1)
+
+changes = []
+
+# 1. 基础配置
+defaults = {
+    "lsp": True,
+    "autoupdate": False,
+    "default_agent": "main",
+}
+for key, val in defaults.items():
+    if key not in cfg:
+        cfg[key] = val
+        changes.append(f"  + {key}: {json.dumps(val)}")
+    elif cfg[key] != val:
+        old = cfg[key]
+        cfg[key] = val
+        changes.append(f"  ~ {key}: {json.dumps(old)} → {json.dumps(val)}")
+
+# 2. Compaction 配置
+compaction_model = cfg.get("agent", {}).get("compaction", {}).get("model", None)
+
+if compaction_model is None:
+    provider_name = None
+    model_key = None
+
+    for pname, prov in cfg.get("provider", {}).items():
+        models = prov.get("models", {})
+        # 优先找 deepseek-v4-pro
+        for mkey in models:
+            if "deepseek-v4-pro" in mkey:
+                provider_name = pname
+                model_key = mkey
+                break
+        if model_key:
+            break
+        # 备选：找 flash
+        for mkey in models:
+            if "flash" in mkey:
+                provider_name = pname
+                model_key = mkey
+                break
+        if model_key:
+            break
+
+    if provider_name and model_key:
+        compaction_model = f"{provider_name}/{model_key}"
+        cfg.setdefault("agent", {})
+        cfg["agent"]["compaction"] = {
+            "model": compaction_model,
+            "temperature": 0,
+            "variant": "disabled"
+        }
+        changes.append(f"  + agent.compaction.model: {compaction_model}")
+    else:
+        print("  (跳过 compaction: 未找到 deepseek-v4-pro 或 flash model)")
+else:
+    print(f"  (compaction 已配置: {compaction_model})")
+
+# 仅在确有变更时写回，避免无谓的 JSON 格式重排
+if changes:
+    with open(config_file, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+if changes:
+    print(f"[ok] 已更新 {len(changes)} 项配置:")
+    for c in changes:
+        print(c)
+else:
+    print("[ok] 配置已是最新，无需修改")
+PYEOF
+}
+
+# ---------- 环境变量管理 ----------
+
+# env_check_and_inject — 检查所需环境变量，缺失则注入 RC 文件
+env_check_and_inject() {
+    local rc_file=""
+    if [ -n "${ZSH_VERSION:-}" ] || [ "$SHELL" = "/usr/bin/zsh" ] || [ "$SHELL" = "/bin/zsh" ]; then
+        rc_file="${HOME}/.zshrc"
+    elif [ -n "${BASH_VERSION:-}" ] || [ "$SHELL" = "/bin/bash" ] || [ "$SHELL" = "/usr/bin/bash" ]; then
+        rc_file="${HOME}/.bashrc"
+    fi
+
+    if [ -z "$rc_file" ]; then
+        warn "无法检测 shell 类型，请手动添加环境变量"
+        for var_line in "${OC_ENV_VARS[@]}"; do
+            echo "  export $var_line"
+        done
+        return 1
+    fi
+
+    [ -f "$rc_file" ] || touch "$rc_file"
+    info "目标 RC 文件: $rc_file"
+
+    local injected=0 skipped=0
+    for var_line in "${OC_ENV_VARS[@]}"; do
+        local var_name="${var_line%%=*}"
+        if grep -qE "^\s*export\s+${var_name}=" "$rc_file" 2>/dev/null; then
+            info "已存在: export $var_line"
+            skipped=$((skipped + 1))
+        else
+            echo "export $var_line" >> "$rc_file"
+            ok "已添加: export $var_line"
+            injected=$((injected + 1))
+        fi
+    done
+
+    echo
+    if [ "$injected" -gt 0 ]; then
+        ok "共注入 $injected 个变量到 $rc_file"
+        info "已跳过 $skipped 个已存在的变量"
+        warn "请执行 \`source $rc_file\` 或重新打开终端使其生效"
+    else
+        ok "所有环境变量已存在，无需注入"
+    fi
+}
+
+# ---------- 全量包更新 ----------
+
+# packages_update_all — 更新所有 NPM/PIP 包
+# 包分类:
+#   Plugin (npm install in opencode config dir):
+#     @lexwdex-org/opencode-dcp
+#     @vectorize-io/opencode-hindsight
+#   MCP bunx (refresh cache + pre-fetch):
+#     think-mcp-tool
+#     @lexwdex-org/google-search-mcp
+#   Global npm:
+#     codegraph
+#   PIP (pipx preferred, pip fallback): (当前无目标包)
+packages_update_all() {
+    echo
+    echo "${C_BOLD}全量包更新${C_RESET}"
+    echo
+
+    local fail_count=0
+    local pass_count=0
+
+    # --- 检测包管理器 ---
+    local npm_runner=""
+    local global_flag="-g"
+    if command -v bun &>/dev/null; then
+        npm_runner="bun"
+        info "使用 bun 作为 NPM runner"
+    elif command -v npm &>/dev/null; then
+        npm_runner="npm"
+        info "使用 npm 作为 NPM runner (bun 不可用)"
+    else
+        warn "npm 和 bun 均未安装，跳过 NPM 包更新"
+    fi
+
+    local oc_dir
+    oc_dir=$(dirname "$OC_CONFIG_FILE")
+
+    # --- Plugin 包 (opencode config dir 安装) ---
+    local -a plugin_pkgs=(
+        "@lexwdex-org/opencode-dcp"
+        "@vectorize-io/opencode-hindsight"
+    )
+
+    if [ -n "$npm_runner" ]; then
+        echo
+        info "═══ Plugin 包 ═══"
+        for pkg in "${plugin_pkgs[@]}"; do
+            info "安装/更新 $pkg..."
+            if [ -f "${oc_dir}/package.json" ]; then
+                if (cd "$oc_dir" && $npm_runner install "$pkg"@latest 2>&1); then
+                    local ver
+                    ver=$(cd "$oc_dir" && node -e "try{console.log(require('${pkg}/package.json').version)}catch(e){console.log('?')}" 2>/dev/null || echo "?")
+                    ok "$pkg: v${ver}"
+                    pass_count=$((pass_count + 1))
+                else
+                    warn "$pkg: 安装失败"
+                    fail_count=$((fail_count + 1))
+                fi
+            else
+                if $npm_runner install $global_flag "$pkg"@latest 2>&1; then
+                    ok "$pkg: 已全局安装"
+                    pass_count=$((pass_count + 1))
+                else
+                    warn "$pkg: 安装失败"
+                    fail_count=$((fail_count + 1))
+                fi
+            fi
+        done
+    fi
+
+    # --- MCP bunx 包 (刷新缓存) ---
+    local -a mcp_pkgs=(
+        "think-mcp-tool"
+        "@lexwdex-org/google-search-mcp"
+    )
+
+    echo
+    info "═══ MCP 包 ═══"
+    for pkg in "${mcp_pkgs[@]}"; do
+        local pkg_spec="${pkg}@latest"
+        if command -v bun &>/dev/null; then
+            info "清除 bun 缓存 + 预拉取 $pkg..."
+            bun pm cache rm 2>/dev/null || true
+            _run_with_timeout 15 bunx "$pkg_spec" --version 2>/dev/null || true
+
+            local bare_name="${pkg_spec%@*}"
+            local cached
+            cached=$(find ~/.bun/install/cache -maxdepth 1 -name "${bare_name}@*" -type d 2>/dev/null | sort -V | tail -1)
+            if [ -n "$cached" ]; then
+                ok "$pkg: $(basename "$cached")"
+                pass_count=$((pass_count + 1))
+            else
+                warn "$pkg: 未找到缓存 (首次启动时会自动拉取)"
+                fail_count=$((fail_count + 1))
+            fi
+        elif command -v npx &>/dev/null; then
+            info "使用 npx 预拉取 $pkg..."
+            _run_with_timeout 15 npx -y "$pkg"@latest --version 2>/dev/null || true
+            ok "$pkg: npx 缓存已更新"
+            pass_count=$((pass_count + 1))
+        else
+            warn "$pkg: bun 和 npx 均不可用，跳过"
+            fail_count=$((fail_count + 1))
+        fi
+    done
+
+    # --- Global NPM 包 ---
+    local -a global_pkgs=(
+        "codegraph"
+    )
+
+    if [ -n "$npm_runner" ]; then
+        echo
+        info "═══ 全局 NPM 包 ═══"
+        for pkg in "${global_pkgs[@]}"; do
+            info "更新 $pkg..."
+            if $npm_runner install $global_flag "$pkg"@latest 2>&1; then
+                local ver
+                ver=$($pkg --version 2>/dev/null || echo "?")
+                ok "$pkg: v${ver}"
+                pass_count=$((pass_count + 1))
+            else
+                warn "$pkg: 更新失败"
+                fail_count=$((fail_count + 1))
+            fi
+        done
+    fi
+
+    # --- PIP 包 (pipx 优先, pip 降级) ---
+    # 当前无目标 pip 包，预留接口
+    local -a pip_pkgs=()
+
+    if [ "${#pip_pkgs[@]}" -gt 0 ]; then
+        echo
+        info "═══ PIP 包 ═══"
+        local pip_runner=""
+        if command -v pipx &>/dev/null; then
+            pip_runner="pipx"
+            info "使用 pipx 作为 PIP runner"
+        elif command -v pip3 &>/dev/null; then
+            pip_runner="pip3"
+            info "使用 pip3 作为 PIP runner"
+        elif command -v pip &>/dev/null; then
+            pip_runner="pip"
+            info "使用 pip 作为 PIP runner"
+        else
+            warn "pip/pipx 均未安装，跳过 PIP 包更新"
+        fi
+
+        if [ -n "$pip_runner" ]; then
+            for pkg in "${pip_pkgs[@]}"; do
+                info "更新 $pkg..."
+                case "$pip_runner" in
+                    pipx)
+                        if pipx upgrade "$pkg" 2>&1 || pipx install "$pkg" 2>&1; then
+                            ok "$pkg: 已更新"
+                            pass_count=$((pass_count + 1))
+                        else
+                            warn "$pkg: pipx 更新失败"
+                            fail_count=$((fail_count + 1))
+                        fi
+                        ;;
+                    *)
+                        if $pip_runner install --upgrade "$pkg" 2>&1; then
+                            ok "$pkg: 已更新"
+                            pass_count=$((pass_count + 1))
+                        else
+                            warn "$pkg: pip 更新失败"
+                            fail_count=$((fail_count + 1))
+                        fi
+                        ;;
+                esac
+            done
+        fi
+    fi
+
+    # --- 汇总 ---
+    echo
+    echo "${C_BOLD}═══ 更新汇总 ═══${C_RESET}"
+    ok "成功: $pass_count 个包"
+    if [ "$fail_count" -gt 0 ]; then
+        warn "失败: $fail_count 个包"
+    else
+        ok "失败: 0"
+    fi
+}
+
+# ---------- 系统配置 TUI ----------
+
+setup_tui() {
+    while true; do
+        clear
+        local pad
+        pad=$(_center_pad 50)
+        echo
+        _divider
+        echo
+        echo "${pad}${C_BOLD}${C_CYAN}⚙️  系统配置${C_RESET}"
+        echo
+        _divider
+        echo
+
+        # AGENTS 状态
+        local agents_status agents_state
+        agents_status=$(agents_check)
+        agents_state=$(echo "$agents_status" | cut -d'|' -f1)
+        if [ "$agents_state" = "installed" ]; then
+            local agents_branch agents_hash
+            agents_branch=$(echo "$agents_status" | cut -d'|' -f2)
+            agents_hash=$(echo "$agents_status" | cut -d'|' -f3)
+            echo "${pad}  ${C_GREEN}✓${C_RESET} AGENTS: ${C_CYAN}${agents_branch}${C_RESET} (${agents_hash})"
+        else
+            echo "${pad}  ${C_RED}✗${C_RESET} AGENTS: 未安装"
+        fi
+
+        # Config 状态
+        if [ -f "$OC_CONFIG_FILE" ]; then
+            local cfg_status
+            cfg_status=$(python3 - "$OC_CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo "error"
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        cfg = json.load(f)
+    ok = (cfg.get("lsp") is True
+          and cfg.get("autoupdate") is False
+          and cfg.get("default_agent") == "main")
+    print("ok" if ok else "partial")
+except Exception:
+    print("error")
+PYEOF
+)
+            case "$cfg_status" in
+                ok)      echo "${pad}  ${C_GREEN}✓${C_RESET} Config: 基础配置已就绪" ;;
+                partial) echo "${pad}  ${C_YELLOW}!${C_RESET} Config: 部分配置缺失" ;;
+                *)       echo "${pad}  ${C_RED}✗${C_RESET} Config: 读取失败" ;;
+            esac
+        else
+            echo "${pad}  ${C_RED}✗${C_RESET} Config: 文件不存在"
+        fi
+
+        # 环境变量状态
+        local env_missing=0
+        for var_line in "${OC_ENV_VARS[@]}"; do
+            local var_name="${var_line%%=*}"
+            if ! env | grep -q "^${var_name}=" 2>/dev/null; then
+                env_missing=$((env_missing + 1))
+            fi
+        done
+        if [ "$env_missing" -eq 0 ]; then
+            echo "${pad}  ${C_GREEN}✓${C_RESET} 环境变量: 全部已设置"
+        else
+            echo "${pad}  ${C_YELLOW}!${C_RESET} 环境变量: ${env_missing} 个缺失"
+        fi
+        echo
+
+        local options
+        options=$(printf '%s\n' \
+            "📦 AGENTS 安装/更新" \
+            "⚙️  Config.json 应用默认配置" \
+            "🔑 环境变量检查与注入" \
+            "🔄 全量包更新 (NPM + PIP)" \
+            "⬅  返回主菜单")
+
+        local action
+        action=$(printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
+            --border rounded --border-label=" 系统配置 " --border-label-pos=center \
+            --margin=1,20)
+
+        case "${action:-}" in
+            *"AGENTS"*)
+                agents_install_or_update
+                echo; read -rp "按 Enter 继续..." _
+                ;;
+            *"Config"*)
+                config_apply_defaults
+                echo; read -rp "按 Enter 继续..." _
+                ;;
+            *"环境变量"*)
+                env_check_and_inject
+                echo; read -rp "按 Enter 继续..." _
+                ;;
+            *"全量包"*)
+                packages_update_all
+                echo; read -rp "按 Enter 继续..." _
+                ;;
+            *)
+                return
+                ;;
+        esac
+    done
 }
 
 # ---------- 插件管理 ----------
@@ -649,11 +1163,8 @@ _refresh_bunx_package() {
     bun pm cache rm 2>/dev/null || true
 
     info "重新拉取 $name 最新版..."
-    timeout 15 bunx "$pkg_spec" --version 2>/dev/null &
-    local bunx_pid=$!
-    sleep 8
-    kill $bunx_pid 2>/dev/null || true
-    wait $bunx_pid 2>/dev/null || true
+    _run_with_timeout 15 bunx "$pkg_spec" --version 2>/dev/null &
+    wait $! 2>/dev/null || true
 
     local bare_name="${pkg_spec%@*}"
     local cached
@@ -992,6 +1503,9 @@ main() {
             *"插件管理"*)
                 plugins_tui
                 ;;
+            *"系统配置"*)
+                setup_tui
+                ;;
             *"自更新"*)
                 self_update
                 local ret=$?
@@ -1026,6 +1540,11 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc plugins install-dcp     安装 DCP plugin
   oc plugins switch-bunx     切换 think MCP 到 bunx
   oc plugins refresh         刷新 MCP/plugin 的 NPM 包缓存 (动态扫描 opencode.json)
+  oc setup            执行全部系统配置 (AGENTS + config + env + packages)
+  oc setup agents     安装/更新 AGENTS 仓库 (git clone/pull)
+  oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/compaction)
+  oc setup env        检查并注入 OPENCODE_EXPERIMENTAL_* 环境变量到 shell RC
+  oc setup packages   全量更新 NPM/PIP 包 (兼容 bun/npm/pipx/pip)
   oc update           自更新本脚本
   oc -h | --help      显示本帮助
 
@@ -1065,6 +1584,21 @@ EOF
         esac
         ;;
     update)  self_update ;;
+    setup)
+        case "${2:-}" in
+            agents)   agents_install_or_update ;;
+            config)   config_apply_defaults ;;
+            env)      env_check_and_inject ;;
+            packages) packages_update_all ;;
+            "")
+                agents_install_or_update || warn "AGENTS 步骤失败，继续..."
+                config_apply_defaults     || warn "Config 步骤失败，继续..."
+                env_check_and_inject      || warn "环境变量步骤失败，继续..."
+                packages_update_all
+                ;;
+            *)  die "未知 setup 子命令：$2（用 oc --help 查看）" ;;
+        esac
+        ;;
     "")      main ;;
     v*|*-fork-*) do_upgrade "$1" ;;
     *) die "未知子命令：$1（用 oc --help 查看）" ;;
