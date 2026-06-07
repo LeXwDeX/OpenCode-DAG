@@ -454,7 +454,10 @@ const make = Effect.gen(function* () {
       if (sessionService.updateNodeMetadata) {
         yield* sessionService.updateNodeMetadata(node.node_id, {
           chat_session_id: childSession.id,
-        }).pipe(Effect.ignore)
+        }).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] node metadata update failed: ${err}`)),
+          Effect.ignore
+        )
       }
 
       // 5. NOW mark as running (persist-first, before prompt)
@@ -562,7 +565,10 @@ const make = Effect.gen(function* () {
               type: 'execution_failed',
               severity: 'error',
               message: `Node spawn failed: ${errMsg}`,
-            }).pipe(Effect.ignore)
+            }).pipe(
+              Effect.tapError((err) => Effect.logWarning(`[DAG] violation creation failed for ${node.node_id}: ${err}`)),
+              Effect.ignore
+            )
           }
           return yield* Effect.logDebug(`spawnReadyNode uncaught: ${errMsg}`)
         })
@@ -589,9 +595,12 @@ const make = Effect.gen(function* () {
         yield* sessionService.updateNodeStatus({
           sessionId: d.node_id,
           status: 'skipped',
-        }).pipe(Effect.ignore)
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] cascade-skip status update failed for ${d.node_id}: ${err}`)),
+          Effect.ignore
+        )
       }
-    }).pipe(Effect.catchCause(() => Effect.void))
+    }).pipe(Effect.catchCause((cause) => Effect.logWarning(`[DAG] cascadeSkipDownstream(${workflowId}, ${failedNodeId}) failed: ${Cause.squash(cause)}`)))
 
   /**
    * 检测所有节点是否已进入终态，若是则收敛 workflow.status。
