@@ -2,9 +2,9 @@
 // Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
-import { Cause, Effect } from "effect"
+import { Cause, Effect, Result } from "effect"
 import { DAGSessionService, emitWorkflowReplannedEvent } from "./session-service"
-import type { CreateNodeInput, UpdateNodeConfigInput } from "./session-service"
+import type { CreateNodeInput, UpdateNodeConfigInput, UpdateNodeStatusInput } from "./session-service"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -21,7 +21,7 @@ import type {
 import type { PromptOps } from "@/session/prompt-ops"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
-import { MessageID } from "@/session/schema"
+import { MessageID, SessionID } from "@/session/schema"
 
 /**
  * Workflow Status 快照接口
@@ -415,20 +415,26 @@ const make = Effect.gen(function* () {
           sessionId: node.node_id,
           status: 'failed',
           error: 'no promptOps configured for DAG node execution'
-        } as any).pipe(Effect.ignore)
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+          Effect.ignore
+        )
         return
       }
 
       // 2. Resolve agent
       const agentService = yield* Agent.Service
       const agent = yield* agentService.get(node.config.worker_type)
-        .pipe(Effect.catchCause(() => Effect.succeed(undefined as any)))
+        .pipe(Effect.catchCause(() => Effect.succeed(undefined as Agent.Info | undefined)))
       if (!agent) {
         yield* sessionService.updateNodeStatus({
           sessionId: node.node_id,
           status: 'failed',
           error: `unknown worker_type: ${node.config.worker_type}`
-        } as any).pipe(Effect.ignore)
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+          Effect.ignore
+        )
         return
       }
 
@@ -440,7 +446,7 @@ const make = Effect.gen(function* () {
         return
       }
       const childSession = yield* sessions.create({
-        parentID: workflow.chat_session_id as any,
+        parentID: workflow.chat_session_id as SessionID,
         title: node.config.name + ' (DAG node)',
       })
 
@@ -455,9 +461,12 @@ const make = Effect.gen(function* () {
       yield* sessionService.updateNodeStatus({
         sessionId: node.node_id,
         status: 'running'
-      }).pipe(Effect.ignore)
+      } satisfies UpdateNodeStatusInput).pipe(
+        Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+        Effect.ignore
+      )
 
-      // 6. Prepend DAG node instruction + run prompt
+      // 6. Prepend DAG node instructions + run prompt with timeout and retry
       const promptInstruction = [
         `You are executing a DAG node. Node ID: ${node.node_id}.`,
         `When you have finished your work, you MUST call the \`node_complete\` tool EXACTLY ONCE with your result.`,
@@ -469,20 +478,54 @@ const make = Effect.gen(function* () {
       ].join("\n")
 
       const parts = yield* _promptOps.resolvePromptParts(promptInstruction)
-      yield* _promptOps.prompt({
-        sessionID: childSession.id,
-        messageID: MessageID.ascending(),
-        agent: agent.name,
-        parts,
-      }).pipe(
-        Effect.catchCause((cause) => {
-          return sessionService.updateNodeStatus({
-            sessionId: node.node_id,
-            status: 'failed',
-            error: `prompt failed: ${String(Cause.squash(cause))}`
-          } as any).pipe(Effect.ignore, Effect.andThen(Effect.failCause(cause)))
-        }),
-      ).pipe(Effect.ignore)
+      
+      // T1+T2: Retry loop with timeout enforcement
+      const maxRetries = node.max_retries ?? 0
+      let attempt = 0
+      let promptSuccess = false
+
+      while (attempt <= maxRetries && !promptSuccess) {
+        if (attempt > 0) {
+          yield* sessionService.incrementRetryCount(node.node_id).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] incrementRetryCount failed: ${err}`)),
+            Effect.ignore
+          )
+          yield* Effect.logWarning(`[DAG] retrying node ${node.node_id}, attempt ${attempt + 1}/${maxRetries + 1}`)
+        }
+        
+        const timeoutMs = node.config.timeout_ms ?? 300_000
+        const result = yield* _promptOps.prompt({
+          sessionID: childSession.id,
+          messageID: MessageID.ascending(),
+          agent: agent.name,
+          parts,
+        }).pipe(
+          Effect.timeoutOrElse({
+            duration: timeoutMs,
+            orElse: () => Effect.fail(new Error(`node timed out after ${timeoutMs}ms`))
+          }),
+          Effect.result
+        )
+        
+        if (Result.isSuccess(result)) {
+          promptSuccess = true
+        } else {
+          const failure = Result.getFailure(result)
+          const errMsg = failure._tag === 'Some' ? String(failure.value) : 'unknown error'
+          yield* Effect.logWarning(`[DAG] node ${node.node_id} attempt ${attempt + 1} failed: ${errMsg}`)
+          attempt++
+          if (attempt > maxRetries) {
+            yield* sessionService.updateNodeStatus({
+              sessionId: node.node_id,
+              status: 'failed',
+              error: errMsg,
+            } satisfies UpdateNodeStatusInput).pipe(
+              Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+              Effect.ignore
+            )
+          }
+        }
+      }
 
       // 7. Post-prompt: if node still 'running' (subagent never called node_complete)
       const finalNodes = yield* sessionService.listNodes(workflowId)
@@ -492,7 +535,10 @@ const make = Effect.gen(function* () {
           sessionId: node.node_id,
           status: 'failed',
           error: 'node did not call node_complete tool'
-        } as any).pipe(Effect.ignore)
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+          Effect.ignore
+        )
       }
     }).pipe(
       Effect.catchCause((cause) =>
@@ -506,7 +552,10 @@ const make = Effect.gen(function* () {
               sessionId: node.node_id,
               status: 'failed',
               error: `spawn failed: ${errMsg}`
-            } as any).pipe(Effect.ignore)
+            } satisfies UpdateNodeStatusInput).pipe(
+              Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+              Effect.ignore
+            )
             yield* sessionService.createViolation({
               workflowId,
               nodeId: node.node_id,
@@ -612,11 +661,18 @@ const make = Effect.gen(function* () {
       const runningNodeIds = new Set<string>(
         allNodes.filter((n: DAGNodeSession) => n.status === 'running').map((n: DAGNodeSession) => n.node_id)
       )
+      const skippedNodeIds = new Set<string>(
+        allNodes.filter((n: DAGNodeSession) => n.status === 'skipped').map((n: DAGNodeSession) => n.node_id)
+      )
       const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
 
-      // Enforce concurrency cap
+      // T3: Enforce concurrency cap — account for in-flight spawned nodes (spawned but not yet settled)
+      const inFlightCount = [...spawnedNodes]
+        .filter(id => id.startsWith(`${workflowId}::`))
+        .filter(id => !runningNodeIds.has(id) && !completedNodeIds.has(id) && !failedNodeIds.has(id) && !skippedNodeIds.has(id))
+        .length
       const maxConcurrency = concurrencyRegistry.get(workflowId) ?? Number.POSITIVE_INFINITY
-      const budget = maxConcurrency - runningNodeIds.size
+      const budget = maxConcurrency - runningNodeIds.size - inFlightCount
       if (budget <= 0) return { scheduled: 0 }
 
       const limit = Math.min(readyNodes.length, budget)
@@ -706,27 +762,29 @@ const make = Effect.gen(function* () {
    * 获取工作流状态
    */
   const getWorkflowStatus: WorkflowEngine['getWorkflowStatus'] = (workflowId) =>
-    Effect.sync(() => {
-      // 1. 获取工作流 - 直接调用底层方法，避免 Effect.gen
-      let workflow: any
-      let allNodes: DAGNodeSession[]
-      let violations: DAGViolation[]
-      
-      // 使用 Effect.runSync 同步执行
-      workflow = Effect.runSync(sessionService.getWorkflow(workflowId))
+    Effect.gen(function* () {
+      const workflow = yield* sessionService.getWorkflow(workflowId)
       if (!workflow) {
-        throw new Error(`Workflow ${workflowId} not found`)
+        return {
+          workflowId,
+          status: 'cancelled' as DAGWorkflowStatus,
+          totalNodes: 0,
+          completedNodes: 0,
+          failedNodes: 0,
+          runningNodes: 0,
+          readyNodes: 0,
+          violations: [] as DAGViolation[],
+          violations_count: 0,
+          timestamp: Date.now(),
+        }
       }
-      
-      // 2. 获取所有节点
-      allNodes = Effect.runSync(sessionService.listNodes(workflowId))
-      
-      // 3. 统计节点状态
+
+      const allNodes = yield* sessionService.listNodes(workflowId)
+
       const completedNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'completed').length
       const failedNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'failed').length
       const runningNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'running').length
-      
-      // 4. 计算就绪节点
+
       const completedNodeIds = new Set<string>(
         allNodes.filter((n: DAGNodeSession) => n.status === 'completed').map((n: DAGNodeSession) => n.node_id)
       )
@@ -737,11 +795,10 @@ const make = Effect.gen(function* () {
         allNodes.filter((n: DAGNodeSession) => n.status === 'running').map((n: DAGNodeSession) => n.node_id)
       )
       const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
-      
-      // 5. 获取违规记录
-      violations = Effect.runSync(violationAPI.getWorkflowViolations(workflowId))
-      
-      // 6. 返回状态
+
+      const violations = yield* violationAPI.getWorkflowViolations(workflowId)
+        .pipe(Effect.catchCause(() => Effect.succeed([] as DAGViolation[])))
+
       return {
         workflowId,
         status: workflow.status,
@@ -752,9 +809,24 @@ const make = Effect.gen(function* () {
         readyNodes: readyNodes.length,
         violations,
         violations_count: violations.length,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }
-    }) as Effect.Effect<WorkflowStatusSnapshot, never>
+    }).pipe(
+      Effect.catchCause(() =>
+        Effect.succeed({
+          workflowId,
+          status: 'cancelled' as DAGWorkflowStatus,
+          totalNodes: 0,
+          completedNodes: 0,
+          failedNodes: 0,
+          runningNodes: 0,
+          readyNodes: 0,
+          violations: [] as DAGViolation[],
+          violations_count: 0,
+          timestamp: Date.now(),
+        })
+      )
+    ) as Effect.Effect<WorkflowStatusSnapshot, never>
 
   // ============================================================================
   // Replan — atomically restructure the tail of a running workflow

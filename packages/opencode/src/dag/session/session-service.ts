@@ -4,7 +4,7 @@
 
 import { Effect } from "effect"
 import { Database } from "@/storage/db"
-import { eq, inArray } from "drizzle-orm"
+import { eq, inArray, sql } from "drizzle-orm"
 import { 
   dagWorkflows, 
   dagNodes, 
@@ -265,6 +265,9 @@ export interface IDAGSessionService {
   
   readonly createViolation: (input: CreateViolationInput) => Effect.Effect<DAGViolation>
   readonly listViolations: (workflowId: string) => Effect.Effect<DAGViolation[]>
+
+  /** Increments the retry_count field for a node. Used by workflow-engine retry loop. */
+  readonly incrementRetryCount: (nodeId: string) => Effect.Effect<void>
 
   /** Optional: replan-related methods. Absent in historical mocks. */
   readonly createHistory?: (input: CreateHistoryInput) => Effect.Effect<DagWorkflowHistory>
@@ -720,6 +723,20 @@ const make = Effect.gen(function* () {
         violations: [],
       }))
     })
+
+  const incrementRetryCount: IDAGSessionService["incrementRetryCount"] = (nodeId) =>
+    Effect.sync(() => {
+      const now = Date.now()
+      Database.use((db) => {
+        db.update(dagNodes)
+          .set({
+            retry_count: sql`retry_count + 1`,
+            updated_at: now,
+          })
+          .where(eq(dagNodes.node_id, nodeId))
+          .run()
+      })
+    })
   
   // ============================================================================
   // Replan-related methods (optional on the interface — always provided here)
@@ -900,6 +917,7 @@ const make = Effect.gen(function* () {
     createViolation,
     listViolations,
     listAllWorkflows,
+    incrementRetryCount,
     createHistory,
     deleteNode,
     updateNodeConfig,

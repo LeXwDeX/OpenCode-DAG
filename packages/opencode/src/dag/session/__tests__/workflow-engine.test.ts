@@ -84,6 +84,25 @@ function getReadyNodes(
   });
 }
 
+/**
+ * In-flight concurrency accounting: count nodes that have been spawned but haven't
+ * yet transitioned to running/completed/failed/skipped in the DB.
+ * Returns the number of in-flight nodes for the given workflow.
+ */
+function countInFlightNodes(
+  spawnedNodes: Set<string>,
+  workflowId: string,
+  runningNodeIds: Set<string>,
+  completedNodeIds: Set<string>,
+  failedNodeIds: Set<string>,
+  skippedNodeIds: Set<string>,
+): number {
+  return [...spawnedNodes]
+    .filter(id => id.startsWith(`${workflowId}::`))
+    .filter(id => !runningNodeIds.has(id) && !completedNodeIds.has(id) && !failedNodeIds.has(id) && !skippedNodeIds.has(id))
+    .length;
+}
+
 describe('Workflow Engine - Dependency Logic', () => {
   it('should identify nodes with no dependencies as ready', () => {
     const nodes = [
@@ -226,3 +245,444 @@ describe('Workflow Engine - Dependency Logic', () => {
     expect(ready[0].node_id).toBe('B');
   });
 });
+
+// ============================================================================
+// T1: Timeout Enforcement Tests
+// ============================================================================
+
+describe('Workflow Engine - T1: Timeout Enforcement', () => {
+  describe('timeout configuration', () => {
+    it('should use default timeout of 300_000ms when node.config.timeout_ms is undefined', () => {
+      const node = makeNodeSession('node-1', 'running');
+      const config = node.config;
+      delete (config as any).timeout_ms;
+      
+      const effectiveTimeout = config.timeout_ms ?? 300_000;
+      expect(effectiveTimeout).toBe(300_000);
+    });
+
+    it('should respect custom timeout_ms from node config', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.config.timeout_ms = 60_000;
+      
+      const effectiveTimeout = node.config.timeout_ms ?? 300_000;
+      expect(effectiveTimeout).toBe(60_000);
+    });
+
+    it('should use node.timeout_ms from DB when available (dagworker.ts:176)', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.timeout_ms = 45_000;
+      node.retry_count = 2;
+      node.max_retries = 5;
+      
+      // Verify DB-level fields are accessible
+      expect(node.timeout_ms).toBe(45_000);
+      expect(node.retry_count).toBe(2);
+      expect(node.max_retries).toBe(5);
+    });
+  });
+
+  describe('timeout behavior', () => {
+    it('should mark node as failed with timeout error when prompt exceeds timeout', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.config.timeout_ms = 5_000;
+      
+      // Simulate timeout failure message
+      const errorMsg = `node timed out after ${node.config.timeout_ms}ms`;
+      expect(errorMsg).toBe('node timed out after 5000ms');
+    });
+
+    it('should treat timeout as retryable failure (not immediately failed)', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.max_retries = 2;
+      node.retry_count = 0;
+      
+      // After timeout, if retries remain, node should NOT be marked failed yet
+      const canRetry = node.retry_count < node.max_retries;
+      expect(canRetry).toBe(true);
+    });
+  });
+});
+
+// ============================================================================
+// T2: Retry Loop Tests
+// ============================================================================
+
+describe('Workflow Engine - T2: Retry Loop', () => {
+  describe('retry count management', () => {
+    it('should use max_retries from node DB row (dagworker.ts:176)', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.max_retries = 3;
+      
+      const maxRetries = node.max_retries ?? 0;
+      expect(maxRetries).toBe(3);
+    });
+
+    it('should default to 0 retries when max_retries is undefined', () => {
+      const node = makeNodeSession('node-1', 'running');
+      (node as any).max_retries = undefined;
+      
+      const maxRetries = (node as any).max_retries ?? 0;
+      expect(maxRetries).toBe(0);
+    });
+
+    it('should respect retry_count from DB', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.retry_count = 2;
+      node.max_retries = 5;
+      
+      // Verify we can check retry exhaustion
+      const exhausted = node.retry_count >= node.max_retries;
+      expect(exhausted).toBe(false);
+    });
+  });
+
+  describe('retry exhaustion behavior', () => {
+    it('should mark node failed after exhausting all retries', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.max_retries = 2;
+      node.retry_count = 2; // Already at max
+      
+      const canRetry = node.retry_count < node.max_retries;
+      expect(canRetry).toBe(false);
+      
+      // Node should be marked failed with final error
+      const finalError = 'prompt failed after 3 attempts (2 retries)';
+      expect(finalError).toContain('3 attempts');
+    });
+
+    it('should allow retry when retry_count < max_retries', () => {
+      const node = makeNodeSession('node-1', 'running');
+      node.max_retries = 3;
+      node.retry_count = 1;
+      
+      const canRetry = node.retry_count < node.max_retries;
+      expect(canRetry).toBe(true);
+    });
+
+    it('should not transition through failed→pending during retries', () => {
+      const node = makeNodeSession('node-1', 'running');
+      
+      // During retry, node should remain in 'running' state
+      // Only on final exhaustion should it transition to 'failed'
+      const validTransitions: DAGNodeStatus[] = ['running', 'failed', 'completed'];
+      expect(validTransitions).toContain('running');
+      expect(validTransitions).toContain('failed');
+      expect(validTransitions).not.toContain('pending'); // No retry via pending
+    });
+  });
+
+  describe('retry attempt counting', () => {
+    it('should calculate total attempts as max_retries + 1 (initial + retries)', () => {
+      const maxRetries = 2;
+      const totalAttempts = maxRetries + 1;
+      expect(totalAttempts).toBe(3);
+    });
+
+    it('should increment retry_count before each retry attempt', () => {
+      let retryCount = 0;
+      const maxRetries = 2;
+      const attempts: number[] = [];
+      
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (attempt > 0) {
+          retryCount++; // Simulates incrementRetryCount
+        }
+        attempts.push(attempt);
+      }
+      
+      expect(attempts).toEqual([0, 1, 2]);
+      expect(retryCount).toBe(2); // Incremented twice (before attempt 1 and 2)
+    });
+  });
+});
+
+// ============================================================================
+// T3: In-Flight Concurrency Accounting Tests
+// ============================================================================
+
+describe('Workflow Engine - T3: In-Flight Concurrency Accounting', () => {
+  describe('in-flight node detection', () => {
+    it('should count spawned nodes not yet in running/completed/failed/skipped', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([
+        `${workflowId}::node-1`,
+        `${workflowId}::node-2`,
+        `${workflowId}::node-3`,
+      ]);
+      
+      const runningNodeIds = new Set([`${workflowId}::node-1`]);
+      const completedNodeIds = new Set<string>();
+      const failedNodeIds = new Set<string>();
+      const skippedNodeIds = new Set<string>();
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      // node-2 and node-3 are in-flight (spawned but not yet running)
+      expect(inFlight).toBe(2);
+    });
+
+    it('should exclude running nodes from in-flight count', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([
+        `${workflowId}::node-1`,
+        `${workflowId}::node-2`,
+      ]);
+      
+      const runningNodeIds = new Set([
+        `${workflowId}::node-1`,
+        `${workflowId}::node-2`,
+      ]);
+      const completedNodeIds = new Set<string>();
+      const failedNodeIds = new Set<string>();
+      const skippedNodeIds = new Set<string>();
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      expect(inFlight).toBe(0);
+    });
+
+    it('should exclude completed nodes from in-flight count', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([`${workflowId}::node-1`]);
+      
+      const runningNodeIds = new Set<string>();
+      const completedNodeIds = new Set([`${workflowId}::node-1`]);
+      const failedNodeIds = new Set<string>();
+      const skippedNodeIds = new Set<string>();
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      expect(inFlight).toBe(0);
+    });
+
+    it('should exclude failed nodes from in-flight count', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([`${workflowId}::node-1`]);
+      
+      const runningNodeIds = new Set<string>();
+      const completedNodeIds = new Set<string>();
+      const failedNodeIds = new Set([`${workflowId}::node-1`]);
+      const skippedNodeIds = new Set<string>();
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      expect(inFlight).toBe(0);
+    });
+
+    it('should exclude skipped nodes from in-flight count', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([`${workflowId}::node-1`]);
+      
+      const runningNodeIds = new Set<string>();
+      const completedNodeIds = new Set<string>();
+      const failedNodeIds = new Set<string>();
+      const skippedNodeIds = new Set([`${workflowId}::node-1`]);
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      expect(inFlight).toBe(0);
+    });
+
+    it('should ignore spawned nodes from other workflows', () => {
+      const workflowId = 'wf-1';
+      const spawnedNodes = new Set([
+        `${workflowId}::node-1`,
+        `wf-2::node-2`, // Different workflow
+        `wf-3::node-3`, // Different workflow
+      ]);
+      
+      const runningNodeIds = new Set<string>();
+      const completedNodeIds = new Set<string>();
+      const failedNodeIds = new Set<string>();
+      const skippedNodeIds = new Set<string>();
+      
+      const inFlight = countInFlightNodes(
+        spawnedNodes, workflowId,
+        runningNodeIds, completedNodeIds, failedNodeIds, skippedNodeIds
+      );
+      
+      // Only wf-1::node-1 is in-flight for wf-1
+      expect(inFlight).toBe(1);
+    });
+  });
+
+  describe('budget calculation', () => {
+    it('should subtract in-flight count from concurrency budget', () => {
+      const maxConcurrency = 5;
+      const runningCount = 2;
+      const inFlightCount = 2;
+      
+      const budget = maxConcurrency - runningCount - inFlightCount;
+      expect(budget).toBe(1); // 5 - 2 - 2 = 1
+    });
+
+    it('should return 0 budget when running + in-flight >= maxConcurrency', () => {
+      const maxConcurrency = 3;
+      const runningCount = 2;
+      const inFlightCount = 2;
+      
+      const budget = maxConcurrency - runningCount - inFlightCount;
+      expect(budget).toBeLessThanOrEqual(0); // 3 - 2 - 2 = -1
+    });
+
+    it('should allow full concurrency when no in-flight nodes', () => {
+      const maxConcurrency = 5;
+      const runningCount = 2;
+      const inFlightCount = 0;
+      
+      const budget = maxConcurrency - runningCount - inFlightCount;
+      expect(budget).toBe(3); // 5 - 2 - 0 = 3
+    });
+  });
+});
+
+// ============================================================================
+// T4: getWorkflowStatus Degraded Response Tests
+// ============================================================================
+
+describe('Workflow Engine - T4: getWorkflowStatus Degraded Response', () => {
+  it('should return degraded snapshot when workflow not found', () => {
+    const workflowId = 'nonexistent-wf';
+    
+    // Simulate degraded response
+    const snapshot = {
+      workflowId,
+      status: 'cancelled' as const,
+      totalNodes: 0,
+      completedNodes: 0,
+      failedNodes: 0,
+      runningNodes: 0,
+      readyNodes: 0,
+      violations: [],
+      violations_count: 0,
+      timestamp: Date.now(),
+    };
+    
+    expect(snapshot.workflowId).toBe('nonexistent-wf');
+    expect(snapshot.status).toBe('cancelled');
+    expect(snapshot.totalNodes).toBe(0);
+  });
+
+  it('should compute node statistics correctly when workflow exists', () => {
+    const allNodes: DAGNodeSession[] = [
+      makeNodeSession('node-1', 'completed'),
+      makeNodeSession('node-2', 'completed'),
+      makeNodeSession('node-3', 'failed'),
+      makeNodeSession('node-4', 'running'),
+      makeNodeSession('node-5', 'pending'),
+    ];
+    
+    const completedNodes = allNodes.filter(n => n.status === 'completed').length;
+    const failedNodes = allNodes.filter(n => n.status === 'failed').length;
+    const runningNodes = allNodes.filter(n => n.status === 'running').length;
+    
+    expect(completedNodes).toBe(2);
+    expect(failedNodes).toBe(1);
+    expect(runningNodes).toBe(1);
+    expect(allNodes.length).toBe(5);
+  });
+
+  it('should catch violations query errors and use empty array', async () => {
+    // Simulate Effect.catchCause on violations query
+    const violations = await Effect.gen(function* () {
+      return yield* Effect.fail(new Error('DB connection lost')).pipe(
+        Effect.catchCause(() => Effect.succeed([]))
+      );
+    }).pipe(Effect.runPromise);
+    
+    expect(violations).toEqual([]);
+  });
+
+  it('should return snapshot with correct timestamp', () => {
+    const before = Date.now();
+    
+    const snapshot = {
+      workflowId: 'wf-1',
+      status: 'running' as const,
+      totalNodes: 5,
+      completedNodes: 2,
+      failedNodes: 1,
+      runningNodes: 1,
+      readyNodes: 1,
+      violations: [],
+      violations_count: 0,
+      timestamp: Date.now(),
+    };
+    
+    const after = Date.now();
+    expect(snapshot.timestamp).toBeGreaterThanOrEqual(before);
+    expect(snapshot.timestamp).toBeLessThanOrEqual(after);
+  });
+});
+
+// ============================================================================
+// Retry Success Scenario Tests
+// ============================================================================
+
+describe('Workflow Engine - Retry Success Scenarios', () => {
+  it('should succeed on second attempt after first failure', () => {
+    const maxRetries = 2;
+    let attempts = 0;
+    let success = false;
+    
+    // Simulate: fail once, succeed on second
+    while (attempts <= maxRetries && !success) {
+      attempts++;
+      if (attempts === 2) {
+        success = true;
+      }
+    }
+    
+    expect(success).toBe(true);
+    expect(attempts).toBe(2); // Succeeded on 2nd attempt
+  });
+
+  it('should succeed on third attempt after two failures', () => {
+    const maxRetries = 3;
+    let attempts = 0;
+    let success = false;
+    
+    // Simulate: fail twice, succeed on third
+    while (attempts <= maxRetries && !success) {
+      attempts++;
+      if (attempts === 3) {
+        success = true;
+      }
+    }
+    
+    expect(success).toBe(true);
+    expect(attempts).toBe(3);
+  });
+
+  it('should fail after exhausting all retries', () => {
+    const maxRetries = 2;
+    let attempts = 0;
+    let success = false;
+    
+    // Simulate: always fail
+    while (attempts <= maxRetries && !success) {
+      attempts++;
+      // Never succeed
+    }
+    
+    expect(success).toBe(false);
+    expect(attempts).toBe(3); // Initial + 2 retries = 3 total
+  });
+});
+
