@@ -10,6 +10,7 @@ import { Skill } from "../skill"
 import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_DAGWORKER from "./template/dagworker.txt"
+import PROMPT_DAG_CTL from "./template/dag-ctl.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -57,6 +58,7 @@ export const Default = {
   GOAL: "goal",
   SUBGOAL: "subgoal",
   DAGWORKER: "dagworker",
+  DAG_CTL: "dag-ctl",
 } as const
 
 export interface Interface {
@@ -119,6 +121,15 @@ export const layer = Layer.effect(
           return PROMPT_DAGWORKER.replace("${path}", ctx.worktree)
         },
         hints: hints(PROMPT_DAGWORKER),
+      }
+      commands[Default.DAG_CTL] = {
+        name: Default.DAG_CTL,
+        description: "DAG 工作流运行时控制 [start|status|cancel|list|replan|open]",
+        source: "command",
+        get template() {
+          return PROMPT_DAG_CTL.replace("${path}", ctx.worktree)
+        },
+        hints: hints(PROMPT_DAG_CTL),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

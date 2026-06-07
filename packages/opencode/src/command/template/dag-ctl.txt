@@ -1,0 +1,147 @@
+DAG 工作流运行时控制命令。启动、监控、取消、重规划正在运行的 workflow。
+
+用户提供的操作（honoring these）:
+$ARGUMENTS
+
+## 操作类型
+
+本命令是 **运行时控制器** —— 负责启动和管控 workflow 生命周期。
+如需 **创建/编辑 YAML 配置**（list/create/update/validate 等），改用 `/dagworker`。
+如需 **打开 TUI DAG 面板**（实时可视化），改用 `/dag open`（路由到 DAG workflow tab）。
+
+### start 操作（默认）
+
+启动一个新的 workflow。用户参数为 JSON 格式的 DAGConfig：
+
+```json
+{
+  "name": "workflow 名称",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "build",
+      "name": "Build",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "agent": "implement", "prompt": "your task prompt" }
+    }
+  ]
+}
+```
+
+**执行步骤**：
+1. 解析用户输入为 DAGConfig JSON（如果提供自然语言，按上述 schema 推断构造）
+2. 调用 `dagworker` 工具：`{ action: "start", workflow: <JSON-string> }`
+3. 返回 workflowId；workflow 在后台执行
+
+**参数格式**（用户可能的输入形式）：
+- `/dag start '{"name":"...","nodes":[...]}'` — 直接 JSON
+- `/dag start <自然语言描述>` — agent 推断构造 DAGConfig
+- `/dag` — 等价 `start`，提示用户在下一条消息提供参数
+
+### status 操作
+
+查询某个已启动 workflow 的实时状态。
+
+**执行步骤**：
+1. 解析用户参数为 workflowId（如用户不指定，先调 `dagworker { action: "list" }` 列出最近活跃，请用户选一个）
+2. 调用 `dagworker` 工具：`{ action: "status", workflow: <workflowId> }`
+3. 返回节点进度、violations、duration 摘要
+
+**参数格式**：
+- `/dag status <workflowId>`
+- `/dag status`（无参数 → 列出活跃工作流，提示选择）
+
+### cancel 操作
+
+取消一个正在运行的 workflow。
+
+**执行步骤**：
+1. 解析 workflowId（无参数同 status 处理：先列出，请用户选）
+2. 如果是 `running` 状态，**先二次确认**（"即将取消 workflow `<id>`，已运行的节点不会被回滚。确认？"）
+3. 用户确认后调用 `dagworker` 工具：`{ action: "cancel", workflow: <workflowId> }`
+
+**参数格式**：
+- `/dag cancel <workflowId>`
+- `/dag cancel`（无参数 → 列出 → 选择 → 确认）
+
+### list 操作
+
+列出当前 session 的所有 workflow（含历史）。
+
+**执行步骤**：
+1. 调用 `dagworker` 工具：`{ action: "list" }`
+2. 返回按创建时间倒序的摘要列表
+
+**参数格式**：
+- `/dag list`（无参数）
+- `/dag list running` — 过滤 status=running
+- `/dag list failed` — 过滤 status=failed
+
+### replan 操作
+
+对 running 状态的 workflow 进行动态重规划（只改未完成的节点，保留 frozen 节点）。
+
+**执行步骤**：
+1. 解析 workflowId（无参数 → 先 `status` 列出，请用户选）
+2. 当前 workflow 必须是 `running` 状态；`completed/failed/cancelled` 拒绝并解释
+3. 收集用户的重规划意图：
+   - `add` — 新增 pending 节点（节点必须满足：id 唯一、依赖可解析、≤20 总数上限）
+   - `remove` — 删除 pending 节点（frozen 节点拒绝）
+   - `update` — 修改 pending 节点的 dependencies / worker_config
+   - `concurrency <N>` — 修改 max_concurrency（1..10）
+4. 构造 ReplanPatch JSON
+5. 调用 `dagworker` 工具：`{ action: "replan", patch: <JSON-string> }`
+6. 返回 nodes_added / nodes_removed / nodes_updated / final_total
+
+**参数格式**：
+- `/dag replan <workflowId> add <node-json>`
+- `/dag replan <workflowId> remove <node-id>`
+- `/dag replan <workflowId> update <node-id> <patch-json>`
+- `/dag replan <workflowId> concurrency 5`
+- `/dag replan`（无参数 → 列出 → 选择 → 收集意图）
+
+### open 操作
+
+打开 TUI DAG workflow 实时面板（可视化监控）。
+
+**执行步骤**：
+1. 调用 host TUI 的 `route.navigate("dag-workflow")` 或触发 `command_palette` 里的 `dag-workflow.open` 命令
+2. 如果当前有活跃 workflow，可选聚焦到它
+
+**参数格式**：
+- `/dag open`
+- `/dag open <workflowId>`
+
+## 关键约束
+
+- **FROZEN 节点不可变**：`running / completed / failed / skipped` 节点是 replan 的 immutable scaffolding；只有 `pending` 可改。拒绝操作时明确告知用户哪些节点处于 frozen 集。
+- **原子性**：replan 的增/删/改必须全部成功才生效；任何一步违规整个 patch 回滚，workflow 维持原状。
+- **依赖命名空间**：节点 ID 内部是 `${workflowId}::${cfgId}` 形式；用户在 `/dag replan add` 时只需写 `cfg.id`（无 namespace），agent 构造 patch 时自动补 namespace。
+- **Required 节点不可删除**：`required: true` 的节点不能通过 `remove` 命令删除；需要改 required 标志，请用户确认后再删。
+
+## 触发关键词
+
+当用户在 prompt 中出现以下关键词时，**优先引导走本命令**：
+- "启动 workflow"、"跑一个 DAG"、"开始执行"
+- "工作流怎么样了"、"workflow 进度"
+- "取消"、"停掉"、"abort"
+- "重新规划"、"修改剩余步骤"、"改后面的计划"
+- "看看 DAG"、"打开工作流面板"
+
+## 错误处理
+
+如果 `dagworker` 工具返回错误：
+- 把错误原因翻译为中文反馈（"节点上限 20 个，当前已达上限" / "检测到循环依赖" / ...）
+- 给出可能的修复建议（例如"尝试删掉 2 个非 required 节点" / "断开 A→C 这条边"）
+- 不静默吞掉错误
+
+## 与其他命令的关系
+
+| 命令 | 职责 |
+|---|---|
+| `/dag` | 运行时控制（start/status/cancel/list/replan/open） |
+| `/dagworker` | 配置管理（YAML 编辑、validate、preview、diff、inherit） |
+| `/init` | 引导生 AGENTS.md（无关） |
+| `/review` | 代码审查（无关） |
