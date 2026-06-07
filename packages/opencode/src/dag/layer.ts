@@ -5,6 +5,7 @@
 import { Context, Effect, Layer } from "effect"
 import { DAGQuery } from "./query/dag-query"
 import { DAGSessionService, setEventBus } from "./session/session-service"
+import { recoverOrphanedWorkflows } from "./session/recovery"
 import { EventBus } from "./state-machine/EventBus"
 
 // ── Service Tags ──
@@ -37,6 +38,12 @@ const dagQueryLayer = Layer.effect(
     // Ensure event bus is mounted (idempotent: same bus if layer re-runs via memo)
     setEventBus(bus)
     const sessionService = yield* DAGSessionService.make
+    // B3 crash recovery: scan for orphaned running workflows (no in-memory engine)
+    // and mark them failed with audit violations before the query layer becomes available.
+    yield* recoverOrphanedWorkflows(sessionService).pipe(
+      Effect.tapError(err => Effect.logWarning(`[DAG recovery] top-level failure (non-fatal): ${err}`)),
+      Effect.ignore,
+    )
     return new DAGQuery(sessionService)
   }),
 )

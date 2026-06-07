@@ -1,0 +1,45 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
+You are helping resume an orphaned DAG workflow that is stuck in 'failed' state.
+
+## What this command does
+
+Clones an orphaned workflow's stored configuration into a fresh NEW workflow
+with a new UUID. The old workflow remains in 'failed' history (no data is
+lost; prior node outputs are still queryable via `dagworker status <old-id>`).
+The new workflow starts fresh with all nodes in 'pending' state.
+
+## How it works internally
+
+1. Read the source workflow's config: call `dagworker { action: "status", workflow: "<source-id>" }` to retrieve the DAGConfig JSON.
+2. Create the new workflow: call `dagworker { action: "start", workflow: <original-config-JSON>, wait: false }`.
+   The `start` action will:
+   - Run RequiredNodesValidator on the config
+   - Create a new workflow row (new UUID)
+   - Materialize fresh nodes with namespaced IDs (new-uuid::cfg-id)
+   - Register a new WorkflowEngine in memory
+   - Fork the executor daemon
+   - Return the new workflowId
+
+## Steps
+
+1. Ask the user for the source workflow ID if not provided via $1. The source workflow should show `status: failed` with a `process_orphan` violation.
+2. Call `dagworker { action: "status", workflow: "<source-id>" }` — extract the config JSON from the result (look for the section showing `config: { name, nodes, max_concurrency, ... }`).
+3. Build a workflow config JSON from the extracted config. Node IDs and dependencies in the stored config are UN-NAMESPACED (bare `cfg.id` values), so they can be used as-is in the `start` call.
+4. Call `dagworker { action: "start", workflow: <config-JSON>, wait: false }`.
+5. Report both the new workflowId and the old (failed) workflowId to the user.
+
+## Notes
+
+- This is a manual recovery command, not automatic. The user invoked it deliberately.
+- Partial progress from the old workflow (completed nodes with their outputs) is NOT automatically carried over. If the user wants to reuse a previous node's work, they should read the old workflow's node output via `dagworker status <old-id>` and pass context to the new workflow's nodes manually.
+- The old workflow becomes read-only history once marked `failed` (terminal state is irreversible per Iron Law #2).
+- The new workflow runs in the CURRENT session's context (its chat_session_id will be the session where you call `dagworker start`).
+
+## Variables
+
+- `$1` — source workflow ID to resume from. Optional; if absent, ask the user.

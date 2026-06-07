@@ -119,6 +119,7 @@ const VIOLATION_TYPE_LABEL: Record<Lang, Record<ViolationType, string>> = {
     max_concurrency_exceeded: "Max concurrency exceeded",
     timeout_exceeded: "Timeout exceeded",
     execution_failed: "Execution failed",
+    process_orphan: "Process orphan (recovered at startup)",
   },
   zh: {
     required_node_skipped: "必需节点被跳过",
@@ -127,6 +128,7 @@ const VIOLATION_TYPE_LABEL: Record<Lang, Record<ViolationType, string>> = {
     max_concurrency_exceeded: "超出最大并发数",
     timeout_exceeded: "超时",
     execution_failed: "执行失败",
+    process_orphan: "进程孤儿（启动时恢复）",
   },
 }
 

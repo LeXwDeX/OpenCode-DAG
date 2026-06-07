@@ -11,6 +11,7 @@ import PROMPT_INITIALIZE from "./template/initialize.txt"
 import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_DAGWORKER from "./template/dag-worker.txt"
 import PROMPT_DAG_CTL from "./template/dag-ctl.txt"
+import PROMPT_DAG_RESUME from "./template/dag-resume.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -59,6 +60,7 @@ export const Default = {
   SUBGOAL: "subgoal",
   DAGWORKER: "dag-worker",
   DAG_CTL: "dag-ctl",
+  DAG_RESUME: "dag-resume",
 } as const
 
 export interface Interface {
@@ -130,6 +132,15 @@ export const layer = Layer.effect(
           return PROMPT_DAG_CTL.replace("${path}", ctx.worktree)
         },
         hints: hints(PROMPT_DAG_CTL),
+      }
+      commands[Default.DAG_RESUME] = {
+        name: Default.DAG_RESUME,
+        description: "Resume an orphaned failed workflow by cloning its config into a fresh new workflow",
+        source: "command",
+        get template() {
+          return PROMPT_DAG_RESUME
+        },
+        hints: hints(PROMPT_DAG_RESUME),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
