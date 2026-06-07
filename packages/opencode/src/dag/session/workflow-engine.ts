@@ -59,11 +59,227 @@ const spawnedNodes = new Set<string>()
 const concurrencyRegistry = new Map<string, number>()
 const replanInFlight = new Set<string>()
 
+// ============================================================================
+// Replan Pure Helpers (exported for unit testing — no Effect dependencies)
+// ============================================================================
+
+export type ReplanValidateResult =
+  | { ok: true }
+  | { ok: false; reason: string; detail?: unknown }
+
+export type ApplyReplanResult =
+  | { ok: true; newConfigNodes: DAGNodeConfig[] }
+  | { ok: false; reason: string; detail?: unknown }
+
+export type ReplanDbInputs = {
+  removeNodeIds: string[]
+  updates: UpdateNodeConfigInput[]
+  newNodes: CreateNodeInput[]
+  newMaxConcurrency: number
+}
+
+/**
+ * Validates that a replan can proceed: rejects terminal workflows and empty patches.
+ */
+export function validateReplanPreconditions(
+  workflow: { status: DAGWorkflowStatus },
+  patch: ReplanPatch,
+): ReplanValidateResult {
+  const terminalStatuses: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
+  if (terminalStatuses.includes(workflow.status)) {
+    return { ok: false, reason: `Cannot replan a terminal workflow (${workflow.status})` }
+  }
+  const isEmpty =
+    !(patch.add_nodes?.length) &&
+    !(patch.remove_nodes?.length) &&
+    !(patch.update_nodes?.length) &&
+    patch.new_max_concurrency === undefined
+  if (isEmpty) {
+    return { ok: false, reason: `Empty patch: nothing to do` }
+  }
+  return { ok: true }
+}
+
+/**
+ * Partitions current nodes into frozen (queued/running/completed/failed/skipped) and
+ * mutable (pending) sets. Frozen nodes cannot be removed or updated by a replan patch.
+ */
+export function classifyReplanNodes(currentNodes: DAGNodeSession[]): {
+  frozen: DAGNodeSession[]
+  mutable: DAGNodeSession[]
+  frozenIds: Set<string>
+} {
+  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
+  const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
+  const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
+  const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
+  const frozenIds = new Set(frozen.map((n: DAGNodeSession) => n.node_id))
+  return { frozen, mutable, frozenIds }
+}
+
+/**
+ * Rejects patch ops that touch frozen nodes or reference non-existent node IDs.
+ */
+export function validateFrozenAndExistence(
+  patch: ReplanPatch,
+  frozenIds: Set<string>,
+  currentNodeIds: Set<string>,
+): ReplanValidateResult {
+  const touchFrozenRemove = (patch.remove_nodes ?? []).filter(id => frozenIds.has(id))
+  if (touchFrozenRemove.length > 0) {
+    return { ok: false, reason: `Cannot remove frozen nodes: ${touchFrozenRemove.join(', ')}` }
+  }
+  const touchFrozenUpdate = (patch.update_nodes ?? []).filter(u => frozenIds.has(u.node_id))
+  if (touchFrozenUpdate.length > 0) {
+    return { ok: false, reason: `Cannot update frozen nodes: ${touchFrozenUpdate.map(u => u.node_id).join(', ')}` }
+  }
+  const unknownRemoves = (patch.remove_nodes ?? []).filter(id => !currentNodeIds.has(id))
+  if (unknownRemoves.length > 0) {
+    return { ok: false, reason: `remove_nodes references unknown ids: ${unknownRemoves.join(', ')}` }
+  }
+  const unknownUpdates = (patch.update_nodes ?? []).filter(u => !currentNodeIds.has(u.node_id))
+  if (unknownUpdates.length > 0) {
+    return { ok: false, reason: `update_nodes references unknown ids: ${unknownUpdates.map(u => u.node_id).join(', ')}` }
+  }
+  return { ok: true }
+}
+
+/**
+ * Builds the proposed new config node list from the patch (in-memory, before any DB writes).
+ * - Strips removed nodes by configId (reverse namespace lookup).
+ * - Applies update patches (new_config shallow merge, new_dependencies override).
+ * - Appends added nodes.
+ */
+export function applyReplanPatchToConfig(
+  workflowId: string,
+  currentConfigNodes: DAGNodeConfig[],
+  patch: ReplanPatch,
+): ApplyReplanResult {
+  let newConfigNodes: DAGNodeConfig[] = currentConfigNodes.map(n => ({ ...n }))
+  // remove: strip by configId (reverse namespace lookup)
+  const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
+  newConfigNodes = newConfigNodes.filter(n => !removeCfgIds.has(n.id))
+  // update: apply patches
+  for (const upd of patch.update_nodes ?? []) {
+    const cfgId = upd.node_id.split('::').slice(1).join('::')
+    const idx = newConfigNodes.findIndex(n => n.id === cfgId)
+    if (idx < 0) {
+      return { ok: false, reason: `update_nodes references unknown node: ${upd.node_id}` }
+    }
+    if (upd.new_config) {
+      newConfigNodes[idx] = {
+        ...newConfigNodes[idx],
+        ...upd.new_config,
+        id: cfgId,
+        dependencies: upd.new_dependencies ?? newConfigNodes[idx].dependencies,
+      }
+    } else if (upd.new_dependencies) {
+      newConfigNodes[idx] = { ...newConfigNodes[idx], dependencies: upd.new_dependencies }
+    }
+  }
+  // add: append new nodes (cfg.id stays un-namespaced in config)
+  for (const added of patch.add_nodes ?? []) newConfigNodes.push(added)
+  return { ok: true, newConfigNodes }
+}
+
+/**
+ * Validates the post-patch config: node cap (20), concurrency range (1..10),
+ * dependency resolution, required-node integrity, and cycle absence.
+ */
+export function validateReplanPostConfig(
+  newConfigNodes: DAGNodeConfig[],
+  patch: ReplanPatch,
+  workflow: { config: DAGConfig },
+): ReplanValidateResult {
+  const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
+  if (newConfigNodes.length > 20) {
+    return { ok: false, reason: `node cap exceeded: ${newConfigNodes.length} > 20` }
+  }
+  if (newMaxConcurrency < 1 || newMaxConcurrency > 10) {
+    return { ok: false, reason: `max_concurrency must be 1..10, got ${newMaxConcurrency}` }
+  }
+  const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
+  for (const n of newConfigNodes) {
+    for (const dep of n.dependencies) {
+      if (!cfgIdSet.has(dep)) {
+        return { ok: false, reason: `unresolved dependency: node '${n.id}' references '${dep}'` }
+      }
+    }
+  }
+  const requiredValidator = new RequiredNodesValidator()
+  const { valid, errors } = requiredValidator.validate({ ...workflow.config, nodes: newConfigNodes })
+  if (!valid) {
+    return { ok: false, reason: `Validation errors:\n${errors.join('\n')}` }
+  }
+  // Reject removals of required nodes
+  const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
+  const removedRequireds = workflow.config.nodes
+    .filter(n => n.required && removeCfgIds.has(n.id))
+    .map(n => n.id)
+  if (removedRequireds.length > 0) {
+    return { ok: false, reason: `Cannot remove required nodes: ${removedRequireds.join(', ')}` }
+  }
+  // Cycle check
+  if (detectCycle(newConfigNodes)) {
+    return { ok: false, reason: `patch introduces a cycle` }
+  }
+  return { ok: true }
+}
+
+/**
+ * Builds DB-ready inputs from the validated patch. Namespaces all dependency references
+ * and produces the UpdateNodeConfigInput[] and CreateNodeInput[] arrays consumed by
+ * sessionService.atomicReplan.
+ *
+ * `currentMaxConcurrency` is required because `newMaxConcurrency = patch.new_max_concurrency ?? currentMaxConcurrency`.
+ */
+export function buildReplanDbInputs(
+  workflowId: string,
+  patch: ReplanPatch,
+  newConfigNodes: DAGNodeConfig[],
+  currentNodes: DAGNodeSession[],
+  currentMaxConcurrency: number,
+): { ok: true; data: ReplanDbInputs } | { ok: false; reason: string; detail?: unknown } {
+  const wfNs = (cfgId: string) => `${workflowId}::${cfgId}`
+  const updates: UpdateNodeConfigInput[] = (patch.update_nodes ?? []).map(u => {
+    const cfgId = u.node_id.split('::').slice(1).join('::')
+    const updatedCfg = newConfigNodes.find(n => n.id === cfgId)!
+    // Namespace new_dependencies if provided; fall back to the node's
+    // EXISTING stored (already-namespaced) dependencies when absent.
+    const existing = currentNodes.find(n => n.node_id === u.node_id)
+    const depsToWrite = u.new_dependencies
+      ? u.new_dependencies.map(d => wfNs(d))
+      : existing?.dependencies ?? []
+    return { nodeId: u.node_id, newConfig: updatedCfg, newDependencies: depsToWrite }
+  })
+  const newNodes: CreateNodeInput[] = (patch.add_nodes ?? []).map(a => ({
+    workflowId,
+    nodeId: wfNs(a.id),
+    name: a.name,
+    nodeName: a.name,
+    nodeType: a.worker_type,
+    config: a,
+    dependencyNodes: a.dependencies.map(d => wfNs(d)),
+    timeoutMs: a.timeout_ms,
+    maxRetries: a.retry?.max_attempts ?? 0,
+  }))
+  const newMaxConcurrency = patch.new_max_concurrency ?? currentMaxConcurrency
+  return {
+    ok: true,
+    data: {
+      removeNodeIds: patch.remove_nodes ?? [],
+      updates,
+      newNodes,
+      newMaxConcurrency,
+    },
+  }
+}
+
 /**
  * Inline cycle detector over a list of node configs (DFS-based).
  * Returns true when ANY cycle exists in the `dependencies[]` graph.
  */
-function detectCycle(nodes: DAGNodeConfig[]): boolean {
+export function detectCycle(nodes: DAGNodeConfig[]): boolean {
   const graph = new Map<string, string[]>()
   for (const n of nodes) graph.set(n.id, n.dependencies)
   const visited = new Set<string>()
@@ -92,6 +308,13 @@ export function unregisterEngine(workflowId: string): void {
     if (k.startsWith(`${workflowId}::`)) spawnedNodes.delete(k)
   }
 }
+
+/** @internal test-only — exposes module-private spawnedNodes set for unit testing */
+export const __internal_spawnedNodes = (): Set<string> => spawnedNodes
+/** @internal test-only — exposes module-private replanInFlight set for unit testing */
+export const __internal_replanInFlight = (): Set<string> => replanInFlight
+/** @internal test-only — exposes module-private concurrencyRegistry map for unit testing */
+export const __internal_concurrencyRegistry = (): Map<string, number> => concurrencyRegistry
 
 const make = Effect.gen(function* () {
   const dagSessionService = yield* DAGSessionService.make
@@ -441,49 +664,17 @@ const make = Effect.gen(function* () {
       if (!workflow) return yield* Effect.fail(new Error(`Workflow ${workflowId} not found`))
       const currentNodes = yield* sessionService.listNodes(workflowId)
 
-      // 2. Reject if workflow is terminal (completed/failed/cancelled)
-      const terminalWorkflowStatuses: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
-      if (terminalWorkflowStatuses.includes(workflow.status)) {
-        return yield* Effect.fail(new Error(`Cannot replan a terminal workflow (${workflow.status})`))
-      }
+      // 2. Preconditions (terminal + empty patch)
+      const preResult = validateReplanPreconditions(workflow, patch)
+      if (!preResult.ok) return yield* Effect.fail(new Error(preResult.reason))
 
-      // 2b. Reject empty patches (no add/remove/update + no new_max_concurrency)
-      const isEmpty =
-        !(patch.add_nodes?.length) &&
-        !(patch.remove_nodes?.length) &&
-        !(patch.update_nodes?.length) &&
-        patch.new_max_concurrency === undefined
-      if (isEmpty) {
-        return yield* Effect.fail(new Error(`Empty patch: nothing to do`))
-      }
+      // 3. Classify nodes: frozen vs mutable
+      const { frozenIds } = classifyReplanNodes(currentNodes)
 
-      // 3. Classify nodes: frozen vs mutable (only pending is mutable)
-      const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
-      const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
-      const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
-      const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
-      const frozenIds = new Set(frozen.map((n: DAGNodeSession) => n.node_id))
-
-      // 4. Reject patch ops that touch frozen nodes
-      const touchFrozenRemove = (patch.remove_nodes ?? []).filter(id => frozenIds.has(id))
-      if (touchFrozenRemove.length > 0) {
-        return yield* Effect.fail(new Error(`Cannot remove frozen nodes: ${touchFrozenRemove.join(', ')}`))
-      }
-      const touchFrozenUpdate = (patch.update_nodes ?? []).filter(u => frozenIds.has(u.node_id))
-      if (touchFrozenUpdate.length > 0) {
-        return yield* Effect.fail(new Error(`Cannot update frozen nodes: ${touchFrozenUpdate.map(u => u.node_id).join(', ')}`))
-      }
-
-      // 4b. Reject patch ops that reference non-existent node_ids (DB-side existence guard)
+      // 4. Frozen + existence guards
       const currentNodeIds = new Set(currentNodes.map((n: DAGNodeSession) => n.node_id))
-      const unknownRemoves = (patch.remove_nodes ?? []).filter(id => !currentNodeIds.has(id))
-      if (unknownRemoves.length > 0) {
-        return yield* Effect.fail(new Error(`remove_nodes references unknown ids: ${unknownRemoves.join(', ')}`))
-      }
-      const unknownUpdates = (patch.update_nodes ?? []).filter(u => !currentNodeIds.has(u.node_id))
-      if (unknownUpdates.length > 0) {
-        return yield* Effect.fail(new Error(`update_nodes references unknown ids: ${unknownUpdates.map(u => u.node_id).join(', ')}`))
-      }
+      const frozenExistResult = validateFrozenAndExistence(patch, frozenIds, currentNodeIds)
+      if (!frozenExistResult.ok) return yield* Effect.fail(new Error(frozenExistResult.reason))
 
       // 5. Snapshot old state for history
       const oldState = {
@@ -491,94 +682,19 @@ const make = Effect.gen(function* () {
         node_ids: currentNodes.map((n: DAGNodeSession) => n.node_id),
       }
 
-      // 6. Build new config in-memory (fresh copies of all nodes)
-      const wfNs = (cfgId: string) => `${workflowId}::${cfgId}`
-      let newConfigNodes: DAGNodeConfig[] = workflow.config.nodes.map(n => ({ ...n }))
+      // 6. Apply config patch in-memory
+      const applyResult = applyReplanPatchToConfig(workflowId, workflow.config.nodes, patch)
+      if (!applyResult.ok) return yield* Effect.fail(new Error(applyResult.reason))
+      const { newConfigNodes } = applyResult
 
-      // remove: strip by configId (reverse namespace lookup)
-      const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
-      newConfigNodes = newConfigNodes.filter(n => !removeCfgIds.has(n.id))
+      // 7. Post-patch validation
+      const postResult = validateReplanPostConfig(newConfigNodes, patch, workflow)
+      if (!postResult.ok) return yield* Effect.fail(new Error(postResult.reason))
 
-      // update: apply patches
-      for (const upd of patch.update_nodes ?? []) {
-        const cfgId = upd.node_id.split('::').slice(1).join('::')
-        const idx = newConfigNodes.findIndex(n => n.id === cfgId)
-        if (idx < 0) {
-          return yield* Effect.fail(new Error(`update_nodes references unknown node: ${upd.node_id}`))
-        }
-        if (upd.new_config) {
-          newConfigNodes[idx] = {
-            ...newConfigNodes[idx],
-            ...upd.new_config,
-            id: cfgId,
-            dependencies: upd.new_dependencies ?? newConfigNodes[idx].dependencies,
-          }
-        } else if (upd.new_dependencies) {
-          newConfigNodes[idx] = { ...newConfigNodes[idx], dependencies: upd.new_dependencies }
-        }
-      }
-
-      // add: append new nodes (cfg.id stays un-namespaced in config)
-      for (const added of patch.add_nodes ?? []) newConfigNodes.push(added)
-
-      // 7. Validate new config BEFORE any DB writes
-      const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
-      if (newConfigNodes.length > 20) {
-        return yield* Effect.fail(new Error(`node cap exceeded: ${newConfigNodes.length} > 20`))
-      }
-      if (newMaxConcurrency < 1 || newMaxConcurrency > 10) {
-        return yield* Effect.fail(new Error(`max_concurrency must be 1..10, got ${newMaxConcurrency}`))
-      }
-      const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
-      for (const n of newConfigNodes) {
-        for (const dep of n.dependencies) {
-          if (!cfgIdSet.has(dep)) {
-            return yield* Effect.fail(new Error(`unresolved dependency: node '${n.id}' references '${dep}'`))
-          }
-        }
-      }
-      const requiredValidator = new RequiredNodesValidator()
-      const { valid, errors } = requiredValidator.validate({ ...workflow.config, nodes: newConfigNodes })
-      if (!valid) {
-        return yield* Effect.fail(new Error(`Validation errors:\n${errors.join('\n')}`))
-      }
-      // Reject removals of required nodes
-      const removedRequireds = workflow.config.nodes
-        .filter(n => n.required && removeCfgIds.has(n.id))
-        .map(n => n.id)
-      if (removedRequireds.length > 0) {
-        return yield* Effect.fail(new Error(`Cannot remove required nodes: ${removedRequireds.join(', ')}`))
-      }
-      // Cycle check
-      if (detectCycle(newConfigNodes)) {
-        return yield* Effect.fail(new Error(`patch introduces a cycle`))
-      }
-
-      // 8. Build DB-ready inputs
-      const updates: UpdateNodeConfigInput[] = (patch.update_nodes ?? []).map(u => {
-        const cfgId = u.node_id.split('::').slice(1).join('::')
-        const updatedCfg = newConfigNodes.find(n => n.id === cfgId)!
-        // Namespace new_dependencies if provided AND fall back to the node's
-        // EXISTING stored dependencies when absent (preserves scheduler column).
-        // currentNodes[i].dependencies is already the parsed-and-namespaced array,
-        // so it's safe to re-use directly.
-        const existing = currentNodes.find((n: DAGNodeSession) => n.node_id === u.node_id)
-        const depsToWrite = u.new_dependencies
-          ? u.new_dependencies.map(d => wfNs(d))
-          : existing?.dependencies ?? []
-        return { nodeId: u.node_id, newConfig: updatedCfg, newDependencies: depsToWrite }
-      })
-      const newNodesForDb: CreateNodeInput[] = (patch.add_nodes ?? []).map(a => ({
-        workflowId,
-        nodeId: wfNs(a.id),
-        name: a.name,
-        nodeName: a.name,
-        nodeType: a.worker_type,
-        config: a,
-        dependencyNodes: a.dependencies.map(d => wfNs(d)),
-        timeoutMs: a.timeout_ms,
-        maxRetries: a.retry?.max_attempts ?? 0,
-      }))
+      // 8. Build DB inputs
+      const dbResult = buildReplanDbInputs(workflowId, patch, newConfigNodes, currentNodes, workflow.config.max_concurrency)
+      if (!dbResult.ok) return yield* Effect.fail(new Error(dbResult.reason))
+      const { updates, newNodes: newNodesForDb, newMaxConcurrency } = dbResult.data
       const newConfig: DAGConfig = { ...workflow.config, nodes: newConfigNodes, max_concurrency: newMaxConcurrency }
 
       // 9. Atomic apply — all 5 DB writes in one transaction
@@ -604,7 +720,7 @@ const make = Effect.gen(function* () {
         changeDetails: {
           removed: patch.remove_nodes ?? [],
           updated: (patch.update_nodes ?? []).map(u => u.node_id),
-          added: (patch.add_nodes ?? []).map(a => wfNs(a.id)),
+          added: (patch.add_nodes ?? []).map(a => `${workflowId}::${a.id}`),
           max_concurrency: newMaxConcurrency,
         },
         changedBy: patch.changed_by ?? null,
