@@ -48,11 +48,25 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       },
     )
 
+    const getWorkflowHistory = Effect.fn("DagHttpApi.getWorkflowHistory")(
+      function* (ctx: { params: { workflowId: string }; headers: { limit?: number } }) {
+        return yield* Effect.promise(() => dagQuery.listHistory(ctx.params.workflowId, ctx.headers.limit))
+      },
+    )
+
+    const getNodeLogs = Effect.fn("DagHttpApi.getNodeLogs")(
+      function* (ctx: { params: { nodeId: string }; headers: { limit?: number } }) {
+        return yield* Effect.promise(() => dagQuery.listNodeLogs(ctx.params.nodeId, ctx.headers.limit))
+      },
+    )
+
     return handlers
       .handle("listWorkflows", listWorkflows)
       .handle("getWorkflow", getWorkflow)
       .handle("getTimeline", getTimeline)
       .handle("getStats", getStats)
       .handle("getViolations", getViolations)
+      .handle("getWorkflowHistory", getWorkflowHistory)
+      .handle("getNodeLogs", getNodeLogs)
   }),
 )

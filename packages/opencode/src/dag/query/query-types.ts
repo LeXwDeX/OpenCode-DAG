@@ -55,6 +55,46 @@ export interface IDAGQuery {
    * 列出指定工作流的所有违规记录
    */
   listViolations(workflowId: string): Promise<DAGViolation[]>
+
+  /**
+   * 列出工作流的历史变更记录（replan 审计链）
+   */
+  listHistory(workflowId: string, limit?: number): Promise<DAGWorkflowHistoryResponse[]>
+
+  /**
+   * 列出节点的执行日志
+   */
+  listNodeLogs(nodeId: string, limit?: number): Promise<DAGNodeLogResponse[]>
+}
+
+/**
+ * Workflow history response — formatted DB row with ISO timestamps
+ */
+export interface DAGWorkflowHistoryResponse {
+  history_id: string
+  workflow_id: string
+  chat_session_id: string
+  action: string
+  old_state: unknown
+  new_state: unknown
+  change_details: unknown
+  changed_by: string | null
+  created_at: string
+}
+
+/**
+ * Node log response — formatted DB row with ISO timestamps
+ */
+export interface DAGNodeLogResponse {
+  log_id: string
+  node_id: string
+  workflow_id: string
+  chat_session_id: string
+  log_level: string
+  log_message: string
+  log_data: unknown
+  execution_phase: string | null
+  created_at: string
 }
 
 /**

@@ -133,6 +133,21 @@ export class DagEventBridge {
     const publishFn = this.publishFn
     if (!publishFn) return
 
+    // ── workflow.replanned: translate to its own `dag.workflow.replanned` event ──
+    if (event.type === "workflow.replanned") {
+      try {
+        publishFn("dag.workflow.replanned", {
+          workflowID: event.workflow_id,
+          ...(this.options.chatSessionID && { chatSessionID: this.options.chatSessionID }),
+          patchSummary: event.patch_summary,
+          timestamp: event.timestamp.toISOString(),
+        })
+      } catch (err) {
+        console.warn("[DagEventBridge] publish failed:", err)
+      }
+      return
+    }
+
     const status = workflowEventToStatus(event)
     if (!status) return
 
@@ -226,6 +241,8 @@ function workflowEventToStatus(event: WorkflowEvent): string | null {
     case "workflow.resumed":
     case "workflow.archived":
     case "workflow.replanned":
+      // dead code: handled by early return in translateWorkflowEvent (L137)
+      // kept for exhaustiveness defense
       return null // not forwarded to platform
   }
 }

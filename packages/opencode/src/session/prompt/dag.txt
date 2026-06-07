@@ -25,6 +25,14 @@ Use DAG workflows when user intent matches these patterns (in any language):
 | `cancel` | Abort a running workflow. |
 | `list` | See every workflow spawned in the lifetime of this process. |
 
+## New dagworker actions (observation layer)
+
+| action | purpose |
+|---|---|
+| `node_detail` | Inspect a single node: `dagworker { action: "node_detail", node_id: "<id>" }`. Returns status, output, error_info, retries, timestamps. |
+| `history` | Query replan audit trail: `dagworker { action: "history", workflow: "<workflowId>", limit?: number }`. Returns ordered list of replan records. |
+| `logs` | Query node execution logs: `dagworker { action: "logs", node_id: "<nodeId>", limit?: number }`. Returns structured log entries. |
+
 ## The Config Schema
 
 `dagworker start` takes a single `workflow` argument: a **JSON string** of this shape:

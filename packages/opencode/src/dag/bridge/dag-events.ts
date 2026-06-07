@@ -106,3 +106,25 @@ export const DagNodeAskMain = BusEvent.define(
     timestamp: Schema.Number,
   }),
 )
+
+/**
+ * DAG 工作流 replan 审计事件
+ *
+ * 翻译自 workflow.replanned — signals DAG topology was mutably changed
+ * via atomicReplan. Independent event type (not routed through
+ * dag.workflow.updated) so platform consumers can subscribe selectively.
+ */
+export const DagWorkflowReplanned = BusEvent.define(
+  "dag.workflow.replanned",
+  Schema.Struct({
+    workflowID: Schema.String,
+    chatSessionID: Schema.optional(Schema.String),
+    patchSummary: Schema.Struct({
+      added: Schema.Number,
+      removed: Schema.Number,
+      updated: Schema.Number,
+      final_total: Schema.Number,
+    }),
+    timestamp: Schema.String,
+  }),
+)

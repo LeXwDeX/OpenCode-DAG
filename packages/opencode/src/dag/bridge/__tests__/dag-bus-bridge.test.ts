@@ -323,4 +323,82 @@ describe("DagEventBridge", () => {
 
     bridge.dispose()
   })
+
+  test("subscribes workflow.replanned → publishes dag.workflow.replanned with patchSummary + ISO timestamp", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus, {
+      chatSessionID: "chat-1",
+    })
+    bridge.subscribe(mock.fn)
+
+    const ts = new Date(1700000000000)
+    dagEventBus.emit({
+      type: "workflow.replanned",
+      workflow_id: "wf-1",
+      chat_session_id: "chat-1",
+      patch_summary: { added: 2, removed: 1, updated: 3, final_total: 5 },
+      timestamp: ts,
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].type).toBe("dag.workflow.replanned")
+    expect(mock.events[0].properties).toEqual({
+      workflowID: "wf-1",
+      chatSessionID: "chat-1",
+      patchSummary: { added: 2, removed: 1, updated: 3, final_total: 5 },
+      timestamp: ts.toISOString(),
+    })
+
+    bridge.dispose()
+  })
+
+  test("workflow.replanned does NOT publish dag.workflow.updated (uses its own channel)", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus)
+    bridge.subscribe(mock.fn)
+
+    dagEventBus.emit({
+      type: "workflow.replanned",
+      workflow_id: "wf-1",
+      chat_session_id: "chat-1",
+      patch_summary: { added: 0, removed: 0, updated: 0, final_total: 3 },
+      timestamp: new Date(),
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].type).toBe("dag.workflow.replanned")
+    // NOT dag.workflow.updated
+    expect(mock.events.find((e) => e.type === "dag.workflow.updated")).toBeUndefined()
+
+    bridge.dispose()
+  })
+
+  test("workflow.replanned respects workflowID filter", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus, {
+      workflowID: "wf-1",
+      chatSessionID: "chat-1",
+    })
+    bridge.subscribe(mock.fn)
+
+    // Matching
+    dagEventBus.emit({
+      type: "workflow.replanned",
+      workflow_id: "wf-1",
+      chat_session_id: "chat-1",
+      patch_summary: { added: 1, removed: 0, updated: 0, final_total: 4 },
+      timestamp: new Date(),
+    })
+
+    // Not matching (should be filtered)
+    dagEventBus.emit({
+      type: "workflow.replanned",
+      workflow_id: "wf-other",
+      chat_session_id: "chat-other",
+      patch_summary: { added: 1, removed: 0, updated: 0, final_total: 3 },
+      timestamp: new Date(),
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].properties.workflowID).toBe("wf-1")
+
+    bridge.dispose()
+  })
 })

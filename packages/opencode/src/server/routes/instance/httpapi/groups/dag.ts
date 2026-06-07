@@ -124,6 +124,30 @@ export const DagViolation = Schema.Struct({
   details: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }).annotate({ identifier: "DagViolation" })
 
+export const DagWorkflowHistoryResponse = Schema.Struct({
+  history_id: Schema.String,
+  workflow_id: Schema.String,
+  chat_session_id: Schema.String,
+  action: Schema.String,
+  old_state: Schema.Unknown,
+  new_state: Schema.Unknown,
+  change_details: Schema.Unknown,
+  changed_by: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+}).annotate({ identifier: "DagWorkflowHistoryResponse" })
+
+export const DagNodeLogResponse = Schema.Struct({
+  log_id: Schema.String,
+  node_id: Schema.String,
+  workflow_id: Schema.String,
+  chat_session_id: Schema.String,
+  log_level: Schema.String,
+  log_message: Schema.String,
+  log_data: Schema.Unknown,
+  execution_phase: Schema.NullOr(Schema.String),
+  created_at: Schema.String,
+}).annotate({ identifier: "DagNodeLogResponse" })
+
 // ============================================================================
 // Queries
 // ============================================================================
@@ -193,6 +217,32 @@ const dagGroup = HttpApiGroup.make("dag")
         identifier: "dag.getViolations",
         summary: "Get DAG violations",
         description: "Retrieve all recorded violations for a DAG workflow.",
+      }),
+    ),
+    HttpApiEndpoint.get("getWorkflowHistory", `${root}/workflows/:workflowId/history`, {
+      params: { workflowId: Schema.String },
+      headers: Schema.Struct({
+        limit: Schema.optional(Schema.NumberFromString),
+      }),
+      success: described(Schema.Array(DagWorkflowHistoryResponse), "DAG workflow history (newest first)"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.getWorkflowHistory",
+        summary: "Get DAG workflow history",
+        description: "Retrieve replan audit-trail records for a DAG workflow.",
+      }),
+    ),
+    HttpApiEndpoint.get("getNodeLogs", `${root}/nodes/:nodeId/logs`, {
+      params: { nodeId: Schema.String },
+      headers: Schema.Struct({
+        limit: Schema.optional(Schema.NumberFromString),
+      }),
+      success: described(Schema.Array(DagNodeLogResponse), "DAG node execution logs (newest first)"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.getNodeLogs",
+        summary: "Get DAG node logs",
+        description: "Retrieve structured execution logs for a DAG node.",
       }),
     ),
   )

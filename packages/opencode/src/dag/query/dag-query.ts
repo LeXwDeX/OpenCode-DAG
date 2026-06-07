@@ -9,10 +9,13 @@ import type {
   NodeExecutionTime,
   GraphStatistics,
   NodeDependency,
-  WorkflowStatistics
+  WorkflowStatistics,
+  DAGWorkflowHistoryResponse,
+  DAGNodeLogResponse,
 } from './query-types';
 import type { DAGWorkflowSession, DAGNodeStatus, DAGNodeSession, DAGViolation } from '../session/types';
 import type { IDAGSessionService } from '../session/session-service';
+import type { DagWorkflowHistory, DagNodeLog } from '../persistence/schema';
 import { Effect } from 'effect';
 
 /**
@@ -263,6 +266,22 @@ export class DAGQuery implements IDAGQuery {
   }
 
   /**
+   * 列出工作流的历史变更记录
+   */
+  async listHistory(workflowId: string, limit?: number): Promise<DAGWorkflowHistoryResponse[]> {
+    const rows = await Effect.runPromise(this.sessionService.listHistory(workflowId, limit))
+    return rows.map(toHistoryResponse)
+  }
+
+  /**
+   * 列出节点的执行日志
+   */
+  async listNodeLogs(nodeId: string, limit?: number): Promise<DAGNodeLogResponse[]> {
+    const rows = await Effect.runPromise(this.sessionService.listNodeLogs(nodeId, limit))
+    return rows.map(toLogResponse)
+  }
+
+  /**
    * 计算图的关键路径长度（最长路径）
    */
   private calculateCriticalPathLength(nodes: DAGNodeSession[]): number {
@@ -307,5 +326,37 @@ export class DAGQuery implements IDAGQuery {
     }
 
     return maxPathLength / 1000;
+  }
+}
+
+// ============================================================================
+// Helpers: DB row → response mapping
+// ============================================================================
+
+function toHistoryResponse(row: DagWorkflowHistory): DAGWorkflowHistoryResponse {
+  return {
+    history_id: row.history_id,
+    workflow_id: row.workflow_id,
+    chat_session_id: row.chat_session_id,
+    action: row.action,
+    old_state: row.old_state,
+    new_state: row.new_state,
+    change_details: row.change_details,
+    changed_by: row.changed_by,
+    created_at: new Date(row.created_at).toISOString(),
+  }
+}
+
+function toLogResponse(row: DagNodeLog): DAGNodeLogResponse {
+  return {
+    log_id: row.log_id,
+    node_id: row.node_id,
+    workflow_id: row.workflow_id,
+    chat_session_id: row.chat_session_id,
+    log_level: row.log_level,
+    log_message: row.log_message,
+    log_data: row.log_data,
+    execution_phase: row.execution_phase,
+    created_at: new Date(row.created_at).toISOString(),
   }
 }

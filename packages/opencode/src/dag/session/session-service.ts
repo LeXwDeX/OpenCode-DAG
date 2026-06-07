@@ -4,14 +4,15 @@
 
 import { Effect } from "effect"
 import { Database } from "@/storage/db"
-import { eq, inArray, sql } from "drizzle-orm"
+import { eq, inArray, sql, desc } from "drizzle-orm"
 import { 
-  dagWorkflows, 
-  dagNodes, 
+  dagWorkflows,
+  dagNodes,
   dagViolations,
   dagWorkflowHistory,
+  dagNodeLogs,
 } from "../persistence/schema"
-import type { DagWorkflowHistory } from "../persistence/schema"
+import type { DagWorkflowHistory, DagNodeLog } from "../persistence/schema"
 import type {
   DAGWorkflowSession,
   DAGNodeSession,
@@ -245,6 +246,16 @@ export interface AtomicReplanInput {
   changedBy?: string | null
 }
 
+export interface AppendNodeLogInput {
+  nodeId: string
+  workflowId: string
+  chatSessionId: string
+  logLevel: "info" | "warn" | "error" | "debug"
+  logMessage: string
+  logData?: unknown
+  executionPhase?: string
+}
+
 // ============================================================================
 // Service Interface
 // ============================================================================
@@ -274,6 +285,13 @@ export interface IDAGSessionService {
   readonly deleteNode?: (nodeId: string) => Effect.Effect<void>
   readonly updateNodeConfig?: (input: UpdateNodeConfigInput) => Effect.Effect<void>
   readonly atomicReplan?: (input: AtomicReplanInput) => Effect.Effect<DagWorkflowHistory>
+
+  /** List history records for a workflow, newest first. Throws on missing workflow. */
+  readonly listHistory: (workflowId: string, limit?: number) => Effect.Effect<DagWorkflowHistory[]>
+  /** List node execution logs, newest first. Throws on missing node. */
+  readonly listNodeLogs: (nodeId: string, limit?: number) => Effect.Effect<DagNodeLog[]>
+  /** Append a structured log entry for a node. Persist-first pattern. */
+  readonly appendNodeLog: (input: AppendNodeLogInput) => Effect.Effect<DagNodeLog>
 }
 
 // ============================================================================
@@ -904,6 +922,95 @@ const make = Effect.gen(function* () {
       } as DagWorkflowHistory
     })
 
+  // ============================================================================
+  // Observation layer: listHistory / listNodeLogs / appendNodeLog
+  // ============================================================================
+
+  const listHistory: IDAGSessionService["listHistory"] = (workflowId, limit = 100) =>
+    Effect.sync(() => {
+      // Validate workflow exists
+      let wfRows: typeof dagWorkflows.$inferSelect[] = []
+      Database.use((db) => {
+        wfRows = db.select().from(dagWorkflows)
+          .where(eq(dagWorkflows.workflow_id, workflowId))
+          .limit(1)
+          .all()
+      })
+      if (wfRows.length === 0) {
+        throw new Error(`Workflow not found: ${workflowId}`)
+      }
+
+      let results: DagWorkflowHistory[] = []
+      Database.use((db) => {
+        results = db.select()
+          .from(dagWorkflowHistory)
+          .where(eq(dagWorkflowHistory.workflow_id, workflowId))
+          .orderBy(desc(dagWorkflowHistory.created_at))
+          .limit(limit)
+          .all()
+      })
+      return results
+    })
+
+  const listNodeLogs: IDAGSessionService["listNodeLogs"] = (nodeId, limit = 100) =>
+    Effect.sync(() => {
+      // Validate node exists via existing getNode
+      let nodeRows: typeof dagNodes.$inferSelect[] = []
+      Database.use((db) => {
+        nodeRows = db.select()
+          .from(dagNodes)
+          .where(eq(dagNodes.node_id, nodeId))
+          .limit(1)
+          .all()
+      })
+      if (nodeRows.length === 0) {
+        throw new Error(`Node not found: ${nodeId}`)
+      }
+
+      let results: DagNodeLog[] = []
+      Database.use((db) => {
+        results = db.select()
+          .from(dagNodeLogs)
+          .where(eq(dagNodeLogs.node_id, nodeId))
+          .orderBy(desc(dagNodeLogs.created_at))
+          .limit(limit)
+          .all()
+      })
+      return results
+    })
+
+  const appendNodeLog: IDAGSessionService["appendNodeLog"] = (input) =>
+    Effect.sync(() => {
+      const now = Date.now()
+      const logId = `log_${now}_${Math.random().toString(36).slice(2)}`
+
+      Database.use((db) => {
+        db.insert(dagNodeLogs).values({
+          log_id: logId,
+          node_id: input.nodeId,
+          workflow_id: input.workflowId,
+          chat_session_id: input.chatSessionId,
+          log_level: input.logLevel,
+          log_message: input.logMessage,
+          log_data: input.logData ?? null,
+          execution_phase: input.executionPhase ?? null,
+          created_at: now,
+        }).run()
+      })
+
+      return {
+        log_id: logId,
+        node_id: input.nodeId,
+        workflow_id: input.workflowId,
+        chat_session_id: input.chatSessionId,
+        log_level: input.logLevel,
+        log_message: input.logMessage,
+        log_data: input.logData ?? null,
+        execution_phase: input.executionPhase ?? null,
+        created_at: now,
+      } as DagNodeLog
+    })
+
   return {
     createWorkflow,
     getWorkflow,
@@ -922,6 +1029,9 @@ const make = Effect.gen(function* () {
     deleteNode,
     updateNodeConfig,
     atomicReplan,
+    listHistory,
+    listNodeLogs,
+    appendNodeLog,
   } satisfies IDAGSessionService
 })
 

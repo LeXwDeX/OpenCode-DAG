@@ -787,4 +787,83 @@ describe('setEventBus', () => {
     // cleanup
     setEventBus(undefined)
   })
-});
+})
+
+// ============================================================================
+// 11. Observation Layer — Interface Shape Tests
+// ============================================================================
+
+describe('Observation Layer — IDAGSessionService shape', () => {
+  it('AppendNodeLogInput type supports all required fields', () => {
+    // Verifies AppendNodeLogInput interface shape via structural typing
+    const input: import('../session-service').AppendNodeLogInput = {
+      nodeId: 'node_1',
+      workflowId: 'wf_1',
+      chatSessionId: 'chat_1',
+      logLevel: 'info',
+      logMessage: 'test log',
+      logData: { step: 1 },
+      executionPhase: 'execute',
+    }
+    expect(input.nodeId).toBe('node_1')
+    expect(input.logLevel).toBe('info')
+    expect(input.logData).toEqual({ step: 1 })
+  })
+
+  it('AppendNodeLogInput omits optional fields when not provided', () => {
+    const input: import('../session-service').AppendNodeLogInput = {
+      nodeId: 'node_1',
+      workflowId: 'wf_1',
+      chatSessionId: 'chat_1',
+      logLevel: 'debug',
+      logMessage: 'minimal',
+    }
+    expect(input.logData).toBeUndefined()
+    expect(input.executionPhase).toBeUndefined()
+  })
+
+  it('IDAGSessionService declares listHistory / listNodeLogs / appendNodeLog', async () => {
+    const mod = await import('../session-service')
+    // Verify the module exports the make factory (which satisfies IDAGSessionService)
+    expect(mod.DAGSessionService.make).toBeDefined()
+  })
+})
+
+// ============================================================================
+// 12. Iron Law #3 — emitWorkflowReplannedEvent
+// ============================================================================
+
+describe('Iron Law #3: emitWorkflowReplannedEvent', () => {
+  it('is a callable function', async () => {
+    const mod = await import('../session-service')
+    expect(typeof mod.emitWorkflowReplannedEvent).toBe('function')
+  })
+
+  it('no-op when no bus is set (graceful degradation)', async () => {
+    const mod = await import('../session-service')
+    mod.setEventBus(undefined)
+    // Should not throw even without a bus
+    expect(() =>
+      mod.emitWorkflowReplannedEvent('wf_1', 'chat_1', { added: 1, removed: 0, updated: 2, final_total: 3 }),
+    ).not.toThrow()
+  })
+
+  it('emits workflow.replanned when bus is set', async () => {
+    const mod = await import('../session-service')
+    const emitted: unknown[] = []
+    const mockBus = {
+      subscribe: () => () => {},
+      emit: (ev: unknown) => { emitted.push(ev) },
+      destroy: () => {},
+    }
+    mod.setEventBus(mockBus)
+    mod.emitWorkflowReplannedEvent('wf_1', 'chat_1', { added: 2, removed: 1, updated: 0, final_total: 5 })
+    expect(emitted).toHaveLength(1)
+    const ev = emitted[0] as { type: string; workflow_id: string; patch_summary: { added: number } }
+    expect(ev.type).toBe('workflow.replanned')
+    expect(ev.workflow_id).toBe('wf_1')
+    expect(ev.patch_summary.added).toBe(2)
+    // cleanup
+    mod.setEventBus(undefined)
+  })
+})

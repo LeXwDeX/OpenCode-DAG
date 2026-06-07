@@ -76,6 +76,9 @@ export const Parameters = Schema.Struct({
     Schema.Literal("template_list"),
     Schema.Literal("template_show"),
     Schema.Literal("template_start"),
+    Schema.Literal("node_detail"),
+    Schema.Literal("history"),
+    Schema.Literal("logs"),
   ])).annotate({
     description: "Action to perform. Defaults to 'start' if not specified.",
   }),
@@ -96,6 +99,12 @@ export const Parameters = Schema.Struct({
   }),
   template_input: Schema.optional(Schema.String).annotate({
     description: "JSON-stringified DAGTemplateInput for 'template_show' / 'template_start'. Requires at least {goal:string}. Optional for 'template_show' (uses empty goal).",
+  }),
+  node_id: Schema.optional(Schema.String).annotate({
+    description: "Node ID for 'node_detail' or 'logs' action.",
+  }),
+  limit: Schema.optional(Schema.Number).annotate({
+    description: "Maximum number of results for 'history' or 'logs' action. Defaults to 100.",
   }),
 })
 
@@ -583,6 +592,97 @@ export const DAGWorkerTool = Tool.define(
               action: "template_start",
               templateId: templ.id,
               wait: params.wait ?? false,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "node_detail": {
+          if (!params.node_id) {
+            return yield* Effect.fail(
+              new Error("'node_detail' action requires 'node_id' parameter"),
+            )
+          }
+          const node = yield* dagSessionService.getNode(params.node_id)
+          if (!node) {
+            return yield* Effect.fail(new Error(`Node not found: ${params.node_id}`))
+          }
+          return {
+            title: `Node: ${node.node_id}`,
+            output: JSON.stringify({
+              node_id: node.node_id,
+              workflow_id: node.workflow_id,
+              status: node.status,
+              retry_count: node.retry_count,
+              max_retries: node.max_retries,
+              timeout_ms: node.timeout_ms,
+              duration_ms: node.duration_ms,
+              error_info: node.error_info ?? null,
+              start_time: node.start_time,
+              end_time: node.end_time,
+              completed_at: node.completed_at,
+              created_at: node.created_at,
+              updated_at: node.updated_at,
+            }, null, 2),
+            metadata: {
+              nodeId: node.node_id,
+              action: "node_detail",
+              status: node.status,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "history": {
+          if (!params.workflow) {
+            return yield* Effect.fail(
+              new Error("'history' action requires 'workflow' parameter with workflow ID"),
+            )
+          }
+          const historyRows = yield* dagSessionService.listHistory(params.workflow, params.limit)
+          const formatted = historyRows.map((row) => ({
+            history_id: row.history_id,
+            action: row.action,
+            changed_by: row.changed_by,
+            created_at: new Date(row.created_at).toISOString(),
+            old_state: row.old_state,
+            new_state: row.new_state,
+            change_details: row.change_details,
+          }))
+          return {
+            title: `History for ${params.workflow} (${formatted.length})`,
+            output: JSON.stringify(formatted, null, 2),
+            metadata: {
+              workflowId: params.workflow,
+              action: "history",
+              count: formatted.length,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "logs": {
+          if (!params.node_id) {
+            return yield* Effect.fail(
+              new Error("'logs' action requires 'node_id' parameter"),
+            )
+          }
+          const logRows = yield* dagSessionService.listNodeLogs(params.node_id, params.limit)
+          const formatted = logRows.map((row) => ({
+            log_id: row.log_id,
+            log_level: row.log_level,
+            log_message: row.log_message,
+            log_data: row.log_data,
+            execution_phase: row.execution_phase,
+            created_at: new Date(row.created_at).toISOString(),
+          }))
+          return {
+            title: `Logs for ${params.node_id} (${formatted.length})`,
+            output: JSON.stringify(formatted, null, 2),
+            metadata: {
+              nodeId: params.node_id,
+              action: "logs",
+              count: formatted.length,
             } as Record<string, unknown>,
             attachments: [],
           }
