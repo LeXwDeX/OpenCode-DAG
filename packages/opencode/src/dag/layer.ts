@@ -62,6 +62,26 @@ const dagQueryLayer = Layer.effect(
   }),
 )
 
+/**
+ * `defaultLayer` composes 3 sub-layers via `Layer.provideMerge`:
+ *
+ * 1. `sharedEventBusLayer` — creates the singleton EventBus (Iron Law #3)
+ *    shared across all DAG modules.
+ * 2. `worktreeManagerLayer` — creates a single WorktreeManager instance (uses
+ *    the shared EventBus). Consumed by `spawnReadyNode` when
+ *    `worker_config.use_worktree: true` (B4-WP1). No persister is provided:
+ *    an in-memory Map is adequate for DAG node lifetime (per §0.3 architecture
+ *    rule — node lifetime is bounded by workflow lifetime).
+ * 3. `dagQueryLayer` — creates DAGQuery and runs the crash recovery scan (B3)
+ *    on initialization. Recovery runs here (not in app-runtime.ts CoreLayer)
+ *    because DAG is HTTP-server-scoped while CoreLayer is process-wide.
+ *    See B3 commit message for rationale.
+ *
+ * The HTTP server provides this `defaultLayer` in
+ * `server/routes/instance/httpapi/server.ts:245`. CLI modes that do not start
+ * the HTTP server (e.g., `opencode run`) obtain `DAGSessionService` directly
+ * but lose recovery, bridge, and WorktreeManager availability.
+ */
 // Self-contained composite: provideMerge feeds the shared bus INTO dagQueryLayer
 // and re-exposes it, so the result outputs BOTH tags with zero residual
 // requirement. `Layer.mergeAll` does not cross-wire siblings, which previously

@@ -56,6 +56,31 @@ export type DAGNodeStatus =
 
 /**
  * DAG 节点定义
+ *
+ * **Architectural note** — `DAGNodeConfig` and `DAGConfig` (below) are the single
+ * canonical sources of truth for DAG configuration shape. Every other document
+ * (USER_GUIDE.md YAML examples, dagworker-reference.md, dag-worker.txt) MUST stay
+ * consistent with these interfaces.
+ *
+ * Field semantics worth highlighting:
+ *
+ * - `worker_type` — free-form string routed via `Agent.Service.get(worker_type)`
+ *   in workflow-engine.ts:spawnReadyNode. MUST match a registered agent. Built-in
+ *   agents: `build`, `plan`, `general`, `explore`, `scout`. Users can register
+ *   custom agents via opencode.json `agents: Record<string, AgentInfo>`. Many
+ *   documented examples use `implement`, `verify`, `review` which are NOT
+ *   built-in — they are custom agent names users would configure.
+ *
+ * - `dependencies: string[]` — bare `cfg.id` values (NOT namespaced with
+ *   `workflowId::`). Namespacing happens at node materialization time in
+ *   dagworker.ts, not in the config.
+ *
+ * - `required: boolean` — when `false`, node failure/skip does NOT cause
+ *   workflow-level failure per `maybeFinalizeWorkflow`.
+ *
+ * - `worker_config: Record<string, unknown>` — opaque bag passed to workers.
+ *   Known recognized keys: `prompt` (string), `agent` (agent name override),
+ *   `use_worktree: true` (opt-in worktree isolation per B4-WP1).
  */
 export interface DAGNodeConfig {
   /** 节点唯一标识 */
@@ -83,6 +108,9 @@ export interface DAGNodeConfig {
 
 /**
  * DAG 工作流配置
+ *
+ * See `DAGNodeConfig` JSDoc above for the "canonical source of truth" contract
+ * and field-level semantics that apply equally at the workflow level.
  */
 export interface DAGConfig {
   /** 工作流名称（用于显示） */

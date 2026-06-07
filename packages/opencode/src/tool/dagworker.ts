@@ -28,6 +28,30 @@ import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession, ReplanPatch } from "
 import { RequiredNodesValidator } from "../dag/session/required-nodes-validator"
 import type { PromptOps } from "@/session/prompt-ops"
 
+/**
+ * worker_type resolution
+ *
+ * The `agent.get(node.config.worker_type)` call in
+ * `workflow-engine.ts:spawnReadyNode` resolves the agent by name from the
+ * `Agent.Service` registry.
+ *
+ * Built-in agents (always available): `build`, `plan`, `general`, `explore`,
+ * `scout`.
+ *
+ * Many documented examples (USER_GUIDE.md, dagworker-reference.md,
+ * dag-worker.txt) use `implement`, `verify`, `review`, `archgate`, etc.
+ * These are NOT built-in — they are **user-defined custom agents** that must
+ * be configured via opencode.json / opencode.jsonc:
+ *   `{ "agents": { "implement": {...}, "verify": {...} } }`
+ *
+ * If the LLM constructs a DAG using `worker_type: "implement"` without the
+ * user having configured a custom `implement` agent, the spawn will fail at
+ * runtime with an `agent.get()` error.
+ *
+ * When constructing DAGs programmatically or via LLM, always verify that
+ * `worker_type` is either a built-in or a user-configured custom agent
+ * before calling `dagworker start`.
+ */
 const id = "dagworker"
 
 export const Parameters = Schema.Struct({

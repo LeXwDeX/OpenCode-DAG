@@ -27,6 +27,29 @@ import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
 
 /**
+ * Dual-Path Architecture
+ *
+ * The DAG module uses an explicit "Core vs Session" dual-path design
+ * (documented in ARCHITECTURE.md §8).
+ *
+ * This file (`workflow-engine.ts`) is the **Session path** — the current
+ * production runtime that orchestrates DAG execution via the SQLite-backed
+ * `DAGSessionService`.
+ *
+ * The **Core path** (`state-machine/`, `scheduler/`, `group-manager/`) is
+ * deliberately isolated from this file. It is NOT dead code; it serves as a
+ * capability reservoir for future integration (shadow execution, tool path,
+ * dry-run, richer transitions like FAILED→RUNNING retry).
+ *
+ * Integration between the two paths is intentionally avoided to preserve
+ * testability of each independently (see ARCHITECTURE.md:281-282, decision D-PLAN).
+ *
+ * If you find yourself tempted to call `NodeStateMachine`, `Scheduler`, or
+ * `GroupManager` from here — STOP. That breaks the dual-path design.
+ * File a design review first.
+ */
+
+/**
  * Workflow Status 快照接口
  * 
  * 命名为 Snapshot 以避免与 state-machine/types.ts 的 enum WorkflowStatus 冲突
