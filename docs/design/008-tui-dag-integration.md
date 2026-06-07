@@ -250,12 +250,12 @@ src/cli/cmd/tui/routes/
 - name: analyze
   status: completed
   duration: 12.5s
-  depends_on: []
+  dependencies: []
   
 - name: design
   status: running
   duration: 8.2s
-  depends_on: [analyze]
+  dependencies: [analyze]
 
 ## Edges
 - from: analyze
@@ -277,7 +277,7 @@ interface DAGNode {
   name: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
   duration?: number; // 秒
-  depends_on: string[];
+  dependencies: string[];
 }
 
 interface DAGEdge {
@@ -317,7 +317,7 @@ class DAGLanguageParser {
   private validate(ast: unknown): { error?: string } {
     // 验证:
     // 1. 节点名唯一
-    // 2. depends_on 引用的节点存在
+    // 2. dependencies 引用的节点存在
     // 3. 状态合法
     // 4. 无循环依赖
   }
@@ -533,7 +533,7 @@ function DAGNodeDetail(props: { node: DAGNode }) {
       <box marginTop={1}>
         <text>Status: <text color={theme.success}>{props.node.status}</text></text>
         <text>Duration: {props.node.duration?.toFixed(2)}s</text>
-        <text>Depends on: {props.node.depends_on.join(', ')}</text>
+        <text>Depends on: {props.node.dependencies.join(', ')}</text>
       </box>
 
       <box marginTop={2}>

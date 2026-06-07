@@ -27,7 +27,7 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    DAG 工作流引擎                             │
-│         (YAML 配置 → 任务图谱 → 执行调度)                     │
+│         (JSON 配置 → 任务图谱 → 执行调度)                     │
 └─────────────────────────────────────────────────────────────┘
                             ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -123,7 +123,7 @@ DAG 工作流引擎是 opencode 的核心扩展模块，实现了基于有向无
 
 ```
 1. 工作流创建
-   ├─ 解析 YAML 配置
+   ├─ 解析 JSON 配置
    ├─ State Machine 初始化状态（CREATED）
    ├─ Group Manager 构建 DAG 拓扑
    └─ 检查循环依赖
@@ -207,43 +207,38 @@ step-a              │
 
 **配置示例**:
 
-```yaml
-name: example-workflow
-description: 示例工作流
-
-system:
-  sandbox:
-    type: git_worktree
-    base_dir: ".task_state"
-    cleanup_on_complete: true
-  default_merge_strategy: squash
-
-branches:
-  - name: main
-    nodes:
-      - type: required
-        name: setup
-        agent: implement
-        task: "初始化项目"
-        
-      - type: required
-        name: build
-        agent: implement
-        task: "构建"
-        depends_on: [setup]
-        
-      - type: required
-        name: test
-        agent: implement
-        task: "测试"
-        depends_on: [build]
-
-constraints:
-  max_nodes: 20
-  max_concurrency: 3
-  node_timeout_sec: 300
-  max_pushes: 3
-  max_fallback_chain: 3
+```json
+{
+  "name": "example-workflow",
+  "description": "示例工作流",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "setup",
+      "name": "Setup",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "初始化项目" }
+    },
+    {
+      "id": "build",
+      "name": "Build",
+      "dependencies": ["setup"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "构建" }
+    },
+    {
+      "id": "test",
+      "name": "Test",
+      "dependencies": ["build"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "测试" }
+    }
+  ]
+}
 ```
 
 ---
@@ -271,7 +266,7 @@ workflow_state: 工作流状态
 ├─ id: 工作流唯一标识
 ├─ name: 工作流名称
 ├─ status: 当前状态 (CREATED/RUNNING/PAUSED/COMPLETED/FAILED)
-├─ dag_config: DAG YAML 配置
+├─ dag_config: DAG JSON 配置
 ├─ current_branch: 当前执行分支
 └─ execution_context: 执行上下文
 
@@ -302,7 +297,7 @@ worktree_info: Worktree 信息
 ### 数据流向
 
 ```
-YAML 配置 → YAML 解析器 → DAG 结构
+JSON 配置 → JSON 解析器 → DAG 结构
    ↓
 Group Manager: 验证并构建依赖图
    ↓
@@ -435,7 +430,7 @@ await worktreeManager.remove(workflowId)
 
 ### 配置驱动
 
-所有行为都可以通过 YAML 配置或 API 参数自定义：
+所有行为都可以通过 JSON 配置或 API 参数自定义：
 - 并发度
 - 超时阈值
 - Fallback 策略

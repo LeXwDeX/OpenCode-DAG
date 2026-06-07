@@ -14,7 +14,7 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 - [配置文件参考](#配置文件参考)
 - [工作流执行模式](#工作流执行模式)
 - [节点配置详解](#节点配置详解)
-- [错误处理与 Fallback](#错误处理与-fallback)
+- [错误处理与重试](#错误处理与重试)
 - [监控与调试](#监控与调试)
 - [常见模式](#常见模式)
 
@@ -26,7 +26,7 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 DAG 工作流将任务编排建模为有向无环图：
 - **节点（Node）**：一个独立的任务单元（如 "实现功能"、"运行测试"）
-- **边（Edge）**：节点之间的依赖关系（`depends_on`）
+- **边（Edge）**：节点之间的依赖关系（`dependencies`）
 - **工作流（Workflow）**：一组节点和边的完整定义
 
 ```
@@ -62,52 +62,56 @@ DAG 工作流将任务编排建模为有向无环图：
 
 ## 配置文件参考
 
-DAG 工作流通过 YAML 配置文件定义：
+> **Canonical schema**: DAG 工作流配置的唯一定义来源是 `DAGConfig` / `DAGNodeConfig` 接口（`packages/opencode/src/dag/session/types.ts`）。本文档所有示例均使用该 JSON schema。
 
-```yaml
-# 基础信息
-name: my-workflow                # 工作流名称
-description: 描述工作流的目的     # 可选
+DAG 工作流通过 JSON 配置文件定义：
 
-# 系统配置
-system:
-  sandbox:
-    type: git_worktree           # 隔离模式: git_worktree | none
-    base_dir: ".task_state"      # worktree 存储位置
-    cleanup_on_complete: true    # 完成后自动清理
-    keep_on_failure: true        # 失败时保留（便于调试）
-  default_merge_strategy: squash # 合并策略: squash | merge | rebase
-
-# 分支与节点定义
-branches:
-  - name: main                   # 分支名称
-    nodes:
-      - type: required           # 节点类型
-        name: node-name          # 节点名称（全局唯一）
-        agent: implement         # 使用的 agent 类型
-        task: "节点任务的描述"    # 具体任务
-        depends_on: []           # 依赖的上游节点
-
-# 全局约束
-constraints:
-  max_nodes: 20                  # 最大节点数
-  max_concurrency: 3             # 最大并发数
-  node_timeout_sec: 600          # 节点超时（秒）
-  max_pushes: 3                  # 节点最大推送次数
-  max_fallback_chain: 3          # 最大 fallback 链深度
-  disable_worktree_isolation: false  # 是否禁用 worktree（不推荐）
+```json
+{
+  "name": "my-workflow",
+  "description": "描述工作流的目的",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "node-name",
+      "name": "节点显示名称",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": {
+        "agent": "implement",
+        "prompt": "节点任务的描述"
+      }
+    }
+  ]
+}
 ```
 
-### 约束参数详解
+### 字段说明
 
-| 参数 | 默认值 | 范围 | 说明 |
-|------|--------|------|------|
-| `max_nodes` | 20 | 1-50 | 单个工作流最大节点数量 |
-| `max_concurrency` | 3 | 1-10 | 同时执行的最大节点数量 |
-| `node_timeout_sec` | 600 | 60-3600 | 单节点最大执行时间 |
-| `max_pushes` | 3 | 1-10 | 节点失败后 push 重跑的最大次数 |
-| `max_fallback_chain` | 3 | 0-5 | fallback 链最大深度 |
-| `disable_worktree_isolation` | false | true/false | 禁用 worktree（测试环境可用） |
+#### DAGConfig（工作流级别）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `name` | string | 是 | 工作流名称（用于显示） |
+| `description` | string | 否 | 工作流描述 |
+| `nodes` | DAGNodeConfig[] | 是 | 所有节点定义（1-20 个） |
+| `max_concurrency` | number | 是 | 最大并发 worker 数（1-10） |
+| `timeout_ms` | number | 否 | 工作流级别的超时（毫秒） |
+
+#### DAGNodeConfig（节点级别）
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `id` | string | 是 | 节点唯一标识（不允许包含 `::`） |
+| `name` | string | 是 | 节点显示名称 |
+| `description` | string | 否 | 节点描述 |
+| `dependencies` | string[] | 是 | 依赖的节点 ID 列表 |
+| `required` | boolean | 是 | 是否为必需节点 |
+| `timeout_ms` | number | 否 | 节点超时（毫秒） |
+| `retry` | object | 否 | 重试策略 `{ max_attempts, delay_ms }` |
+| `worker_type` | string | 是 | Worker 类型（路由到具体 agent） |
+| `worker_config` | object | 是 | Worker 配置 `{ agent, prompt, ... }` |
 
 ---
 
@@ -117,21 +121,37 @@ constraints:
 
 所有节点按依赖顺序依次执行：
 
-```yaml
-branches:
-  - name: main
-    nodes:
-      - name: setup
-        agent: implement
-        task: "初始化项目"
-      - name: build
-        agent: implement
-        task: "构建项目"
-        depends_on: [setup]
-      - name: test
-        agent: implement
-        task: "运行测试"
-        depends_on: [build]
+```json
+{
+  "name": "serial-pipeline",
+  "max_concurrency": 1,
+  "nodes": [
+    {
+      "id": "setup",
+      "name": "Setup",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "初始化项目" }
+    },
+    {
+      "id": "build",
+      "name": "Build",
+      "dependencies": ["setup"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "构建项目" }
+    },
+    {
+      "id": "test",
+      "name": "Test",
+      "dependencies": ["build"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "运行测试" }
+    }
+  ]
+}
 ```
 
 执行顺序: `setup → build → test`
@@ -140,25 +160,45 @@ branches:
 
 无依赖关系的节点自动并发：
 
-```yaml
-branches:
-  - name: main
-    nodes:
-      - name: lint
-        agent: implement
-        task: "代码检查"
-        depends_on: [setup]
-      - name: unit-test
-        agent: implement
-        task: "单元测试"
-        depends_on: [setup]
-      - name: e2e-test
-        agent: implement
-        task: "端到端测试"
-        depends_on: [setup]
-      - name: setup
-        agent: implement
-        task: "环境准备"
+```json
+{
+  "name": "parallel-pipeline",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "setup",
+      "name": "Setup",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "环境准备" }
+    },
+    {
+      "id": "lint",
+      "name": "Lint",
+      "dependencies": ["setup"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "代码检查" }
+    },
+    {
+      "id": "unit-test",
+      "name": "Unit Test",
+      "dependencies": ["setup"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "单元测试" }
+    },
+    {
+      "id": "e2e-test",
+      "name": "E2E Test",
+      "dependencies": ["setup"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "端到端测试" }
+    }
+  ]
+}
 ```
 
 执行: `setup → [lint, unit-test, e2e-test] 并行`
@@ -167,45 +207,76 @@ branches:
 
 汇合模式 — 多个并行分支汇总到一个节点：
 
-```yaml
-branches:
-  - name: main
-    nodes:
-      - name: analyze
-        agent: implement
-        task: "分析需求"
-      - name: frontend
-        agent: implement
-        task: "前端实现"
-        depends_on: [analyze]
-      - name: backend
-        agent: implement
-        task: "后端实现"
-        depends_on: [analyze]
-      - name: integration
-        agent: implement
-        task: "集成测试"
-        depends_on: [frontend, backend]
+```json
+{
+  "name": "diamond-dag",
+  "max_concurrency": 2,
+  "nodes": [
+    {
+      "id": "analyze",
+      "name": "Analyze",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "分析需求" }
+    },
+    {
+      "id": "frontend",
+      "name": "Frontend",
+      "dependencies": ["analyze"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "前端实现" }
+    },
+    {
+      "id": "backend",
+      "name": "Backend",
+      "dependencies": ["analyze"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "后端实现" }
+    },
+    {
+      "id": "integration",
+      "name": "Integration",
+      "dependencies": ["frontend", "backend"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "集成测试" }
+    }
+  ]
+}
 ```
 
 执行: `analyze → [frontend, backend] 并行 → integration`
 
-### 4. 多分支
+### 4. 多分支独立执行
 
-跨分支的独立执行线：
+无依赖关系的节点完全并行：
 
-```yaml
-branches:
-  - name: feature-a
-    nodes:
-      - name: impl-a
-        agent: implement
-        task: "实现功能 A"
-  - name: feature-b
-    nodes:
-      - name: impl-b
-        agent: implement
-        task: "实现功能 B"
+```json
+{
+  "name": "multi-branch",
+  "max_concurrency": 2,
+  "nodes": [
+    {
+      "id": "impl-a",
+      "name": "Feature A",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "实现功能 A" }
+    },
+    {
+      "id": "impl-b",
+      "name": "Feature B",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "实现功能 B" }
+    }
+  ]
+}
 ```
 
 执行: `[impl-a, impl-b] 完全并行`
@@ -214,99 +285,83 @@ branches:
 
 ## 节点配置详解
 
-### 节点类型
+### 必需与可选节点
 
-| 类型 | 说明 | 必需 |
+| `required` 值 | 说明 | 失败影响 |
 |------|------|------|
-| `required` | 必需节点，失败即工作流失败 | 是 |
-| `optional` | 可选节点，失败可跳过 | 否 |
-| `shadow` | 影子节点，用于诊断/审查 | 否 |
+| `true` | 必需节点，失败即工作流失败 | 工作流标记为 `failed` |
+| `false` | 可选节点，失败可跳过 | 记录 violation 但不阻塞工作流 |
 
 ### 完整节点配置
 
-```yaml
-- type: required              # 节点类型
-  name: implement-module      # 唯一标识（小写、连字符）
-  agent: implement            # agent 类型
-  task: |                     # 任务描述（支持多行）
-    实现 XX 模块:
-    - 创建 src/xx.ts
-    - 添加对应测试
-    - 确保类型检查通过
-  depends_on: [skeleton, tdd] # 依赖节点
-  timeout_sec: 300            # 超时时间（覆盖全局）
-  max_retries: 2              # 失败重试次数
-  skip_on_failure: false      # 上游失败时是否跳过
-  fallback:                   # fallback 配置
-    node: fallback-handler
-    trigger: on_error
+```json
+{
+  "id": "implement-module",
+  "name": "实现模块",
+  "description": "实现 XX 模块的完整任务",
+  "dependencies": ["skeleton", "tdd"],
+  "required": true,
+  "timeout_ms": 300000,
+  "retry": { "max_attempts": 2, "delay_ms": 1000 },
+  "worker_type": "implement",
+  "worker_config": {
+    "agent": "implement",
+    "prompt": "实现 XX 模块:\n- 创建 src/xx.ts\n- 添加对应测试\n- 确保类型检查通过"
+  }
+}
 ```
 
-### Shadow 节点
+### 字段映射参考
 
-Shadow 节点用于非侵入式的诊断和审查，不影响主流程：
-
-```yaml
-- type: shadow
-  name: code-review
-  agent: review
-  task: "审查已实现代码的质量"
-  depends_on: [implement-module]
-  fallback:
-    node: rerun-implement
-    trigger: on_error
-    condition: "review verdict is FAIL"
-```
-
-**Shadow 节点特点**：
-- 不参与暂停传播
-- 不产生 `skipped` 状态
-- decision 决定被诊断节点的行为
+| 含义 | JSON 字段 | 说明 |
+|------|-----------|------|
+| 节点标识 | `id` | 唯一标识（小写、连字符，不含 `::`） |
+| 显示名称 | `name` | 用户可读名称 |
+| 依赖关系 | `dependencies` | 上游节点 ID 列表（bare `cfg.id`，无 namespace） |
+| agent 类型 | `worker_type` | 路由到具体 agent（须在 registry 中注册） |
+| 任务描述 | `worker_config.prompt` | 具体任务指令 |
+| 超时时间 | `timeout_ms` | 毫秒为单位 |
+| 重试策略 | `retry` | `{ max_attempts, delay_ms }` |
 
 ---
 
-## 错误处理与 Fallback
+## 错误处理与重试
 
-### Fallback 机制
+### 重试机制
 
-当节点失败时，可配置 fallback 策略：
+节点可配置自动重试：
 
-```yaml
-- name: risky-task
-  agent: implement
-  task: "执行可能失败的任务"
-  max_retries: 3               # 重试 3 次
-  fallback:
-    node: safe-alternative     # fallback 节点名
-    trigger: on_error          # 触发条件: always | on_error | on_timeout | custom
-    condition: "error contains 'timeout'"  # 可选条件表达式
+```json
+{
+  "id": "risky-task",
+  "name": "Risky Task",
+  "dependencies": [],
+  "required": true,
+  "retry": {
+    "max_attempts": 3,
+    "delay_ms": 2000
+  },
+  "worker_type": "implement",
+  "worker_config": { "prompt": "执行可能失败的任务" }
+}
 ```
 
-### Fallback 触发条件
-
-| trigger | 说明 |
-|---------|------|
-| `on_error` | 节点执行失败时触发 |
-| `on_timeout` | 节点超时时触发 |
-| `always` | 无论结果如何都触发 |
-| `custom` | 基于 condition 表达式判断 |
-
-### Push 机制
-
-节点失败后可通过 push 机制重跑：
-
-```
-节点失败 → push_count < max_pushes → push 重跑 → 成功/再次失败
-                  ↓ 达到上限
-              fallback 链
-```
+重试规则：
+- `max_attempts: 3` 表示最多尝试 3 次（含首次）
+- `delay_ms: 2000` 表示每次重试间隔 2000 毫秒
+- 重试耗尽后节点标记为 `failed`
 
 ### 失败传播
 
-当必需节点失败且 fallback 链耗尽时：
+当必需节点（`required: true`）失败时：
 1. 节点状态 → `failed`
-2. 下游依赖节点 → `skipped`（如果 `skip_on_failure: true`）
-3. 工作流状态 → `failed`
+2. 工作流状态 → `failed`
+3. 下游依赖节点不会被调度
+
+当可选节点（`required: false`）失败时：
+1. 节点状态 → `failed`
+2. 记录 `execution_failed` violation
+3. 工作流仍可继续（只要所有 required 节点完成）
 
 ---
 
@@ -387,10 +442,10 @@ violations.forEach(v => {
 
 | 现象 | 可能原因 | 排查步骤 |
 |------|---------|---------|
-| 节点超时 | 任务过于复杂 | 检查 `timeout_sec`，拆分任务 |
+| 节点超时 | 任务过于复杂 | 检查 `timeout_ms`，拆分任务 |
 | Worktree 创建失败 | Git 仓库状态异常 | 检查磁盘空间、Git 权限 |
 | 状态恢复失败 | 数据库连接问题 | 检查 SQLite 文件完整性 |
-| 循环依赖 | `depends_on` 配置错误 | 使用 `topologicalSort()` 检测 |
+| 循环依赖 | `dependencies` 配置错误 | 使用 `topologicalSort()` 检测 |
 | 节点卡在 running | agent 无响应 | 检查 agent 进程是否正常 |
 
 ---
@@ -399,93 +454,156 @@ violations.forEach(v => {
 
 ### 模式 1: CI/CD 流水线
 
-```yaml
-name: ci-pipeline
-branches:
-  - name: main
-    nodes:
-      - name: checkout
-        agent: implement
-        task: "拉取代码"
-      - name: install
-        agent: implement
-        task: "安装依赖"
-        depends_on: [checkout]
-      - name: lint
-        agent: implement
-        task: "代码检查"
-        depends_on: [install]
-      - name: unit-test
-        agent: implement
-        task: "单元测试"
-        depends_on: [install]
-      - name: build
-        agent: implement
-        task: "构建产物"
-        depends_on: [lint, unit-test]
-      - name: deploy
-        agent: implement
-        task: "部署到生产"
-        depends_on: [build]
-        timeout_sec: 1800
+```json
+{
+  "name": "ci-pipeline",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "checkout",
+      "name": "Checkout",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "拉取代码" }
+    },
+    {
+      "id": "install",
+      "name": "Install",
+      "dependencies": ["checkout"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "安装依赖" }
+    },
+    {
+      "id": "lint",
+      "name": "Lint",
+      "dependencies": ["install"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "代码检查" }
+    },
+    {
+      "id": "unit-test",
+      "name": "Unit Test",
+      "dependencies": ["install"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "单元测试" }
+    },
+    {
+      "id": "build",
+      "name": "Build",
+      "dependencies": ["lint", "unit-test"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "构建产物" }
+    },
+    {
+      "id": "deploy",
+      "name": "Deploy",
+      "dependencies": ["build"],
+      "required": true,
+      "timeout_ms": 1800000,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "部署到生产" }
+    }
+  ]
+}
 ```
 
 ### 模式 2: 多 agent 协作开发
 
-```yaml
-name: collaborative-dev
-branches:
-  - name: backend
-    nodes:
-      - name: api-design
-        agent: architect
-        task: "设计 API 接口"
-      - name: api-impl
-        agent: implement
-        task: "实现 API"
-        depends_on: [api-design]
-  - name: frontend
-    nodes:
-      - name: ui-design
-        agent: architect
-        task: "设计 UI 组件"
-      - name: ui-impl
-        agent: implement
-        task: "实现 UI"
-        depends_on: [ui-design]
-  - name: integration
-    nodes:
-      - name: e2e-test
-        agent: implement
-        task: "端到端集成测试"
-        depends_on: [api-impl, ui-impl]
+```json
+{
+  "name": "collaborative-dev",
+  "max_concurrency": 3,
+  "nodes": [
+    {
+      "id": "api-design",
+      "name": "API Design",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "architect",
+      "worker_config": { "prompt": "设计 API 接口" }
+    },
+    {
+      "id": "api-impl",
+      "name": "API Implementation",
+      "dependencies": ["api-design"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "实现 API" }
+    },
+    {
+      "id": "ui-design",
+      "name": "UI Design",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "architect",
+      "worker_config": { "prompt": "设计 UI 组件" }
+    },
+    {
+      "id": "ui-impl",
+      "name": "UI Implementation",
+      "dependencies": ["ui-design"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "实现 UI" }
+    },
+    {
+      "id": "e2e-test",
+      "name": "E2E Integration Test",
+      "dependencies": ["api-impl", "ui-impl"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "端到端集成测试" }
+    }
+  ]
+}
 ```
 
 ### 模式 3: 带审查的质量门禁
 
-```yaml
-name: quality-gated
-branches:
-  - name: main
-    nodes:
-      - name: implement
-        agent: implement
-        task: "实现功能"
-      - name: verify
-        agent: implement
-        task: "运行验证"
-        depends_on: [implement]
-      - name: review
-        type: shadow
-        agent: review
-        task: "代码审查"
-        depends_on: [verify]
-        fallback:
-          node: implement        # 审查不通过 → 重新实现
-          trigger: custom
-          condition: "verdict == FAIL"
-      - name: finalize
-        agent: implement
-        task: "最终确认"
-        depends_on: [review]
+```json
+{
+  "name": "quality-gated",
+  "max_concurrency": 2,
+  "nodes": [
+    {
+      "id": "implement",
+      "name": "Implement",
+      "dependencies": [],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "实现功能" }
+    },
+    {
+      "id": "verify",
+      "name": "Verify",
+      "dependencies": ["implement"],
+      "required": true,
+      "worker_type": "verify",
+      "worker_config": { "prompt": "运行验证" }
+    },
+    {
+      "id": "review",
+      "name": "Code Review",
+      "dependencies": ["verify"],
+      "required": false,
+      "worker_type": "review",
+      "worker_config": { "prompt": "代码审查" }
+    },
+    {
+      "id": "finalize",
+      "name": "Finalize",
+      "dependencies": ["verify"],
+      "required": true,
+      "worker_type": "implement",
+      "worker_config": { "prompt": "最终确认" }
+    }
+  ]
+}
 ```
+
+`review` 为可选节点（`required: false`），与 `finalize` 并行执行。即使审查失败，工作流仍可完成。

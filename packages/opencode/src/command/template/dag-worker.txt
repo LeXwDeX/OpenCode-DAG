@@ -6,7 +6,7 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 DAG 工作流配置的创建、调整、校验命令。
 
-`/dag-worker` 命令提供工作流配置的声明式管理（YAML 配置作为外部可读格式，内部调用 dagworker 工具时转为 JSON 入参）。遵守 DAG 铁律四原则（状态机不可绕过、终态不可逆、事件必广播、持久化优先）——详见 [AGENTS.md](../../dag/AGENTS.md)。
+`/dag-worker` 命令提供工作流配置的声明式管理（JSON 配置，直接传入 dagworker 工具）。遵守 DAG 铁律四原则（状态机不可绕过、终态不可逆、事件必广播、持久化优先）——详见 [AGENTS.md](../../dag/AGENTS.md)。
 
 用户提供的操作或约束（honoring these）:
 $ARGUMENTS
@@ -35,7 +35,7 @@ $ARGUMENTS
 5. 写入更新后的配置
 
 ### validate 操作
-1. 读取指定路径的配置（YAML 或 JSON）
+1. 读取指定路径的配置（JSON）
 2. 执行完整验证：
    - **node.id 唯一性**：同 workflow 内不可重复（RequiredNodesValidator 通过 nodeIds 数组隐式覆盖；replan 路径通过 cfgIdSet 显式检查 — workflow-engine.ts:206）
    - **dependencies 引用存在性**：每个 dependency id 必须指向已定义的 node.id（validateReplanPostConfig — workflow-engine.ts:207-211）
@@ -87,7 +87,7 @@ $ARGUMENTS
 - 符合 DAGConfig / DAGNodeConfig schema（见 types.ts:60-98）
 - 使用清晰的命名（kebab-case for node.id）
 - 包含必要的注释说明关键决策
-- YAML 格式规范（缩进、对齐）——作为辅助可读格式，喂给 dagworker tool 时转 JSON
+- JSON 格式规范——符合 DAGConfig / DAGNodeConfig schema，直接传入 dagworker tool
 
 排除：
 - 违反 schema 约束的配置（循环依赖、缺失引用、非法 max_concurrency 等）
@@ -98,10 +98,8 @@ $ARGUMENTS
 
 以下流程在测试中被验证为绝对非法，任何情况下都不能创建。
 
-YAML 示例基于真实 `DAGConfig` / `DAGNodeConfig` schema（types.ts:60-98）。
-喂给 dagworker tool 时，将 YAML 转为 JSON 字符串传入 `workflow` 参数（dagworker.ts:43-44）。
-
-**YAML is illustrative only**; runtime `dagworker start` takes a JSON string conforming to `DAGConfig` / `DAGNodeConfig`（`src/dag/session/types.ts`）。使用前必须将 YAML 转换为等效 JSON。
+示例基于真实 `DAGConfig` / `DAGNodeConfig` schema（types.ts:60-98）。
+喂给 dagworker tool 时，以 JSON 字符串传入 `workflow` 参数（dagworker.ts:43-44）。
 
 ### Worker Type Resolution
 
