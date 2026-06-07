@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.0"
+OC_VERSION="1.3.1"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -26,12 +26,26 @@ OC_ENV_VARS=(
     "OPENCODE_EXPERIMENTAL_SCOUT=true"
 )
 
+_resolve_oc_script_dir() {
+    local src="${BASH_SOURCE[0]:-$0}"
+    while [ -L "$src" ]; do
+        local dir link
+        dir=$(cd -P "$(dirname "$src")" && pwd)
+        link=$(readlink "$src")
+        case "$link" in
+            /*) src="$link" ;;
+            *)  src="$dir/$link" ;;
+        esac
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+
 # 本地包目录候选（按顺序尝试）：
 #   1) $OC_LOCAL_DIR  显式指定
 #   2) oc 脚本所在目录（仓内 packages/opencode/ 直接执行场景）
 #   3) ~/.cache/oc    在线下载产物缓存
 # 目录里需含 VERSION 文件（BUNDLED_VERSION + SHA256_*）和对应平台压缩包
-OC_SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]:-$0}")")" && pwd)"
+OC_SCRIPT_DIR="$(_resolve_oc_script_dir)"
 LOCAL_DIR_CANDIDATES=(
     "${OC_LOCAL_DIR:-}"
     "$OC_SCRIPT_DIR"
@@ -69,6 +83,37 @@ _run_with_timeout() {
         wait "$_killer" 2>/dev/null || true
         return "$_rc"
     fi
+}
+
+_version_gt() {
+    local a="${1#v}" b="${2#v}"
+    local IFS=.
+    local -a av bv
+    read -r -a av <<< "$a"
+    read -r -a bv <<< "$b"
+    local i ai bi
+    for i in 0 1 2; do
+        ai=${av[$i]:-0}
+        bi=${bv[$i]:-0}
+        ai=${ai%%[^0-9]*}
+        bi=${bi%%[^0-9]*}
+        ai=${ai:-0}
+        bi=${bi:-0}
+        if [ "$ai" -gt "$bi" ]; then return 0; fi
+        if [ "$ai" -lt "$bi" ]; then return 1; fi
+    done
+    return 1
+}
+
+_find_bun_cache_package() {
+    local bare_name="$1"
+    local cache_dir="${HOME}/.bun/install/cache"
+    [ -d "$cache_dir" ] || return 1
+    local pattern="${bare_name}@*"
+    case "$bare_name" in
+        */*) pattern="$(basename "$bare_name")@*" ;;
+    esac
+    find "$cache_dir" -type d -name "$pattern" 2>/dev/null | sort | tail -1
 }
 
 need() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
@@ -408,9 +453,7 @@ self_update() {
         return 0
     fi
 
-    local newer
-    newer=$(printf '%s\n%s' "$remote_version" "$OC_VERSION" | sort -V | tail -1)
-    if [ "$newer" = "$OC_VERSION" ]; then
+    if _version_gt "$OC_VERSION" "$remote_version"; then
         rm -f "$tmp_file"
         ok "本地版本 (v${OC_VERSION}) 比远程 (v${remote_version}) 更新，无需更新"
         return 0
@@ -419,7 +462,7 @@ self_update() {
     info "发现新版本: v${OC_VERSION} → v${remote_version}"
 
     local self_path
-    self_path=$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || realpath "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")
+    self_path="$(_resolve_oc_script_dir)/$(basename "${BASH_SOURCE[0]}")"
 
     if [ ! -w "$self_path" ]; then
         rm -f "$tmp_file"
@@ -486,17 +529,18 @@ agents_install_or_update() {
 
 # ---------- Config 管理 ----------
 
-# config_apply_defaults — 应用基础配置 + 智能 compaction
+# config_apply_defaults — 应用基础配置 + 智能 compaction + 已有模型配置纠错
 # 逻辑：
 #   1. 确保 lsp=true, autoupdate=false, default_agent="main"
 #   2. Compaction: 扫描 provider.*.models，找到 deepseek-v4-pro 或 flash → 设置 compaction
 #      已有 compaction 则不覆盖
+#   3. 模型纠错：仅修正已存在模型；不添加/删除/重命名模型
 config_apply_defaults() {
     if ! command -v python3 &>/dev/null; then
         die "python3 未安装"
     fi
     python3 - "$OC_CONFIG_FILE" <<'PYEOF'
-import json, sys
+import copy, json, sys
 
 config_file = sys.argv[1]
 
@@ -567,6 +611,118 @@ if compaction_model is None:
 else:
     print(f"  (compaction 已配置: {compaction_model})")
 
+# 3. 模型配置纠错（只改已存在模型，不新增/删除模型）
+# 通道范围：API 原厂模式 (@ai-sdk/openai / @ai-sdk/anthropic / @ai-sdk/google)
+#          GitHub Copilot (@ai-sdk/github-copilot 或 provider id=github-copilot*)
+API_NATIVE_MODEL_TEMPLATES = {
+    "@ai-sdk/openai": {
+        "gpt-5.5": {
+            "name": "GPT-5.5",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "limit": {"context": 1000000, "output": 128000},
+            "cost": {"input": 5, "output": 30, "cache_read": 0.5},
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "interleaved": {"field": "reasoning_content"},
+            "variants": {
+                "none": {"reasoningEffort": "none"},
+                "low": {"reasoningEffort": "low"},
+                "medium": {"reasoningEffort": "medium"},
+                "high": {"reasoningEffort": "high"},
+                "xhigh": {"reasoningEffort": "xhigh"},
+            },
+        },
+    },
+    "@ai-sdk/anthropic": {
+        "claude-opus-4-6": {
+            "name": "Claude Opus 4.6",
+            "limit": {"context": 1000000, "output": 128000},
+            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+        },
+        "claude-opus-4-8": {
+            "name": "Claude Opus 4.8",
+            "limit": {"context": 1000000, "output": 128000},
+            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+        },
+    },
+}
+
+COPILOT_MODEL_TEMPLATES = {
+    "claude-opus-4.6": {
+        "name": "Claude Opus 4.6",
+        "family": "claude-opus",
+        "release_date": "2026-02-05",
+        "status": "active",
+        "reasoning": True,
+        "tool_call": True,
+        "attachment": True,
+        "temperature": True,
+        "limit": {"context": 144000, "input": 128000, "output": 64000},
+        "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "variants": {
+            "low": {"reasoningEffort": "low"},
+            "medium": {"reasoningEffort": "medium"},
+            "high": {"reasoningEffort": "high"},
+        },
+    },
+    "claude-opus-4.8": {
+        "name": "Claude Opus 4.8",
+        "family": "claude-opus",
+        "status": "active",
+        "reasoning": True,
+        "tool_call": True,
+        "attachment": True,
+        "temperature": True,
+        "limit": {"context": 200000, "output": 64000},
+        "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "variants": {"medium": {"reasoningEffort": "medium"}},
+    },
+    "gpt-5.5": {
+        "name": "GPT-5.5",
+        "family": "gpt",
+        "release_date": "2026-04-22",
+        "status": "active",
+        "reasoning": True,
+        "tool_call": True,
+        "attachment": False,
+        "temperature": False,
+        "limit": {"context": 400000, "input": 272000, "output": 128000},
+        "cost": {"input": 5, "output": 30, "cache_read": 0.5},
+        "modalities": {"input": ["text", "image"], "output": ["text"]},
+        "variants": {
+            "none": {"reasoningEffort": "none"},
+            "low": {"reasoningEffort": "low"},
+            "medium": {"reasoningEffort": "medium"},
+            "high": {"reasoningEffort": "high"},
+            "xhigh": {"reasoningEffort": "xhigh"},
+        },
+    },
+}
+
+def apply_model_template(provider_name, model_key, model, template):
+    for field, expected in template.items():
+        if model.get(field) != expected:
+            model[field] = copy.deepcopy(expected)
+            changes.append(f"  ~ provider.{provider_name}.models.{model_key}.{field}: 已按模板纠正")
+
+for provider_name, provider in cfg.get("provider", {}).items():
+    if not isinstance(provider, dict):
+        continue
+    models = provider.get("models", {})
+    if not isinstance(models, dict):
+        continue
+    provider_npm = provider.get("npm", "")
+    is_copilot = provider_name.startswith("github-copilot") or provider_npm == "@ai-sdk/github-copilot"
+    templates = COPILOT_MODEL_TEMPLATES if is_copilot else API_NATIVE_MODEL_TEMPLATES.get(provider_npm, {})
+    for model_key, model in models.items():
+        if isinstance(model, dict) and model_key in templates:
+            apply_model_template(provider_name, model_key, model, templates[model_key])
+
 # 仅在确有变更时写回，避免无谓的 JSON 格式重排
 if changes:
     with open(config_file, "w", encoding="utf-8") as f:
@@ -607,7 +763,7 @@ env_check_and_inject() {
     local injected=0 skipped=0
     for var_line in "${OC_ENV_VARS[@]}"; do
         local var_name="${var_line%%=*}"
-        if grep -qE "^\s*export\s+${var_name}=" "$rc_file" 2>/dev/null; then
+        if grep -qE "^[[:space:]]*export[[:space:]]+${var_name}=" "$rc_file" 2>/dev/null; then
             info "已存在: export $var_line"
             skipped=$((skipped + 1))
         else
@@ -714,7 +870,7 @@ packages_update_all() {
 
             local bare_name="${pkg_spec%@*}"
             local cached
-            cached=$(find ~/.bun/install/cache -maxdepth 1 -name "${bare_name}@*" -type d 2>/dev/null | sort -V | tail -1)
+            cached=$(_find_bun_cache_package "$bare_name" || true)
             if [ -n "$cached" ]; then
                 ok "$pkg: $(basename "$cached")"
                 pass_count=$((pass_count + 1))
@@ -1168,7 +1324,7 @@ _refresh_bunx_package() {
 
     local bare_name="${pkg_spec%@*}"
     local cached
-    cached=$(find ~/.bun/install/cache -maxdepth 1 -name "${bare_name}@*" -type d 2>/dev/null | head -1)
+    cached=$(_find_bun_cache_package "$bare_name" || true)
     if [ -n "$cached" ]; then
         ok "$name: $(basename "$cached")"
     else
