@@ -476,6 +476,7 @@ export interface Interface {
     sessionType?: "chat" | "workflow" | "workflow_node"
     sourceSessionID?: SessionID
     context?: Info["context"]
+    directory?: string
   }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info, NotFound>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
@@ -708,13 +709,15 @@ const layerBase: Layer.Layer<
       sessionType?: "chat" | "workflow" | "workflow_node"
       sourceSessionID?: SessionID
       context?: Info["context"]
+      directory?: string
     }) {
       const ctx = yield* InstanceState.context
       const workspace = yield* InstanceState.workspaceID
+      const sessionDir = input?.directory ?? ctx.directory
       return yield* createNext({
         parentID: input?.parentID,
-        directory: ctx.directory,
-        path: sessionPath(ctx.worktree, ctx.directory),
+        directory: sessionDir,
+        path: sessionPath(ctx.worktree, sessionDir),
         title: input?.title,
         agent: input?.agent,
         model: input?.model,

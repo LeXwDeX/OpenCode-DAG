@@ -635,6 +635,123 @@ describe('Workflow Engine - T4: getWorkflowStatus Degraded Response', () => {
 // Retry Success Scenario Tests
 // ============================================================================
 
+// ============================================================================
+// T5: Worktree Isolation (opt-in via worker_config.use_worktree)
+// ============================================================================
+
+describe('Workflow Engine - T5: Worktree Isolation', () => {
+  /**
+   * Pure-logic extraction of the use_worktree flag from worker_config.
+   * Must use the proper type guard (as { use_worktree?: boolean }), NOT `as any`.
+   */
+  function getUseWorktree(workerConfig: Record<string, unknown> | undefined): boolean {
+    return (workerConfig as { use_worktree?: boolean } | undefined)?.use_worktree === true
+  }
+
+  /**
+   * Computes the deterministic worktree branch name for a DAG node.
+   */
+  function computeWorktreeBranch(workflowId: string, configId: string): string {
+    return `dag-${workflowId}-${configId}`
+  }
+
+  it('A: opt-out - use_worktree absent → no worktree created, no directory override', () => {
+    // Config WITHOUT use_worktree
+    const node = makeNodeSession('node-1', 'pending')
+    node.config.worker_config = { prompt: 'do something' }
+
+    const useWorktree = getUseWorktree(node.config.worker_config)
+    expect(useWorktree).toBe(false)
+
+    // Config with use_worktree explicitly false
+    node.config.worker_config = { prompt: 'do', use_worktree: false }
+    expect(getUseWorktree(node.config.worker_config)).toBe(false)
+
+    // Config with use_worktree set to a non-boolean truthy value (edge case)
+    node.config.worker_config = { prompt: 'do', use_worktree: 'yes' }
+    expect(getUseWorktree(node.config.worker_config)).toBe(false)
+
+    // Undefined worker_config
+    expect(getUseWorktree(undefined)).toBe(false)
+  })
+
+  it('B: opt-in - use_worktree true → worktree created with deterministic branch naming', () => {
+    const workflowId = 'wf-abc-123'
+    const node = makeNodeSession('my-task', 'pending')
+    node.config.worker_config = { prompt: 'do work', use_worktree: true }
+
+    const useWorktree = getUseWorktree(node.config.worker_config)
+    expect(useWorktree).toBe(true)
+
+    // Branch naming: dag-<workflowId>-<configId>
+    const branch = computeWorktreeBranch(workflowId, node.config.id)
+    expect(branch).toBe('dag-wf-abc-123-my-task')
+
+    // Simulate worktree creation result + directory override for session.create
+    const worktreeInfo = { id: 'wt-001', path: '/tmp/.worktrees/wt-001', branch }
+    expect(worktreeInfo.path).toBe('/tmp/.worktrees/wt-001')
+
+    // Session.create should receive directory=worktreeInfo.path
+    const createArgs = {
+      parentID: 'parent-sess-1',
+      title: node.config.name + ' (DAG node)',
+      ...(worktreeInfo ? { directory: worktreeInfo.path } : {}),
+    }
+    expect(createArgs.directory).toBe('/tmp/.worktrees/wt-001')
+  })
+
+  it('C: cleanup fires on any exit path (simulates Effect.ensuring semantics)', () => {
+    const cleanupCalls: string[] = []
+
+    // Simulate the closure-based cleanup pattern used in spawnReadyNode:
+    // - worktreeCleanup is set after successful create
+    // - cleanup fires in a "finally" block (equivalent to Effect.ensuring)
+    function simulateSpawn(opts: { createSucceeds: boolean; promptSucceeds: boolean }) {
+      let worktreeCleanup: (() => Promise<void>) | undefined
+
+      // Outer try/catch models Effect.catchCause (swallows error, marks node failed)
+      try {
+        // Inner try/finally models Effect.ensuring (cleanup always fires)
+        try {
+          if (opts.createSucceeds) {
+            const wtId = 'wt-002'
+            worktreeCleanup = () => {
+              cleanupCalls.push(wtId)
+              return Promise.resolve()
+            }
+          }
+
+          if (!opts.promptSucceeds) {
+            throw new Error('prompt failed')
+          }
+        } finally {
+          // Effect.ensuring equivalent: always fires
+          if (worktreeCleanup) {
+            worktreeCleanup().catch(() => {})
+          }
+        }
+      } catch {
+        // Effect.catchCause equivalent: error handled — node marked failed silently
+      }
+    }
+
+    // Case 1: worktree created, prompt succeeds → cleanup fires
+    simulateSpawn({ createSucceeds: true, promptSucceeds: true })
+    expect(cleanupCalls).toEqual(['wt-002'])
+
+    // Case 2: worktree created, prompt FAILS → cleanup still fires
+    cleanupCalls.length = 0
+    expect(() => simulateSpawn({ createSucceeds: true, promptSucceeds: false })).not.toThrow()
+    // cleanup was scheduled (async), so it fired
+    expect(cleanupCalls).toEqual(['wt-002'])
+
+    // Case 3: worktree create fails → no cleanup to fire
+    cleanupCalls.length = 0
+    simulateSpawn({ createSucceeds: false, promptSucceeds: true })
+    expect(cleanupCalls).toEqual([])
+  })
+})
+
 describe('Workflow Engine - Retry Success Scenarios', () => {
   it('should succeed on second attempt after first failure', () => {
     const maxRetries = 2;

@@ -22,6 +22,9 @@ import type { PromptOps } from "@/session/prompt-ops"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
+import { WorktreeManagerTag } from "../layer"
+import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
+import type { WorktreeInfo } from "../worktree-manager/types"
 
 /**
  * Workflow Status 快照接口
@@ -407,8 +410,10 @@ const make = Effect.gen(function* () {
   // Node Spawn — Full daemon-flow for a single node (§10 compliant)
   // ============================================================================
 
-  const spawnReadyNode = (workflowId: string, node: DAGNodeSession): Effect.Effect<void, never, never> =>
-    Effect.gen(function* () {
+  const spawnReadyNode = (workflowId: string, node: DAGNodeSession): Effect.Effect<void, never, never> => {
+    let worktreeCleanup: (() => Promise<void>) | undefined
+
+    const body = Effect.gen(function* () {
       // 1. Validate promptOps available
       if (!_promptOps) {
         yield* sessionService.updateNodeStatus({
@@ -438,6 +443,46 @@ const make = Effect.gen(function* () {
         return
       }
 
+      // 2.5 WorktreeManager: opt-in isolation via worker_config.use_worktree
+      const useWorktree = (node.config.worker_config as { use_worktree?: boolean } | undefined)?.use_worktree === true
+      let worktreePath: string | undefined
+
+      if (useWorktree) {
+        const maybeManager = yield* Effect.gen(function* () {
+          return yield* WorktreeManagerTag
+        }).pipe(
+          Effect.catchCause(() => Effect.succeed(undefined as IWorktreeManager | undefined))
+        )
+
+        if (maybeManager) {
+          const branch = `dag-${workflowId}-${node.config.id}`
+          const createResult = yield* Effect.promise(() =>
+            maybeManager.create(node.node_id, {
+              basePath: process.cwd(),
+              branch,
+            })
+          ).pipe(
+            Effect.tapError(err => Effect.logWarning(`[DAG] worktree create failed for ${node.node_id}: ${err}`)),
+            Effect.catchCause(() => Effect.succeed(undefined as WorktreeInfo | undefined))
+          )
+
+          if (!createResult) {
+            yield* sessionService.updateNodeStatus({
+              sessionId: node.node_id,
+              status: 'failed',
+              error: 'worktree creation failed',
+            } satisfies UpdateNodeStatusInput).pipe(
+              Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+              Effect.ignore
+            )
+            return
+          }
+
+          worktreePath = createResult.path
+          worktreeCleanup = () => maybeManager.cleanup(createResult.id)
+        }
+      }
+
       // 3. Resolve sessions + create child session (§10: before status='running')
       const sessions = yield* Session.Service
       const workflow = yield* sessionService.getWorkflow(workflowId)
@@ -448,6 +493,7 @@ const make = Effect.gen(function* () {
       const childSession = yield* sessions.create({
         parentID: workflow.chat_session_id as SessionID,
         title: node.config.name + ' (DAG node)',
+        ...(worktreePath ? { directory: worktreePath } : {}),
       })
 
       // 4. Persist chat_session_id metadata (§10 timing fix - BEFORE updateNodeStatus('running'))
@@ -544,6 +590,11 @@ const make = Effect.gen(function* () {
         )
       }
     }).pipe(
+      Effect.ensuring(Effect.sync(() => {
+        if (worktreeCleanup) {
+          worktreeCleanup().catch((err) => console.warn(`[DAG] worktree cleanup failed: ${err}`))
+        }
+      })),
       Effect.catchCause((cause) =>
         Effect.gen(function* () {
           const errMsg = String(Cause.squash(cause))
@@ -574,6 +625,8 @@ const make = Effect.gen(function* () {
         })
       )
     ) as Effect.Effect<void, never, never>
+    return body
+  }
 
   // ============================================================================
   // Workflow Terminal Convergence Helpers

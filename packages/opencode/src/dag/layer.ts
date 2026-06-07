@@ -7,12 +7,16 @@ import { DAGQuery } from "./query/dag-query"
 import { DAGSessionService, setEventBus } from "./session/session-service"
 import { recoverOrphanedWorkflows } from "./session/recovery"
 import { EventBus } from "./state-machine/EventBus"
+import type { IWorktreeManager } from "./worktree-manager/IWorktreeManager"
+import { WorktreeManager } from "./worktree-manager/WorktreeManager"
 
 // ── Service Tags ──
 
 export class DAGQueryTag extends Context.Service<DAGQueryTag, DAGQuery>()("@opencode/DAGQuery") {}
 
 export class SharedEventBusTag extends Context.Service<SharedEventBusTag, EventBus>()("@opencode/SharedDAGEventBus") {}
+
+export class WorktreeManagerTag extends Context.Service<WorktreeManagerTag, IWorktreeManager>()("@opencode/DAGWorktreeManager") {}
 
 // ── Layer: idempotent via Effect Layer memo map ──
 
@@ -27,6 +31,16 @@ export const sharedEventBusLayer = Layer.effect(
     // Mount to session-service module-level variable (Iron Law #3)
     setEventBus(bus)
     return bus
+  }),
+)
+
+// WorktreeManager for optional per-node git worktree isolation.
+// No persister provided (in-memory Map suffices for DAG node lifetime — §0.3).
+export const worktreeManagerLayer = Layer.effect(
+  WorktreeManagerTag,
+  Effect.gen(function* () {
+    const bus = yield* SharedEventBusTag
+    return new WorktreeManager(bus)
   }),
 )
 
@@ -52,4 +66,7 @@ const dagQueryLayer = Layer.effect(
 // and re-exposes it, so the result outputs BOTH tags with zero residual
 // requirement. `Layer.mergeAll` does not cross-wire siblings, which previously
 // left SharedEventBusTag unsatisfied at runtime ("Service not found").
-export const defaultLayer = dagQueryLayer.pipe(Layer.provideMerge(sharedEventBusLayer))
+export const defaultLayer = dagQueryLayer.pipe(
+  Layer.provideMerge(sharedEventBusLayer),
+  Layer.provideMerge(worktreeManagerLayer),
+)
