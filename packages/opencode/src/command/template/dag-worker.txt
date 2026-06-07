@@ -101,6 +101,15 @@ $ARGUMENTS
 YAML 示例基于真实 `DAGConfig` / `DAGNodeConfig` schema（types.ts:60-98）。
 喂给 dagworker tool 时，将 YAML 转为 JSON 字符串传入 `workflow` 参数（dagworker.ts:43-44）。
 
+**YAML is illustrative only**; runtime `dagworker start` takes a JSON string conforming to `DAGConfig` / `DAGNodeConfig`（`src/dag/session/types.ts`）。使用前必须将 YAML 转换为等效 JSON。
+
+### Worker Type Resolution
+
+- `worker_type` 必须是目前已注册的 agent 名字；运行时通过 active Agent registry 解析。
+- 默认 registry 通常含 `build` / `plan` / `general` / `explore`；`scout` 视 `experimental-scout` 开关而定。
+- `implement` / `verify` / `review` / `archgate` / `patcher` 等均为自定义 agent，使用前需在 opencode.json 的 `agent.*` 字段注册。
+- 运行时 canonical schema 是 JSON `DAGConfig` / `DAGNodeConfig`（来自 `src/dag/session/types.ts`）；YAML 示例仅为说明，使用前必须转换成等效 JSON。
+
 ### 1. 合法线性依赖链 A → B → C
 
 ```yaml

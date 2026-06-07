@@ -192,6 +192,15 @@ interface DAGNodeConfig {
 }
 ```
 
+### Worker Type Resolution
+
+- `worker_type` 必须是目前已注册的 agent 名字；运行时通过 active Agent registry 解析。
+- 默认 registry 通常含 `build` / `plan` / `general` / `explore`；`scout` 视 `experimental-scout` 开关而定。
+- `implement` / `verify` / `review` / `archgate` / `patcher` 等均为自定义 agent，使用前需在 opencode.json 的 `agent.*` 字段注册。
+- 运行时 canonical schema 是 JSON `DAGConfig` / `DAGNodeConfig`（来自 `src/dag/session/types.ts`）；YAML 示例仅为说明，使用前必须转换成等效 JSON。
+
+**Fail-fast**: `dagworker start` validates `worker_type` BEFORE database writes — an unregistered worker_type causes immediate rejection with `"worker_type not found: <name>"`.
+
 ### Namespaced ID format
 
 Node IDs in the database are stored as `${workflowId}::${cfg.id}`. This:
