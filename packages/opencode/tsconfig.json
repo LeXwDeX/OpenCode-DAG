@@ -13,5 +13,13 @@
       "@tui/*": ["./src/cli/cmd/tui/*"],
       "@test/*": ["./test/*"]
     }
-  }
+  },
+  "exclude": [
+    "scratch/**",
+    ".worktrees/**",
+    "node_modules/**",
+    "dist/**",
+    "ts-dist/**",
+    "**/node_modules/**"
+  ]
 }
