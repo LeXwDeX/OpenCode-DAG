@@ -521,10 +521,7 @@ describe('replan: DB input construction', () => {
       currentNodes,
       3,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.data.updates[0].newDependencies).toEqual([`${WID}::n2`])
-    }
+    expect(r.updates[0].newDependencies).toEqual([`${WID}::n2`])
   })
 
   it('preserves existing deps when new_dependencies is absent (P0 fix)', () => {
@@ -545,11 +542,8 @@ describe('replan: DB input construction', () => {
       [sessionWithDeps, n2Session],
       3,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      // The DB write must preserve the existing (namespaced) dependency
-      expect(r.data.updates[0].newDependencies).toEqual([`${WID}::old-dep`])
-    }
+    // The DB write must preserve the existing (namespaced) dependency
+    expect(r.updates[0].newDependencies).toEqual([`${WID}::old-dep`])
   })
 
   it('namespaces add_nodes dependencies for DB layer', () => {
@@ -561,12 +555,9 @@ describe('replan: DB input construction', () => {
       currentNodes,
       3,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.data.newNodes).toHaveLength(1)
-      expect(r.data.newNodes[0].nodeId).toBe(`${WID}::n3`)
-      expect(r.data.newNodes[0].dependencyNodes).toEqual([`${WID}::n1`, `${WID}::n2`])
-    }
+    expect(r.newNodes).toHaveLength(1)
+    expect(r.newNodes[0].nodeId).toBe(`${WID}::n3`)
+    expect(r.newNodes[0].dependencyNodes).toEqual([`${WID}::n1`, `${WID}::n2`])
   })
 
   it('returns empty arrays for patch with only remove', () => {
@@ -577,12 +568,9 @@ describe('replan: DB input construction', () => {
       currentNodes,
       3,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.data.removeNodeIds).toEqual([`${WID}::n2`])
-      expect(r.data.updates).toEqual([])
-      expect(r.data.newNodes).toEqual([])
-    }
+    expect(r.removeNodeIds).toEqual([`${WID}::n2`])
+    expect(r.updates).toEqual([])
+    expect(r.newNodes).toEqual([])
   })
 
   it('builds newMaxConcurrency correctly when patch provides it', () => {
@@ -593,10 +581,7 @@ describe('replan: DB input construction', () => {
       currentNodes,
       3,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.data.newMaxConcurrency).toBe(7)
-    }
+    expect(r.newMaxConcurrency).toBe(7)
   })
 
   it('preserves existing max_concurrency when patch is silent', () => {
@@ -607,10 +592,7 @@ describe('replan: DB input construction', () => {
       currentNodes,
       5,
     )
-    expect(r.ok).toBe(true)
-    if (r.ok) {
-      expect(r.data.newMaxConcurrency).toBe(5)
-    }
+    expect(r.newMaxConcurrency).toBe(5)
   })
 })
 

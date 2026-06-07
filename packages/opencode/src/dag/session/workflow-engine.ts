@@ -239,7 +239,7 @@ export function buildReplanDbInputs(
   newConfigNodes: DAGNodeConfig[],
   currentNodes: DAGNodeSession[],
   currentMaxConcurrency: number,
-): { ok: true; data: ReplanDbInputs } | { ok: false; reason: string; detail?: unknown } {
+): ReplanDbInputs {
   const wfNs = (cfgId: string) => `${workflowId}::${cfgId}`
   const updates: UpdateNodeConfigInput[] = (patch.update_nodes ?? []).map(u => {
     const cfgId = u.node_id.split('::').slice(1).join('::')
@@ -265,19 +265,19 @@ export function buildReplanDbInputs(
   }))
   const newMaxConcurrency = patch.new_max_concurrency ?? currentMaxConcurrency
   return {
-    ok: true,
-    data: {
-      removeNodeIds: patch.remove_nodes ?? [],
-      updates,
-      newNodes,
-      newMaxConcurrency,
-    },
+    removeNodeIds: patch.remove_nodes ?? [],
+    updates,
+    newNodes,
+    newMaxConcurrency,
   }
 }
 
 /**
  * Inline cycle detector over a list of node configs (DFS-based).
  * Returns true when ANY cycle exists in the `dependencies[]` graph.
+ *
+ * @internal test-only — exported for unit tests to exercise validateReplanPostConfig's
+ * cycle-detection path directly. Production callers should use WorkflowEngine.replanWorkflow.
  */
 export function detectCycle(nodes: DAGNodeConfig[]): boolean {
   const graph = new Map<string, string[]>()
@@ -692,9 +692,13 @@ const make = Effect.gen(function* () {
       if (!postResult.ok) return yield* Effect.fail(new Error(postResult.reason))
 
       // 8. Build DB inputs
-      const dbResult = buildReplanDbInputs(workflowId, patch, newConfigNodes, currentNodes, workflow.config.max_concurrency)
-      if (!dbResult.ok) return yield* Effect.fail(new Error(dbResult.reason))
-      const { updates, newNodes: newNodesForDb, newMaxConcurrency } = dbResult.data
+      const { updates, newNodes: newNodesForDb, newMaxConcurrency } = buildReplanDbInputs(
+        workflowId,
+        patch,
+        newConfigNodes,
+        currentNodes,
+        workflow.config.max_concurrency,
+      )
       const newConfig: DAGConfig = { ...workflow.config, nodes: newConfigNodes, max_concurrency: newMaxConcurrency }
 
       // 9. Atomic apply — all 5 DB writes in one transaction
