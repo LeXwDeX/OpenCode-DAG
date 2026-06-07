@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.3"
+OC_VERSION="1.3.4"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -369,8 +369,8 @@ choose_action() {
         "🚀 升级到最新版本 (${latest})" \
         "📋 手工选择具体版本号..." \
         "👁  仅查看已发布版本（不安装）" \
-        "🔌 插件管理 (MCP / plugin / NPM 缓存)" \
-        "⚙️  系统配置 (AGENTS / config / 环境变量 / 包更新)" \
+        "🔌 插件管理 (MCP / plugin / NPM 工具)" \
+        "⚙️  系统配置 (AGENTS / config / 环境变量)" \
         "🔄 自更新 oc 脚本" \
         "❌ 退出")
     printf '%s' "$options" | fzf --ansi --height=50% --prompt="选择操作 > " --no-info \
@@ -783,123 +783,6 @@ env_check_and_inject() {
     fi
 }
 
-# ---------- 全量包更新 ----------
-
-# packages_update_all — 全量工具更新
-# 复用 plugins_refresh_cache 作为 MCP/plugin NPM 包的唯一刷新内核，
-# 避免与“插件管理 → 刷新 NPM 缓存”维护两套重复逻辑。
-# 本函数只补插件刷新未覆盖的全局工具和未来 pip/pipx 包。
-packages_update_all() {
-    echo
-    echo "${C_BOLD}全量包更新${C_RESET}"
-    echo
-
-    local fail_count=0
-    local pass_count=0
-
-    # --- MCP/plugin NPM 包 ---
-    echo
-    info "═══ MCP/plugin 包 ═══"
-    if plugins_refresh_cache; then
-        pass_count=$((pass_count + 1))
-    else
-        warn "MCP/plugin 包刷新失败"
-        fail_count=$((fail_count + 1))
-    fi
-
-    # --- Global NPM 包 ---
-    local npm_runner=""
-    local global_flag="-g"
-    if command -v bun &>/dev/null; then
-        npm_runner="bun"
-        info "使用 bun 作为全局 NPM runner"
-    elif command -v npm &>/dev/null; then
-        npm_runner="npm"
-        info "使用 npm 作为全局 NPM runner (bun 不可用)"
-    else
-        warn "npm 和 bun 均未安装，跳过全局 NPM 包更新"
-    fi
-
-    local -a global_pkgs=(
-        "codegraph"
-    )
-
-    if [ -n "$npm_runner" ]; then
-        echo
-        info "═══ 全局 NPM 包 ═══"
-        for pkg in "${global_pkgs[@]}"; do
-            info "更新 $pkg..."
-            if $npm_runner install $global_flag "$pkg"@latest 2>&1; then
-                local ver
-                ver=$($pkg --version 2>/dev/null || echo "?")
-                ok "$pkg: v${ver}"
-                pass_count=$((pass_count + 1))
-            else
-                warn "$pkg: 更新失败"
-                fail_count=$((fail_count + 1))
-            fi
-        done
-    fi
-
-    # --- PIP 包 (pipx 优先, pip 降级) ---
-    # 当前无目标 pip 包，预留接口
-    local -a pip_pkgs=()
-
-    if [ "${#pip_pkgs[@]}" -gt 0 ]; then
-        echo
-        info "═══ PIP 包 ═══"
-        local pip_runner=""
-        if command -v pipx &>/dev/null; then
-            pip_runner="pipx"
-            info "使用 pipx 作为 PIP runner"
-        elif command -v pip3 &>/dev/null; then
-            pip_runner="pip3"
-            info "使用 pip3 作为 PIP runner"
-        elif command -v pip &>/dev/null; then
-            pip_runner="pip"
-            info "使用 pip 作为 PIP runner"
-        else
-            warn "pip/pipx 均未安装，跳过 PIP 包更新"
-        fi
-
-        if [ -n "$pip_runner" ]; then
-            for pkg in "${pip_pkgs[@]}"; do
-                info "更新 $pkg..."
-                case "$pip_runner" in
-                    pipx)
-                        if pipx upgrade "$pkg" 2>&1 || pipx install "$pkg" 2>&1; then
-                            ok "$pkg: 已更新"
-                            pass_count=$((pass_count + 1))
-                        else
-                            warn "$pkg: pipx 更新失败"
-                            fail_count=$((fail_count + 1))
-                        fi
-                        ;;
-                    *)
-                        if $pip_runner install --upgrade "$pkg" 2>&1; then
-                            ok "$pkg: 已更新"
-                            pass_count=$((pass_count + 1))
-                        else
-                            warn "$pkg: pip 更新失败"
-                            fail_count=$((fail_count + 1))
-                        fi
-                        ;;
-                esac
-            done
-        fi
-    fi
-
-    # --- 汇总 ---
-    echo
-    echo "${C_BOLD}═══ 更新汇总 ═══${C_RESET}"
-    ok "成功项: $pass_count"
-    if [ "$fail_count" -gt 0 ]; then
-        warn "失败项: $fail_count"
-    else
-        ok "失败项: 0"
-    fi
-}
-
 # ---------- 系统配置 TUI ----------
 
 setup_tui() {
@@ -973,7 +856,6 @@ PYEOF
             "📦 AGENTS 安装/更新" \
             "⚙️  Config.json 应用默认配置" \
             "🔑 环境变量检查与注入" \
-            "🔄 全量包更新 (NPM + PIP)" \
             "⬅  返回主菜单")
 
         local action
@@ -992,10 +874,6 @@ PYEOF
                 ;;
             *"环境变量"*)
                 env_check_and_inject
-                echo; read -rp "按 Enter 继续..." _
-                ;;
-            *"全量包"*)
-                packages_update_all
                 echo; read -rp "按 Enter 继续..." _
                 ;;
             *)
@@ -1295,11 +1173,39 @@ _refresh_npm_package() {
     fi
 }
 
+_refresh_global_npm_package() {
+    local name="$1"
+    local npm_runner=""
+    if command -v bun >/dev/null 2>&1; then
+        npm_runner="bun"
+    elif command -v npm >/dev/null 2>&1; then
+        npm_runner="npm"
+    else
+        warn "$name: bun/npm 均未安装, 跳过"
+        return 0
+    fi
+
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        info "[DRY_RUN] $name: 跳过 $npm_runner install -g $name@latest"
+        ok "$name: v? (dry-run)"
+        return 0
+    fi
+
+    info "更新全局工具 $name..."
+    if $npm_runner install -g "$name"@latest 2>&1; then
+        local ver
+        ver=$($name --version 2>/dev/null || echo "?")
+        ok "$name: v${ver}"
+    else
+        warn "$name: 全局更新失败"
+    fi
+}
+
 # 刷新所有插件缓存 (从 opencode.json 全量扫描)
 # 环境变量: DRY_RUN=1 跳过真实网络/磁盘 (用于测试/预览)
 plugins_refresh_cache() {
     echo
-    echo "${C_BOLD}刷新所有 NPM 包缓存${C_RESET}"
+    echo "${C_BOLD}刷新 NPM 工具${C_RESET}"
     echo
 
     if [ ! -f "$OC_CONFIG_FILE" ]; then
@@ -1353,6 +1259,7 @@ plugins_refresh_cache() {
     if [ "${#builtin_names[@]}" -gt 0 ]; then
         info "跳过 ${#builtin_names[@]} 个内置包: $(IFS=,; echo "${builtin_names[*]}")"
     fi
+    _refresh_global_npm_package "codegraph" || true
     info "扫描结果: $mcp_n 个 MCP 包, $plugin_n 个 plugin 包, $builtin_n 个内置 ai-sdk 包"
 }
 
@@ -1452,9 +1359,9 @@ except Exception:
 PYEOF
 )
             if [ -n "$all_pkgs" ]; then
-                options+=("🔄 刷新 NPM 缓存: ${all_pkgs}")
+                options+=("🔄 刷新 NPM 工具: ${all_pkgs} / codegraph")
             else
-                options+=("🔄 刷新所有 NPM 包缓存")
+                options+=("🔄 刷新所有 NPM 工具")
             fi
         fi
 
@@ -1475,7 +1382,7 @@ PYEOF
             *"安装 DCP plugin"*)
                 plugins_install_dcp
                 ;;
-            *"刷新 NPM 缓存"*|*"刷新所有 NPM 包缓存"*)
+            *"刷新 NPM 工具"*|*"刷新所有 NPM 工具"*)
                 plugins_refresh_cache
                 ;;
             *)
@@ -1623,17 +1530,16 @@ oc — opencode (LeXwDeX fork) 版本管理工具
   oc <tag>            升级到指定 tag（如 oc v1.14.30-fork-2）
   oc list             列出所有 release
   oc current          显示当前已安装版本
-  oc plugins          插件管理 (MCP / plugin / NPM 缓存)
+  oc plugins          插件管理 (MCP / plugin / NPM 工具)
   oc plugins check    检查插件状态
   oc plugins install-think   安装 think MCP
   oc plugins install-dcp     安装 DCP plugin
   oc plugins switch-bunx     切换 think MCP 到 bunx
-  oc plugins refresh         刷新 MCP/plugin 的 NPM 包缓存 (动态扫描 opencode.json)
-  oc setup            执行全部系统配置 (AGENTS + config + env + packages)
+  oc plugins refresh         刷新 MCP/plugin NPM 工具 + 全局 codegraph
+  oc setup            执行全部系统配置 (AGENTS + config + env)
   oc setup agents     安装/更新 AGENTS 仓库 (git clone/pull)
   oc setup config     应用 opencode.json 默认配置 (lsp/autoupdate/compaction)
   oc setup env        检查并注入 OPENCODE_EXPERIMENTAL_* 环境变量到 shell RC
-  oc setup packages   全量更新 NPM/PIP 包 (兼容 bun/npm/pipx/pip)
   oc update           自更新本脚本
   oc -h | --help      显示本帮助
 
@@ -1678,12 +1584,10 @@ EOF
             agents)   agents_install_or_update ;;
             config)   config_apply_defaults ;;
             env)      env_check_and_inject ;;
-            packages) packages_update_all ;;
             "")
                 agents_install_or_update || warn "AGENTS 步骤失败，继续..."
                 config_apply_defaults     || warn "Config 步骤失败，继续..."
                 env_check_and_inject      || warn "环境变量步骤失败，继续..."
-                packages_update_all
                 ;;
             *)  die "未知 setup 子命令：$2（用 oc --help 查看）" ;;
         esac
