@@ -34,24 +34,27 @@ import type { PromptOps } from "@/session/prompt-ops"
  *
  * The `agent.get(node.config.worker_type)` call in
  * `workflow-engine.ts:spawnReadyNode` resolves the agent by name from the
- * `Agent.Service` registry.
+ * active `Agent.Service` registry.
  *
- * Built-in agents (always available): `build`, `plan`, `general`, `explore`,
- * `scout`.
+ * Default registered agents usually include `build`, `plan`, `general`,
+ * `explore`; `scout` availability depends on the experimental-scout
+ * feature flag. Names such as `implement`, `verify`, `review`,
+ * `archgate`, `patcher` are **user-defined custom agents** and must
+ * be configured under opencode.json / opencode.jsonc via the singular
+ * `agent` field (NOT `agents`):
+ *   `{ "agent": { "implement": {...}, "verify": {...} } }`
  *
- * Many documented examples (USER_GUIDE.md, dagworker-reference.md,
- * dag-worker.txt) use `implement`, `verify`, `review`, `archgate`, etc.
- * These are NOT built-in — they are **user-defined custom agents** that must
- * be configured via opencode.json / opencode.jsonc:
- *   `{ "agents": { "implement": {...}, "verify": {...} } }`
+ * Runtime fail-fast validation (P0a, commit 1b425ddc2): `dagworker
+ * start` validates all unique `worker_type` values against the active
+ * `Agent.Service` registry BEFORE creating any workflow rows. If any
+ * worker_type is unknown, start fails with an actionable error that
+ * lists currently registered agent names (via `agentService.list()`)
+ * and points to the singular `agent.*` config location.
  *
- * If the LLM constructs a DAG using `worker_type: "implement"` without the
- * user having configured a custom `implement` agent, the spawn will fail at
- * runtime with an `agent.get()` error.
- *
- * When constructing DAGs programmatically or via LLM, always verify that
- * `worker_type` is either a built-in or a user-configured custom agent
- * before calling `dagworker start`.
+ * When constructing DAGs programmatically or via LLM, ensure every
+ * `worker_type` is either a currently registered built-in or has been
+ * wired into the singular `agent.*` config before calling `dagworker
+ * start`.
  */
 const id = "dagworker"
 
