@@ -229,6 +229,18 @@ export type WorkflowEvent =
       type: 'workflow.archived';
       workflow_id: string;
       archived_at: Date;
+    }
+  | {
+      type: 'workflow.replanned';
+      workflow_id: string;
+      chat_session_id: string;
+      patch_summary: {
+        added: number;
+        removed: number;
+        updated: number;
+        final_total: number;
+      };
+      timestamp: Date;
     };
 
 /**

@@ -221,6 +221,7 @@ function workflowEventToStatus(event: WorkflowEvent): string | null {
     case "workflow.paused":
     case "workflow.resumed":
     case "workflow.archived":
+    case "workflow.replanned":
       return null // not forwarded to platform
   }
 }

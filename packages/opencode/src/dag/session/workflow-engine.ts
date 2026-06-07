@@ -1,5 +1,5 @@
 import { Cause, Effect } from "effect"
-import { DAGSessionService } from "./session-service"
+import { DAGSessionService, emitWorkflowReplannedEvent } from "./session-service"
 import type { CreateNodeInput, UpdateNodeConfigInput } from "./session-service"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
@@ -740,6 +740,14 @@ const make = Effect.gen(function* () {
 
       // 12. Release replan-in-flight (also guaranteed by Effect.ensuring below)
       replanInFlight.delete(workflowId)
+
+      // 13. Iron Law #3: broadcast replanned event after successful persist
+      emitWorkflowReplannedEvent(workflowId, workflow.chat_session_id, {
+        added: newNodesForDb.length,
+        removed: (patch.remove_nodes ?? []).length,
+        updated: updates.length,
+        final_total: newConfigNodes.length,
+      })
 
       return {
         ok: true as const,

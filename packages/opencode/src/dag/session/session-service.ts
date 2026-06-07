@@ -150,6 +150,25 @@ export function buildSessionNodeEvent(
   }
 }
 
+/**
+ * Emit a workflow.replanned event after successful replan (Iron Law #3).
+ * No-op when _eventBus is not injected (graceful degradation).
+ */
+export function emitWorkflowReplannedEvent(
+  workflowId: string,
+  chatSessionId: string,
+  patchSummary: { added: number; removed: number; updated: number; final_total: number },
+): void {
+  if (!_eventBus) return
+  _eventBus.emit({
+    type: "workflow.replanned",
+    workflow_id: workflowId,
+    chat_session_id: chatSessionId,
+    patch_summary: patchSummary,
+    timestamp: new Date(),
+  } satisfies WorkflowEvent)
+}
+
 // ============================================================================
 // Types
 // ============================================================================
