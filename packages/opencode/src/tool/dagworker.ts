@@ -25,9 +25,17 @@ import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import type { WorkflowExecutor } from "../dag/session/workflow-executor"
 import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
+import type { IDAGSessionService } from "../dag/session/session-service"
 import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
 import { RequiredNodesValidator } from "../dag/session/required-nodes-validator"
 import type { PromptOps } from "@/session/prompt-ops"
+import {
+  DAG_TEMPLATE_IDS,
+  listDAGTemplates,
+  getDAGTemplate,
+  instantiateDAGTemplate,
+  type DAGTemplateInput,
+} from "../dag/integration/templates"
 
 /**
  * worker_type resolution
@@ -65,6 +73,9 @@ export const Parameters = Schema.Struct({
     Schema.Literal("cancel"),
     Schema.Literal("list"),
     Schema.Literal("replan"),
+    Schema.Literal("template_list"),
+    Schema.Literal("template_show"),
+    Schema.Literal("template_start"),
   ])).annotate({
     description: "Action to perform. Defaults to 'start' if not specified.",
   }),
@@ -79,6 +90,12 @@ export const Parameters = Schema.Struct({
   }),
   patch: Schema.optional(Schema.String).annotate({
     description: "JSON-stringified ReplanPatch for 'replan' action. Shape: {workflow_id, add_nodes?, remove_nodes?, update_nodes?, new_max_concurrency?, changed_by?}",
+  }),
+  template_id: Schema.optional(Schema.String).annotate({
+    description: `Template id for 'template_show' / 'template_start'. One of: ${DAG_TEMPLATE_IDS.join(", ")}.`,
+  }),
+  template_input: Schema.optional(Schema.String).annotate({
+    description: "JSON-stringified DAGTemplateInput for 'template_show' / 'template_start'. Requires at least {goal:string}. Optional for 'template_show' (uses empty goal).",
   }),
 })
 
@@ -147,6 +164,79 @@ export const validateWorkerTypes = (
     )
   })
 
+/**
+ * Shared start workflow body used by both the `start` and `template_start`
+ * actions. Performs validation, materialises nodes with namespaced IDs,
+ * registers a WorkflowEngine, forks the executor daemon and wires the
+ * abort listener. Returns the new workflow id and node count.
+ */
+export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromConfig")(function* (args: {
+  workflowConfig: DAGConfig
+  ctx: Tool.Context
+  dagSessionService: IDAGSessionService
+  agentService: WorkerTypeAgentRegistry
+}) {
+  const { workflowConfig, ctx, dagSessionService, agentService } = args
+
+  const validator = new RequiredNodesValidator()
+  const validationResult = validator.validate(workflowConfig)
+
+  if (!validationResult.valid) {
+    const errorsText = validationResult.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")
+    return yield* Effect.fail(new Error(`Invalid workflow configuration:\n${errorsText}`))
+  }
+
+  if (validationResult.warnings.length > 0) {
+    const warningsText = validationResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
+    console.warn(`Workflow configuration warnings:\n${warningsText}`)
+  }
+
+  yield* validateWorkerTypes(agentService, workflowConfig.nodes)
+
+  const workflow = yield* dagSessionService.createWorkflow({
+    chatSessionId: ctx.sessionID,
+    name: workflowConfig.name,
+    config: workflowConfig,
+  })
+
+  for (const cfg of workflowConfig.nodes) {
+    yield* dagSessionService.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::${cfg.id}`,
+      name: cfg.name,
+      nodeName: cfg.name,
+      nodeType: cfg.worker_type,
+      config: cfg,
+      dependencyNodes: (cfg.dependencies ?? []).map((d: string) => `${workflow.id}::${d}`),
+      timeoutMs: cfg.timeout_ms,
+      retryCount: 0,
+      maxRetries: cfg.retry?.max_attempts ?? 0,
+    })
+  }
+
+  const promptOps = ctx.extra?.promptOps as PromptOps | undefined
+  if (!promptOps) {
+    return yield* Effect.fail(
+      new Error("dagworker requires promptOps in ctx.extra — must be called inside a session prompt turn"),
+    )
+  }
+
+  const workflowEngine = yield* WorkflowEngine.make
+  workflowEngine.setPromptOps(promptOps)
+  const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, workflowConfig)
+
+  registerEngine(workflow.id, workflowEngine)
+  yield* workflowEngine.startWorkflow(workflow.id, workflowConfig)
+  yield* executor.start(workflow.id).pipe(Effect.forkDetach)
+
+  const onAbort = () => {
+    Effect.runPromise(workflowEngine.cancelWorkflow(workflow.id).pipe(Effect.ignore))
+  }
+  ctx.abort.addEventListener("abort", onAbort, { once: true })
+
+  return { workflowId: workflow.id, nodeCount: workflowConfig.nodes.length }
+})
+
 export const DAGWorkerTool = Tool.define(
   id,
   Effect.gen(function* () {
@@ -187,7 +277,6 @@ export const DAGWorkerTool = Tool.define(
           
           const workflowConfigStr = params.workflow
           
-          // Parse workflow configuration
           let workflowConfig: DAGConfig
           try {
             workflowConfig = JSON.parse(workflowConfigStr)
@@ -196,87 +285,26 @@ export const DAGWorkerTool = Tool.define(
               new Error(`Invalid workflow configuration: ${e instanceof Error ? e.message : String(e)}`)
             )
           }
-          
-          // Validate workflow configuration
-          const validator = new RequiredNodesValidator()
-          const validationResult = validator.validate(workflowConfig)
-          
-          if (!validationResult.valid) {
-            const errorsText = validationResult.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")
-            return yield* Effect.fail(
-              new Error(`Invalid workflow configuration:\n${errorsText}`)
-            )
-          }
-          
-          if (validationResult.warnings.length > 0) {
-            const warningsText = validationResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
-            console.warn(`Workflow configuration warnings:\n${warningsText}`)
-          }
 
-          // Fail-fast: ensure every worker_type resolves to a registered agent
-          yield* validateWorkerTypes(agentService, workflowConfig.nodes)
-          
-          // Create workflow
-          const workflow = yield* dagSessionService.createWorkflow({
-            chatSessionId: ctx.sessionID,
-            name: workflowConfig.name,
-            config: workflowConfig,
+          const started = yield* startWorkflowFromConfig({
+            workflowConfig,
+            ctx,
+            dagSessionService,
+            agentService,
           })
-
-          // Materialize nodes with namespaced IDs (${workflowId}::${cfgId})
-          for (const cfg of workflowConfig.nodes) {
-            yield* dagSessionService.createNode({
-              workflowId: workflow.id,
-              nodeId: `${workflow.id}::${cfg.id}`,
-              name: cfg.name,
-              nodeName: cfg.name,
-              nodeType: cfg.worker_type,
-              config: cfg,
-              dependencyNodes: (cfg.dependencies ?? []).map((d: string) => `${workflow.id}::${d}`),
-              timeoutMs: cfg.timeout_ms,
-              retryCount: 0,
-              maxRetries: cfg.retry?.max_attempts ?? 0,
-            })
-          }
-
-          // Wire promptOps (required for subagent spawning)
-          const promptOps = ctx.extra?.promptOps as PromptOps | undefined
-          if (!promptOps) {
-            return yield* Effect.fail(new Error("dagworker requires promptOps in ctx.extra — must be called inside a session prompt turn"))
-          }
-
-          // Create workflow engine and executor
-          const workflowEngine = yield* WorkflowEngine.make
-          workflowEngine.setPromptOps(promptOps)
-          const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, workflowConfig)
-
-          // Register engine in global registry (enables node_complete tool routing)
-          registerEngine(workflow.id, workflowEngine)
-
-          // Start workflow status update
-          yield* workflowEngine.startWorkflow(workflow.id, workflowConfig)
-
-          // Fork executor daemon (dagworker returns immediately)
-          yield* executor.start(workflow.id).pipe(Effect.forkDetach)
-
-          // Abort listener: cancel workflow on parent abort
-          const onAbort = () => {
-            Effect.runPromise(workflowEngine.cancelWorkflow(workflow.id).pipe(Effect.ignore))
-          }
-          ctx.abort.addEventListener("abort", onAbort, { once: true })
-
+          
           return {
-            title: `Workflow Started: ${workflow.id}`,
+            title: `Workflow started: ${started.workflowId}`,
             output: JSON.stringify({
-              workflowId: workflow.id,
+              workflowId: started.workflowId,
               message: "Workflow started in background",
-              nodes: workflow.config.nodes.length,
+              nodes: started.nodeCount,
             }),
             metadata: {
-              workflowId: workflow.id,
+              workflowId: started.workflowId,
               action: "start",
               wait: params.wait ?? false,
-            },
+            } as Record<string, unknown>,
             attachments: [],
           }
         }
@@ -437,6 +465,125 @@ export const DAGWorkerTool = Tool.define(
               nodesUpdated: result.nodes_updated,
               finalTotal: result.final_total,
             } as any,
+            attachments: [],
+          }
+        }
+        
+        case "template_list": {
+          const items = listDAGTemplates().map((t) => ({
+            id: t.id,
+            name: t.name,
+            description: t.description,
+            tags: t.tags,
+            requiredAgents: t.requiredAgents,
+          }))
+          return {
+            title: `DAG Templates (${items.length})`,
+            output: formatOutput(JSON.stringify(items, null, 2)),
+            metadata: {
+              action: "template_list",
+              count: items.length,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "template_show": {
+          if (!params.template_id) {
+            return yield* Effect.fail(
+              new Error("'template_show' action requires 'template_id' parameter"),
+            )
+          }
+          const templ = getDAGTemplate(params.template_id)
+          if (!templ) {
+            return yield* Effect.fail(
+              new Error(`Unknown template: ${params.template_id}. Available: ${DAG_TEMPLATE_IDS.join(", ")}`),
+            )
+          }
+          let input: DAGTemplateInput = { goal: "" }
+          if (params.template_input) {
+            try {
+              input = JSON.parse(params.template_input)
+            } catch (e) {
+              return yield* Effect.fail(
+                new Error(`Invalid template_input JSON: ${e instanceof Error ? e.message : String(e)}`),
+              )
+            }
+          }
+          const configOrError = templ.create(input)
+          return {
+            title: `Template: ${templ.id}`,
+            output: formatOutput(
+              JSON.stringify(
+                {
+                  id: templ.id,
+                  name: templ.name,
+                  description: templ.description,
+                  tags: templ.tags,
+                  requiredAgents: templ.requiredAgents,
+                  config: configOrError,
+                },
+                null,
+                2,
+              ),
+            ),
+            metadata: {
+              action: "template_show",
+              templateId: templ.id,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "template_start": {
+          if (!params.template_id) {
+            return yield* Effect.fail(
+              new Error("'template_start' action requires 'template_id' parameter"),
+            )
+          }
+          const templ = getDAGTemplate(params.template_id)
+          if (!templ) {
+            return yield* Effect.fail(
+              new Error(`Unknown template: ${params.template_id}. Available: ${DAG_TEMPLATE_IDS.join(", ")}`),
+            )
+          }
+          if (!params.template_input) {
+            return yield* Effect.fail(
+              new Error("'template_start' action requires 'template_input' parameter (JSON with at least {goal})"),
+            )
+          }
+          let input: DAGTemplateInput
+          try {
+            input = JSON.parse(params.template_input)
+          } catch (e) {
+            return yield* Effect.fail(
+              new Error(`Invalid template_input JSON: ${e instanceof Error ? e.message : String(e)}`),
+            )
+          }
+          const instantiated = instantiateDAGTemplate(params.template_id, input)
+          if ("error" in instantiated) {
+            return yield* Effect.fail(new Error(instantiated.error))
+          }
+          const started = yield* startWorkflowFromConfig({
+            workflowConfig: instantiated,
+            ctx,
+            dagSessionService,
+            agentService,
+          })
+          return {
+            title: `Workflow started: ${started.workflowId} (template: ${templ.id})`,
+            output: JSON.stringify({
+              workflowId: started.workflowId,
+              templateId: templ.id,
+              message: "Template-based workflow started in background",
+              nodes: started.nodeCount,
+            }),
+            metadata: {
+              workflowId: started.workflowId,
+              action: "template_start",
+              templateId: templ.id,
+              wait: params.wait ?? false,
+            } as Record<string, unknown>,
             attachments: [],
           }
         }

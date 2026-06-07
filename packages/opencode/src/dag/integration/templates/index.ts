@@ -1,0 +1,385 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+// Licensed under GNU AGPL v3; modifications must be open-sourced.
+
+/**
+ * DAG Template Registry — pure factory module
+ *
+ * 9 pre-built DAG workflow templates covering common multi-agent patterns.
+ *
+ * Constraints:
+ * - NO service, DB, or Effect-runtime imports. Only types from dag/session/types.ts.
+ * - Dependencies in node configs use bare cfg.id (no `workflowId::` namespace).
+ * - Every node sets worker_config.agent === worker_type.
+ * - max_concurrency default 3.
+ * - Prompts are concise (1–3 lines) task directives; the agent's own .md
+ *   carries the full spec.
+ */
+
+import type { DAGConfig, DAGNodeConfig } from "../../session/types"
+
+// ---------------------------------------------------------------------------
+// Template identity
+// ---------------------------------------------------------------------------
+
+export const DAG_TEMPLATE_IDS = [
+  "product-doc-analysis",
+  "architecture-design",
+  "interface-design",
+  "tdd-implementation-and-coverage",
+  "design-pattern-review",
+  "responsibility-review",
+  "patcher-assembly",
+  "comprehensive-review",
+  "integration-test",
+] as const
+
+export type DAGTemplateId = (typeof DAG_TEMPLATE_IDS)[number]
+
+// ---------------------------------------------------------------------------
+// Template input / shape
+// ---------------------------------------------------------------------------
+
+export interface DAGTemplateInput {
+  goal: string
+  scope?: string
+  context?: string
+  [key: string]: unknown
+}
+
+export interface DAGTemplate {
+  id: DAGTemplateId
+  name: string
+  description: string
+  tags: string[]
+  requiredAgents: string[]
+  create(input: DAGTemplateInput): DAGConfig
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function brief(input: DAGTemplateInput): string {
+  const parts: string[] = [input.goal]
+  if (input.scope) parts.push(`范围：${input.scope}`)
+  if (input.context) parts.push(`上下文：${input.context}`)
+  return parts.join(" | ")
+}
+
+function mkNode(
+  id: string,
+  workerType: string,
+  deps: string[],
+  prompt: string,
+  required = true,
+): DAGNodeConfig {
+  return {
+    id,
+    name: id,
+    dependencies: deps,
+    required,
+    worker_type: workerType,
+    worker_config: { agent: workerType, prompt },
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 9 templates
+// ---------------------------------------------------------------------------
+
+const productDocAnalysis: DAGTemplate = {
+  id: "product-doc-analysis",
+  name: "Product Doc Analysis",
+  description: "Explore codebase documentation and summarise findings (explore → general).",
+  tags: ["docs", "analysis", "explore"],
+  requiredAgents: ["explore", "general"],
+  create(input) {
+    return {
+      name: "product-doc-analysis",
+      nodes: [
+        mkNode(
+          "explore-doc",
+          "explore",
+          [],
+          `用 explore 身份搜索与目标相关的文档与代码证据。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "summarize",
+          "general",
+          ["explore-doc"],
+          `用 general 身份综合 explore 节点的发现，输出结构化分析结论。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const architectureDesign: DAGTemplate = {
+  id: "architecture-design",
+  name: "Architecture Design",
+  description: "Architecture gate review followed by implementation (archgate → implement).",
+  tags: ["arch", "design", "implement"],
+  requiredAgents: ["archgate", "implement"],
+  create(input) {
+    return {
+      name: "architecture-design",
+      nodes: [
+        mkNode(
+          "archgate",
+          "archgate",
+          [],
+          `用 archgate 身份审批准许的架构方向与约束。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "implement",
+          "implement",
+          ["archgate"],
+          `用 implement 身份按 archgate 输出实现骨架。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const interfaceDesign: DAGTemplate = {
+  id: "interface-design",
+  name: "Interface Design",
+  description: "Archgate → implement interfaces → verify (archgate → implement → verify).",
+  tags: ["arch", "interfaces", "tdd"],
+  requiredAgents: ["archgate", "implement", "verify"],
+  create(input) {
+    return {
+      name: "interface-design",
+      nodes: [
+        mkNode(
+          "archgate",
+          "archgate",
+          [],
+          `用 archgate 身份确定接口边界与契约。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "implement",
+          "implement",
+          ["archgate"],
+          `用 implement 身份产出接口定义与类型。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "verify",
+          "verify",
+          ["implement"],
+          `用 verify 身份校验接口定义完整性与兼容性。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const tddImplementationAndCoverage: DAGTemplate = {
+  id: "tdd-implementation-and-coverage",
+  name: "TDD Implementation & Coverage",
+  description: "Implement interfaces + tests, then implementation, then verify.",
+  tags: ["tdd", "implement", "verify"],
+  requiredAgents: ["implement", "verify"],
+  create(input) {
+    return {
+      name: "tdd-implementation-and-coverage",
+      nodes: [
+        mkNode(
+          "interfaces-and-tests",
+          "implement",
+          [],
+          `用 implement 身份按 TDD 顺序先写接口签名与单元测试。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "implementation",
+          "implement",
+          ["interfaces-and-tests"],
+          `用 implement 身份填充实现逻辑使测试通过。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "verify",
+          "verify",
+          ["implementation"],
+          `用 verify 身份跑测试与类型检查确认覆盖率。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const designPatternReview: DAGTemplate = {
+  id: "design-pattern-review",
+  name: "Design Pattern Review",
+  description: "Architecture gate review followed by design-pattern review (archgate + review).",
+  tags: ["arch", "review", "patterns"],
+  requiredAgents: ["archgate", "review"],
+  create(input) {
+    return {
+      name: "design-pattern-review",
+      nodes: [
+        mkNode(
+          "archgate",
+          "archgate",
+          [],
+          `用 archgate 身份标注设计模式适用性与约束。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "review",
+          "review",
+          ["archgate"],
+          `用 review 身份按 design-patterns 维度审查代码。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const responsibilityReview: DAGTemplate = {
+  id: "responsibility-review",
+  name: "Responsibility Review",
+  description: "Architecture gate review followed by responsibility/separation review.",
+  tags: ["arch", "review", "srp"],
+  requiredAgents: ["archgate", "review"],
+  create(input) {
+    return {
+      name: "responsibility-review",
+      nodes: [
+        mkNode(
+          "archgate",
+          "archgate",
+          [],
+          `用 archgate 身份标注模块职责边界。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "review",
+          "review",
+          ["archgate"],
+          `用 review 身份按 SRP/职责分离维度审查。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const patcherAssembly: DAGTemplate = {
+  id: "patcher-assembly",
+  name: "Patcher Assembly",
+  description: "Single-node patcher workflow producing a consolidated diff patch.",
+  tags: ["patcher", "diff"],
+  requiredAgents: ["patcher"],
+  create(input) {
+    return {
+      name: "patcher-assembly",
+      nodes: [
+        mkNode(
+          "patcher",
+          "patcher",
+          [],
+          `用 patcher 身份把所有变更组装为一份 consolidated diff。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const comprehensiveReview: DAGTemplate = {
+  id: "comprehensive-review",
+  name: "Comprehensive Review",
+  description: "Verify → review → archgate chain for full-spectrum code review.",
+  tags: ["verify", "review", "arch"],
+  requiredAgents: ["verify", "review", "archgate"],
+  create(input) {
+    return {
+      name: "comprehensive-review",
+      nodes: [
+        mkNode(
+          "verify",
+          "verify",
+          [],
+          `用 verify 身份运行测试与类型检查收集运行时证据。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "review",
+          "review",
+          ["verify"],
+          `用 review 身份基于 verify 证据做代码审查。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "archgate",
+          "archgate",
+          ["review"],
+          `用 archgate 身份最终判定架构合规性。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+const integrationTest: DAGTemplate = {
+  id: "integration-test",
+  name: "Integration Test",
+  description: "Single-node verify workflow that runs integration tests.",
+  tags: ["verify", "tests", "integration"],
+  requiredAgents: ["verify"],
+  create(input) {
+    return {
+      name: "integration-test",
+      nodes: [
+        mkNode(
+          "verify",
+          "verify",
+          [],
+          `用 verify 身份运行集成测试套件。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
+// ---------------------------------------------------------------------------
+// Registry
+// ---------------------------------------------------------------------------
+
+const registry: Record<DAGTemplateId, DAGTemplate> = {
+  "product-doc-analysis": productDocAnalysis,
+  "architecture-design": architectureDesign,
+  "interface-design": interfaceDesign,
+  "tdd-implementation-and-coverage": tddImplementationAndCoverage,
+  "design-pattern-review": designPatternReview,
+  "responsibility-review": responsibilityReview,
+  "patcher-assembly": patcherAssembly,
+  "comprehensive-review": comprehensiveReview,
+  "integration-test": integrationTest,
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+export function listDAGTemplates(): readonly DAGTemplate[] {
+  return DAG_TEMPLATE_IDS.map((id) => registry[id])
+}
+
+export function getDAGTemplate(id: string): DAGTemplate | undefined {
+  if (!(DAG_TEMPLATE_IDS as readonly string[]).includes(id)) return undefined
+  return registry[id as DAGTemplateId]
+}
+
+export function instantiateDAGTemplate(
+  id: string,
+  input: DAGTemplateInput,
+): DAGConfig | { error: string } {
+  const templ = getDAGTemplate(id)
+  if (!templ) return { error: `Unknown template id: ${id}. Available: ${DAG_TEMPLATE_IDS.join(", ")}` }
+  return templ.create(input)
+}

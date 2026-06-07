@@ -1,0 +1,82 @@
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
+
+You are helping the user start a DAG workflow from a pre-built template.
+
+## What this command does
+
+Browses the recommended DAG template library, previews a template's
+instantiated DAGConfig, and kicks off a workflow using the `dagworker`
+tool's `template_list` / `template_show` / `template_start` actions.
+
+## Available templates (9)
+
+| id | description |
+|----|-------------|
+| product-doc-analysis | explore codebase docs → summarise (explore → general) |
+| architecture-design | archgate approves direction → implement skeleton |
+| interface-design | archgate → implement interfaces → verify |
+| tdd-implementation-and-coverage | implement[interfaces+tests] → implement[impl] → verify |
+| design-pattern-review | archgate + review (design-patterns lens) |
+| responsibility-review | archgate + review (SRP / responsibility lens) |
+| patcher-assembly | single-node patcher producing consolidated diff |
+| comprehensive-review | verify → review → archgate |
+| integration-test | single-node verify running integration tests |
+
+## Agent requirements
+
+Templates reference **both built-in and custom agents**:
+
+- Built-in (always registered): `build`, `plan`, `general`, `explore` (`scout`
+  is available only when the `experimental-scout` feature flag is enabled;
+  templates do not rely on it by default).
+- **Custom agents** that MUST be wired via opencode.json `agent.*` (singular
+  key, NOT `agents`) BEFORE starting: `implement`, `verify`, `review`,
+  `archgate`, `patcher`.
+
+Example opencode.json fragment:
+
+```jsonc
+{
+  "agent": {
+    "implement": { "model": "..." },
+    "verify":    { "model": "..." },
+    "review":    { "model": "..." },
+    "archgate":  { "model": "..." },
+    "patcher":   { "model": "..." }
+  }
+}
+```
+
+If any `worker_type` is unresolved at start time, `dagworker start` /
+`template_start` fails with an actionable error that lists currently
+registered agent names (via `Agent.Service.list()`) and points to the
+singular `agent.*` config location.
+
+## Steps
+
+1. If `$1` is absent, call `dagworker { action: "template_list" }` and show the catalogue; ask the user to pick a template id.
+2. Gather the user's goal text (and optional scope / context) from the conversation.
+3. Build a `template_input` JSON: `{ "goal": "<user goal>"[, "scope": "<…>"[, "context": "<…>"] ] }`.
+4. Preview the instantiated DAGConfig: `dagworker { action: "template_show", template_id: "<id>", template_input: "<json>" }`.
+5. Confirm with the user ("start this workflow now?").
+6. Start it: `dagworker { action: "template_start", template_id: "<id>", template_input: "<json>", wait: false }`.
+7. Report the returned `workflowId` and instruct the user to use `dagworker { action: "status", workflow: "<id>" }` for live progress.
+
+## Notes
+
+- The `template_start` path internally reuses `startWorkflowFromConfig`—the
+  same validator, name-spaced node materialisation, engine registration,
+  executor fork and abort listener run as with plain `dagworker start`.
+- Node prompts in templates are short (1–3 lines) task directives; the
+  agent's own `.md` spec is loaded separately at spawn time and carries
+  the full behavioural contract.
+- For advanced use (custom shapes, additional nodes) prefer the existing
+  `/dag-worker` and `/dag-ctl` commands which accept raw DAGConfig JSON.
+
+## Variables
+
+- `$1` — optional template id to jump straight to. If absent, list first.

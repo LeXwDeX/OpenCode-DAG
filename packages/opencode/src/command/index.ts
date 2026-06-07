@@ -12,6 +12,7 @@ import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_DAGWORKER from "./template/dag-worker.txt"
 import PROMPT_DAG_CTL from "./template/dag-ctl.txt"
 import PROMPT_DAG_RESUME from "./template/dag-resume.txt"
+import PROMPT_DAG_TEMPLATE from "./template/dag-template.txt"
 
 type State = {
   commands: Record<string, Info>
@@ -61,6 +62,7 @@ export const Default = {
   DAGWORKER: "dag-worker",
   DAG_CTL: "dag-ctl",
   DAG_RESUME: "dag-resume",
+  DAG_TEMPLATE: "dag-template",
 } as const
 
 export interface Interface {
@@ -141,6 +143,15 @@ export const layer = Layer.effect(
           return PROMPT_DAG_RESUME
         },
         hints: hints(PROMPT_DAG_RESUME),
+      }
+      commands[Default.DAG_TEMPLATE] = {
+        name: Default.DAG_TEMPLATE,
+        description: "Browse recommended DAG templates and start a workflow from one of the 9 pre-built designs",
+        source: "command",
+        get template() {
+          return PROMPT_DAG_TEMPLATE
+        },
+        hints: hints(PROMPT_DAG_TEMPLATE),
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {
