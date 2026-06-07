@@ -11,6 +11,7 @@
  */
 import { createMemo } from "solid-js"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
+import { DAG_VIOLATION_TYPES, type DAGViolationType } from "@/dag/session/types"
 
 export type Lang = "en" | "zh"
 
@@ -106,13 +107,7 @@ const NODE_STATUS_ZH: Record<NodeStatus, string> = {
   skipped: "已跳过",
 }
 
-export type ViolationType =
-  | "required_node_skipped"
-  | "required_node_failed"
-  | "max_nodes_exceeded"
-  | "max_concurrency_exceeded"
-  | "timeout_exceeded"
-  | "execution_failed"
+export type ViolationType = DAGViolationType
 
 export type ViolationSeverity = "info" | "warning" | "error" | "critical"
 

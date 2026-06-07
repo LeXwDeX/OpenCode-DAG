@@ -223,13 +223,16 @@ export interface DAGNodeMetrics {
  * - max_nodes_exceeded / max_concurrency_exceeded / timeout_exceeded: capacity / time limits
  * - execution_failed: runtime failures during node spawn or execution
  */
-export type DAGViolationType =
-  | 'required_node_skipped'
-  | 'required_node_failed'
-  | 'max_nodes_exceeded'
-  | 'max_concurrency_exceeded'
-  | 'timeout_exceeded'
-  | 'execution_failed';
+export const DAG_VIOLATION_TYPES = [
+  "required_node_skipped",
+  "required_node_failed",
+  "max_nodes_exceeded",
+  "max_concurrency_exceeded",
+  "timeout_exceeded",
+  "execution_failed",
+] as const
+
+export type DAGViolationType = (typeof DAG_VIOLATION_TYPES)[number]
 
 /**
  * 违规严重性

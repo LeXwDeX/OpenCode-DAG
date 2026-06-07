@@ -5,6 +5,7 @@
  */
 
 import { Schema } from "effect"
+import { DAG_VIOLATION_TYPES } from "@/dag/session/types"
 import { HttpApi, HttpApiEndpoint, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
 import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
@@ -116,14 +117,7 @@ export const DagViolation = Schema.Struct({
   id: Schema.String,
   workflowId: Schema.String,
   nodeId: Schema.optional(Schema.String),
-  type: Schema.Literals([
-    "required_node_skipped",
-    "required_node_failed",
-    "max_nodes_exceeded",
-    "max_concurrency_exceeded",
-    "timeout_exceeded",
-    "execution_failed",
-  ]),
+  type: Schema.Literals(DAG_VIOLATION_TYPES),
   severity: Schema.Literals(["info", "warning", "error", "critical"]),
   message: Schema.String,
   timestamp: Schema.String,
