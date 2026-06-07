@@ -9,7 +9,7 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.6"
+OC_VERSION="1.3.7"
 
 # ---------- 插件管理配置 ----------
 OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
@@ -667,7 +667,7 @@ else:
 # 4. 模型属性纠错：只纠正已存在模型的内部字段（limit/cost/modalities/variants 等）；
 #    不新增/删除/改名 model key；不新增 provider；不触碰 URL/API Key。
 #    通道范围：
-#      - API 原厂模式：@ai-sdk/openai、@ai-sdk/anthropic
+#      - API 原厂模式：@ai-sdk/openai、@ai-sdk/anthropic、@ai-sdk/openai-compatible
 #      - GitHub Copilot：provider id 以 github-copilot 开头，或 npm=@ai-sdk/github-copilot
 API_NATIVE_MODEL_TEMPLATES = {
     "@ai-sdk/openai": {
@@ -690,17 +690,97 @@ API_NATIVE_MODEL_TEMPLATES = {
         },
     },
     "@ai-sdk/anthropic": {
+        # Official Anthropic claude-opus-4-6: models-api.json
+        # supports reasoning (extended thinking), attachments (text+image+pdf), tool_call, temperature
         "claude-opus-4-6": {
             "name": "Claude Opus 4.6",
+            "family": "claude-opus",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": True,
             "limit": {"context": 1000000, "output": 128000},
-            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
-            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
+            "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
         },
+        # claude-opus-4-8: not in upstream catalog; mirror 4-6 family characteristics
         "claude-opus-4-8": {
             "name": "Claude Opus 4.8",
+            "family": "claude-opus",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": True,
             "limit": {"context": 1000000, "output": 128000},
-            "cost": {"input": 5, "output": 25, "cache_read": 0.5},
+            "cost": {"input": 5, "output": 25, "cache_read": 0.5, "cache_write": 6.25},
+            "modalities": {"input": ["text", "image", "pdf"], "output": ["text"]},
+        },
+    },
+    "@ai-sdk/openai-compatible": {
+        # Source: D:\yc_agents_orchestration\agents_multi-orchestration\config\opencode.json
+        "qwen3.7-max": {
+            "name": "Qwen3.7 Max",
+            "family": "qwen3.7",
+            "release_date": "2026-05-20",
+            "status": "active",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": False,
+            "limit": {"context": 1000000, "input": 936000, "output": 64000},
+            "cost": {"input": 12, "output": 36, "cache_read": 1.2, "cache_write": 12},
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "interleaved": {"field": "reasoning_content"},
+            "variants": {
+                "enabled": {"thinking": {"type": "enabled"}},
+                "disabled": {"thinking": {"type": "disabled"}},
+            },
+        },
+        "deepseek-v4-pro": {
+            "name": "DeepSeek V4 Pro",
+            "family": "deepseek",
+            "release_date": "2026-05-20",
+            "status": "active",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": True,
+            "limit": {"context": 1000000, "input": 936000, "output": 64000},
+            "cost": {"input": 12, "output": 36, "cache_read": 1.2, "cache_write": 12},
+            "modalities": {"input": ["text"], "output": ["text"]},
+            "interleaved": {"field": "reasoning_content"},
+            "variants": {
+                "enabled": {"thinking": {"type": "enabled"}},
+                "disabled": {"thinking": {"type": "disabled"}},
+            },
+        },
+        "MiniMax/MiniMax-M3": {
+            "name": "MiniMax M3",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": True,
+            "limit": {"context": 1000000, "output": 128000},
+            "cost": {"input": 2.1, "output": 8.4, "cache_read": 0.42},
             "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "interleaved": {"field": "reasoning_content"},
+        },
+        "stepfun/step-3.7-flash": {
+            "name": "Step 3.7 Flash",
+            "reasoning": True,
+            "tool_call": True,
+            "attachment": True,
+            "temperature": True,
+            "limit": {"context": 262144, "input": 262144, "output": 262144},
+            "cost": {"input": 1.35, "output": 8.1, "cache_read": 0.27},
+            "modalities": {"input": ["text", "image"], "output": ["text"]},
+            "interleaved": {"field": "reasoning_content"},
+            "options": {"reasoning_format": "deepseek-style"},
+            "variants": {
+                "low": {"reasoningEffort": "low"},
+                "medium": {"reasoningEffort": "medium"},
+                "high": {"reasoningEffort": "high"},
+            },
         },
     },
 }
