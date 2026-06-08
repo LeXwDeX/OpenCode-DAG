@@ -15,7 +15,7 @@
  * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createMemo, createSignal, Match, Show, Switch, type JSX } from "solid-js"
+import { createMemo, createSignal, Show, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
 import { calculateWorkflowProgress } from "@/dag/session/types"
@@ -186,7 +186,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     if (ns.length === 0) return
     const curIdx = ns.findIndex((n) => n.node_id === selectedNodeID())
     const next = ns[nextIndex(ns.length, curIdx, delta)]
-    if (next) setSelectedNodeID(next.node_id)
+    if (next) {
+      setSelectedNodeID(next.node_id)
+      if (!wide()) setDetailExpanded(true)
+    }
   }
 
   function moveSelection(delta: number) {
@@ -217,6 +220,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       { key: "return", desc: "Select / Enter sub-session", group: "DAG", cmd() { confirmSelection() } },
       { key: "<leader>p", desc: "Pause / resume workflow", group: "DAG", cmd() { togglePauseResume() } },
       { key: "<leader>v", desc: "Toggle DAG view (tree ↔ ASCII)", group: "DAG", cmd() { toggleView() } },
+      { key: "[", desc: "Toggle sidebar (narrow)", group: "DAG", cmd() { if (!wide()) setSidebarExpanded((v) => !v) } },
+      { key: "]", desc: "Toggle detail (narrow)", group: "DAG", cmd() { if (!wide()) setDetailExpanded((v) => !v) } },
     ],
   }))
 
@@ -367,7 +372,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                         nodes={nodes()}
                         violations={violations()}
                         selectedNodeId={selectedNodeID()}
-                        onNodeSelect={(nodeId) => setSelectedNodeID(nodeId)}
+                        onNodeSelect={(nodeId) => {
+                          setSelectedNodeID(nodeId)
+                          if (!wide()) setDetailExpanded(true)
+                        }}
                       />
                     }
                   >
@@ -375,7 +383,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                       lang={i18n().lang}
                       nodes={nodes()}
                       selectedNodeID={selectedNodeID() ?? undefined}
-                      onSelect={(id) => setSelectedNodeID(id)}
+                      onSelect={(id) => {
+                        setSelectedNodeID(id)
+                        if (!wide()) setDetailExpanded(true)
+                      }}
                     />
                   </Show>
                 </scrollbox>
@@ -423,6 +434,84 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           </box>
         </Show>
       </box>
+
+      {/* Narrow-mode overlays — sidebar and detail panels as absolute-positioned drawers */}
+      <Show when={!wide() && sidebarExpanded()}>
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          bottom={0}
+          width={34}
+          backgroundColor={theme.background}
+          border={["right"]}
+          borderColor={focusPane() === "list" ? theme.primary : theme.border}
+          paddingLeft={1}
+          paddingTop={1}
+          paddingBottom={1}
+          zIndex={100}
+        >
+          <scrollbox flexGrow={1} minHeight={0}>
+            <Sidebar
+              lang={i18n().lang}
+              workflows={filteredWorkflows()}
+              statusFilter={statusFilter()}
+              search={search()}
+              currentWorkflowID={currentWorkflowID()}
+              onStatusFilter={(s) => setStatusFilter(s)}
+              onSearch={(q) => setSearch(q)}
+              onSelect={(id: string) => {
+                setCurrentWorkflowID(id)
+                setSelectedNodeID(null)
+                setSidebarExpanded(false)
+              }}
+            />
+          </scrollbox>
+        </box>
+      </Show>
+      <Show when={!wide() && detailExpanded()}>
+        <box
+          position="absolute"
+          top={0}
+          right={0}
+          bottom={0}
+          width={42}
+          backgroundColor={theme.background}
+          border={["left"]}
+          borderColor={theme.border}
+          paddingLeft={1}
+          paddingRight={1}
+          paddingTop={1}
+          paddingBottom={1}
+          gap={1}
+          zIndex={100}
+        >
+          <scrollbox flexGrow={1} minHeight={0}>
+            <NodeDialog
+              lang={i18n().lang}
+              node={selectedNode()}
+              onClose={() => {
+                setSelectedNodeID(null)
+                setDetailExpanded(false)
+              }}
+              route={props.api.route}
+            />
+            <WorkflowHistoryPanel
+              lang={i18n().lang}
+              history={workflowHistory()}
+              error={workflowHistoryError()}
+              loading={workflowHistoryLoading()}
+            />
+            <NodeLogsPanel
+              lang={i18n().lang}
+              logs={nodeLogs()}
+              error={nodeLogsError()}
+              loading={nodeLogsLoading()}
+            />
+          </scrollbox>
+          <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
+        </box>
+      </Show>
 
       {/* 底部快捷键提示 */}
       <box
