@@ -132,6 +132,9 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_parallelism: ["Parallel", "并行度"],
     label_eta: ["ETA", "预计完成"],
     timeline_empty: ["No timeline events", "暂无时间线事件"],
+    label_tool_calls: ["Tool Calls", "工具调用"],
+    label_violations: ["Violations", "违规"],
+    label_no_violations: ["No violations", "无违规"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

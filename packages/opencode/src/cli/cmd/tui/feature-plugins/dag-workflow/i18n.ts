@@ -70,6 +70,9 @@ const DICT = {
     label_parallelism: "Parallel",
     label_eta: "ETA",
     timeline_empty: "No timeline events",
+    label_tool_calls: "Tool Calls",
+    label_violations: "Violations",
+    label_no_violations: "No violations",
   },
   zh: {
     tab_dialogue: "对话",
@@ -121,6 +124,9 @@ const DICT = {
     label_parallelism: "并行度",
     label_eta: "预计完成",
     timeline_empty: "暂无时间线事件",
+    label_tool_calls: "工具调用",
+    label_violations: "违规",
+    label_no_violations: "无违规",
   },
 } as const
 

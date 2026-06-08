@@ -920,6 +920,40 @@ export function useViolations(props: {
 }
 
 /**
+ * useNodeToolCounts — 订阅 message.part.updated 事件，实时统计每个节点的 tool call 完成数。
+ *
+ * 通过 evt.properties.sessionID 与 nodes() 中各 node.metadata.chat_session_id 匹配，
+ * 筛选 type === "tool" && state === "completed" 的 part，按 sessionID 累加计数。
+ *
+ * 返回 () => Record<chat_session_id, count>。
+ */
+export function useNodeToolCounts(props: {
+  event: EventBus
+  nodes: () => DAGNodeSession[]
+}): () => Record<string, number> {
+  const [counts, setCounts] = createSignal<Record<string, number>>({})
+
+  const off = props.event.on("message.part.updated", (evt) => {
+    const sessionID = evt.properties.sessionID as string | undefined
+    if (!sessionID) return
+    const nodeIDs = new Set(
+      props
+        .nodes()
+        .map((n) => n.metadata?.chat_session_id)
+        .filter((id): id is string => typeof id === "string"),
+    )
+    if (!nodeIDs.has(sessionID)) return
+    const part = evt.properties.part as { type: string; state?: unknown } | undefined
+    if (!part || part.type !== "tool" || String(part.state ?? "") !== "completed") return
+    setCounts((prev) => ({ ...prev, [sessionID]: (prev[sessionID] ?? 0) + 1 }))
+  })
+
+  onCleanup(off)
+
+  return counts
+}
+
+/**
  * useNodeAskMain — 订阅 dag.node.ask_main 事件，将最新节点提问暴露为 signal。
  *
  * 仅监听事件（无 SDK 拉取）；通过 workflowId 过滤当前工作流的事件。

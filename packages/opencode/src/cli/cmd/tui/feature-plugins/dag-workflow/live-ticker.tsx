@@ -46,6 +46,14 @@ export function summarizePart(
 }
 
 /**
+ * countToolParts — counts how many parts are tool calls in "completed" state.
+ * Pure function, no side effects. Used by useNodeToolCounts and exposed for tests.
+ */
+export function countToolParts(parts: Array<{ type: string; state?: unknown }>): number {
+  return parts.filter((p) => p.type === "tool" && String(p.state ?? "") === "completed").length
+}
+
+/**
  * LiveTicker component — shows most recent activity in the workflow.
  */
 export function LiveTicker(props: {

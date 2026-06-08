@@ -29,9 +29,11 @@ import {
   useNodeAskMain,
   useWorkflowTimeline,
   useWorkflowStats,
+  useNodeToolCounts,
 } from "./data"
+import { countToolParts } from "./live-ticker"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import type { DAGWorkflowSession } from "@/dag/session/types"
+import type { DAGNodeSession, DAGWorkflowSession } from "@/dag/session/types"
 
 // ── SDK 样本数据（含 number|"NaN"|"Infinity" 等序列化产物） ──────────────────
 
@@ -868,6 +870,120 @@ describe("WP-TUI-2 data.ts — useNodeAskMain", () => {
     expect(value.lastQuestion()).not.toBeNull()
     value.clear()
     expect(value.lastQuestion()).toBeNull()
+    dispose()
+  })
+})
+
+// ── WP-TUI-5: countToolParts ─────────────────────────────────────────────────
+
+describe("WP-TUI-5 live-ticker.tsx — countToolParts", () => {
+  it("returns 0 for empty array", () => {
+    expect(countToolParts([])).toBe(0)
+  })
+
+  it("counts only tool parts with state=completed, ignoring other types and states", () => {
+    const parts = [
+      { type: "text", state: "completed" },
+      { type: "tool", state: "completed" },
+      { type: "tool", state: "running" },
+      { type: "tool", state: "completed" },
+    ]
+    expect(countToolParts(parts)).toBe(2)
+  })
+
+  it("returns 0 when no tool parts are present", () => {
+    const parts = [
+      { type: "text", state: "completed" },
+      { type: "reasoning", state: "completed" },
+    ]
+    expect(countToolParts(parts)).toBe(0)
+  })
+
+  it("returns 0 when all tool parts are non-completed", () => {
+    const parts = [
+      { type: "tool", state: "running" },
+      { type: "tool", state: "pending" },
+      { type: "tool" },
+    ]
+    expect(countToolParts(parts)).toBe(0)
+  })
+})
+
+// ── WP-TUI-5: useNodeToolCounts ──────────────────────────────────────────────
+
+describe("WP-TUI-5 data.ts — useNodeToolCounts", () => {
+  it("returns empty record initially", async () => {
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useNodeToolCounts({ event, nodes: () => [] }),
+    )
+    expect(value()).toEqual({})
+    dispose()
+  })
+
+  it("increments count for matching session ID on tool completed events", async () => {
+    const { fire, event } = capturingEvent()
+    const nodes = (): DAGNodeSession[] =>
+      [
+        { node_id: "n1", metadata: { chat_session_id: "chat-n1" } },
+        { node_id: "n2", metadata: { chat_session_id: "chat-n2" } },
+      ] as unknown as DAGNodeSession[]
+    const { value, dispose } = await withRoot(() =>
+      useNodeToolCounts({ event, nodes }),
+    )
+    fire("message.part.updated", {
+      sessionID: "chat-n1",
+      part: { type: "tool", state: "completed", tool: "bash" },
+    })
+    fire("message.part.updated", {
+      sessionID: "chat-n1",
+      part: { type: "tool", state: "completed", tool: "grep" },
+    })
+    fire("message.part.updated", {
+      sessionID: "chat-n2",
+      part: { type: "tool", state: "completed", tool: "read" },
+    })
+    const counts = value()
+    expect(counts["chat-n1"]).toBe(2)
+    expect(counts["chat-n2"]).toBe(1)
+    dispose()
+  })
+
+  it("ignores events for session IDs not in nodes list", async () => {
+    const { fire, event } = capturingEvent()
+    const nodes = (): DAGNodeSession[] =>
+      [
+        { node_id: "n1", metadata: { chat_session_id: "chat-n1" } },
+      ] as unknown as DAGNodeSession[]
+    const { value, dispose } = await withRoot(() =>
+      useNodeToolCounts({ event, nodes }),
+    )
+    fire("message.part.updated", {
+      sessionID: "unrelated-session",
+      part: { type: "tool", state: "completed", tool: "bash" },
+    })
+    expect(value()).toEqual({})
+    dispose()
+  })
+
+  it("ignores tool parts with non-completed state", async () => {
+    const { fire, event } = capturingEvent()
+    const nodes = (): DAGNodeSession[] =>
+      [
+        { node_id: "n1", metadata: { chat_session_id: "chat-n1" } },
+      ] as unknown as DAGNodeSession[]
+    const { value, dispose } = await withRoot(() =>
+      useNodeToolCounts({ event, nodes }),
+    )
+    fire("message.part.updated", {
+      sessionID: "chat-n1",
+      part: { type: "tool", state: "running", tool: "bash" },
+    })
+    fire("message.part.updated", {
+      sessionID: "chat-n1",
+      part: { type: "text", state: "completed" },
+    })
+    expect(value()).toEqual({})
     dispose()
   })
 })

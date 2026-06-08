@@ -9,7 +9,6 @@
 import { createMemo, For, Show, type JSX } from "solid-js"
 import type {
   DAGNodeSession,
-  DAGViolation,
   DAGWorkflowSession,
   DAGWorkflowProgress,
   DAGWorkflowStatus,
@@ -19,7 +18,7 @@ import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
 import type { Lang } from "./i18n"
-import { t, nodeStatusLabel, workflowStatusLabel, violationSeverityLabel, violationTypeLabel } from "./i18n"
+import { t, nodeStatusLabel, workflowStatusLabel } from "./i18n"
 
 function formatDuration(ms: number | null | undefined): string {
   if (ms === null || ms === undefined) return "\u2014"
@@ -77,7 +76,6 @@ export function DagWorkflowRenderer(props: {
   lang: Lang
   workflow: DAGWorkflowSession
   nodes: DAGNodeSession[]
-  violations: DAGViolation[]
   selectedNodeId: string | null
   onNodeSelect: (nodeId: string) => void
 }): JSX.Element {
@@ -146,19 +144,6 @@ export function DagWorkflowRenderer(props: {
         </Show>
       </box>
 
-      <Show when={props.violations.length > 0}>
-        <box border={["top"]} borderColor={theme.error} title={` ${t(props.lang, "title_violations")} `} titleAlignment="center" />
-        <For each={props.violations}>
-          {(violation) => (
-            <box flexDirection="row" gap={1} paddingLeft={1}>
-              <text fg={theme.error}>{"\u26a0"}</text>
-              <text fg={theme.error}>[{violationSeverityLabel(props.lang, violation.severity)}]</text>
-              <text fg={theme.text}>{violationTypeLabel(props.lang, violation.type)}:</text>
-              <text fg={theme.textMuted}>{violation.message}</text>
-            </box>
-          )}
-        </For>
-      </Show>
     </box>
   )
 }

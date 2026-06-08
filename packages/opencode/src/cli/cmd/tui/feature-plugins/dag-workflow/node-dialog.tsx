@@ -24,6 +24,7 @@ export function NodeDialog(props: {
   node: DAGNodeSession | null
   onClose: () => void
   route: TuiPluginApi["route"]
+  toolCounts?: () => Record<string, number>
 }): JSX.Element {
   const { theme } = useTheme()
 
@@ -58,6 +59,16 @@ export function NodeDialog(props: {
           <text fg={theme.textMuted}>
             {t(props.lang, "label_retries")}: {node().retry_count}/{node().max_retries}
           </text>
+          <Show
+            when={
+              typeof node().metadata?.chat_session_id === "string" && props.toolCounts
+            }
+          >
+            <text fg={theme.textMuted}>
+              {t(props.lang, "label_tool_calls")}:{" "}
+              {props.toolCounts!()[node().metadata!.chat_session_id as string] ?? 0}
+            </text>
+          </Show>
           <box gap={0}>
             <text fg={theme.textMuted}>{t(props.lang, "label_timing")}</text>
             <text fg={theme.textMuted}>{t(props.lang, "label_start_time")}: {formatNodeTime(node().start_time)}</text>

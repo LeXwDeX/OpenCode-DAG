@@ -29,6 +29,7 @@ import {
   useNodeAskMain,
   useWorkflowTimeline,
   useWorkflowStats,
+  useNodeToolCounts,
   filterWorkflows,
   nextIndex,
   pauseWorkflow,
@@ -44,6 +45,7 @@ import { NodeDialog } from "./node-dialog"
 import { WorkflowHistoryPanel } from "./history-panel"
 import { NodeLogsPanel } from "./node-logs-panel"
 import { TimelinePanel } from "./timeline-panel"
+import { ViolationsList } from "./violations-list"
 import { Sidebar } from "./sidebar"
 import { PauseResumeBar } from "./pause-resume-bar"
 import { useBindings } from "../../keymap"
@@ -116,6 +118,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     event: props.api.event,
     workflowId: currentWorkflowID,
   })
+
+  const toolCounts = useNodeToolCounts({ event: props.api.event, nodes })
 
   const {
     history: workflowHistory,
@@ -414,7 +418,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                         lang={i18n().lang}
                         workflow={wf()}
                         nodes={nodes()}
-                        violations={violations()}
                         selectedNodeId={selectedNodeID()}
                         onNodeSelect={(nodeId) => {
                           setSelectedNodeID(nodeId)
@@ -432,6 +435,9 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                         if (!wide()) setDetailExpanded(true)
                       }}
                     />
+                  </Show>
+                  <Show when={violations().length > 0}>
+                    <ViolationsList lang={i18n().lang} violations={violations()} />
                   </Show>
                 </scrollbox>
               </box>
@@ -460,6 +466,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 node={selectedNode()}
                 onClose={() => setSelectedNodeID(null)}
                 route={props.api.route}
+                toolCounts={toolCounts}
               />
               <WorkflowHistoryPanel
                 lang={i18n().lang}
@@ -545,6 +552,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 setDetailExpanded(false)
               }}
               route={props.api.route}
+              toolCounts={toolCounts}
             />
             <WorkflowHistoryPanel
               lang={i18n().lang}
