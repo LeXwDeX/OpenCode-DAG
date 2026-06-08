@@ -135,6 +135,21 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_tool_calls: ["Tool Calls", "工具调用"],
     label_violations: ["Violations", "违规"],
     label_no_violations: ["No violations", "无违规"],
+    ctrl_pause: ["[Pause]", "[暂停]"],
+    ctrl_resume: ["[Resume]", "[恢复]"],
+    ctrl_cancel: ["[Cancel]", "[取消]"],
+    ctrl_replan: ["[Replan]", "[调整并发]"],
+    ctrl_new: ["[+ New]", "[+ 新建]"],
+    dlg_cancel_title: ["Cancel workflow", "取消工作流"],
+    dlg_cancel_msg: ["Cancelling is irreversible. Continue?", "取消不可逆，确认继续？"],
+    dlg_replan_title: ["Set max concurrency", "设置最大并发数"],
+    dlg_replan_ph: ["1-10", "1-10"],
+    dlg_create_title: ["Choose a template", "选择模板"],
+    dlg_goal_title: ["Workflow goal", "工作流目标"],
+    dlg_goal_ph: ["Describe the goal", "描述目标"],
+    toast_created: ["Workflow created (pending). Start it via a chat turn.", "工作流已创建（待启动），请通过对话轮启动。"],
+    toast_replan_range: ["Concurrency must be between 1 and 10", "并发数必须在 1 到 10 之间"],
+    toast_create_error: ["Failed to create workflow", "创建工作流失败"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

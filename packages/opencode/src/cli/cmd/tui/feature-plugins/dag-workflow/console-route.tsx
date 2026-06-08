@@ -34,7 +34,14 @@ import {
   nextIndex,
   pauseWorkflow,
   resumeWorkflow,
+  cancelWorkflow,
+  replanWorkflow,
+  createWorkflow,
 } from "./data"
+import {
+  listDAGTemplates,
+  instantiateDAGTemplate,
+} from "@/dag/integration/templates"
 import {
   DagWorkflowRenderer,
   DagProgressBar,
@@ -47,7 +54,7 @@ import { NodeLogsPanel } from "./node-logs-panel"
 import { TimelinePanel } from "./timeline-panel"
 import { ViolationsList } from "./violations-list"
 import { Sidebar } from "./sidebar"
-import { PauseResumeBar } from "./pause-resume-bar"
+import { ControlBar, parseReplanConcurrency, type ControlAction } from "./control-bar"
 import { useBindings } from "../../keymap"
 import { useLang } from "./i18n"
 import { useToast } from "@tui/ui/toast"
@@ -216,6 +223,108 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     if (wf.status === "paused") void pauseResume("resume", wf.id)
   }
 
+  // ── ControlBar action dispatch ───────────────────────────────────────────
+  // ControlBar emits intents only; this route owns the dialogs (api.ui.*) and
+  // the data.ts wrapper calls. pause/resume reuse pauseResume; cancel is gated
+  // by a DialogConfirm (terminal is irreversible); replan collects a 1-10
+  // concurrency via DialogPrompt.
+  function handleControlAction(action: ControlAction, workflowId: string) {
+    if (action === "pause" || action === "resume") {
+      void pauseResume(action, workflowId)
+      return
+    }
+    if (action === "cancel") {
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogConfirm({
+          title: i18n().t("dlg_cancel_title"),
+          message: i18n().t("dlg_cancel_msg"),
+          onConfirm: () => void cancelCurrent(workflowId),
+        }),
+      )
+      return
+    }
+    // replan
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogPrompt({
+        title: i18n().t("dlg_replan_title"),
+        placeholder: i18n().t("dlg_replan_ph"),
+        onConfirm: (value) => void replanCurrent(workflowId, value),
+      }),
+    )
+  }
+
+  async function cancelCurrent(workflowId: string) {
+    try {
+      setActionError(null)
+      await cancelWorkflow(props.api.client, workflowId)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function replanCurrent(workflowId: string, value: string) {
+    const parsed = parseReplanConcurrency(value)
+    if (!parsed.ok) {
+      toast.show({ message: i18n().t("toast_replan_range"), variant: "error" })
+      return
+    }
+    try {
+      setActionError(null)
+      await replanWorkflow(props.api.client, workflowId, { new_max_concurrency: parsed.value })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  // ── Create workflow from template ─────────────────────────────────────────
+  // Two-step dialog chain via api.ui.dialog.replace: select a template, then
+  // collect a goal. create is template-derived only (instantiateDAGTemplate);
+  // node add/remove and AI generation are out of scope for the TUI.
+  function handleCreate() {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogSelect<string>({
+        title: i18n().t("dlg_create_title"),
+        options: listDAGTemplates().map((tpl) => ({
+          title: tpl.name,
+          value: tpl.id,
+          description: tpl.description,
+        })),
+        onSelect: (option) => promptGoalThenCreate(option.value),
+      }),
+    )
+  }
+
+  function promptGoalThenCreate(templateId: string) {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogPrompt({
+        title: i18n().t("dlg_goal_title"),
+        placeholder: i18n().t("dlg_goal_ph"),
+        onConfirm: (goal) => void createFromTemplate(templateId, goal),
+      }),
+    )
+  }
+
+  async function createFromTemplate(templateId: string, goal: string) {
+    const result = instantiateDAGTemplate(templateId, { goal })
+    if ("error" in result) {
+      setActionError(result.error)
+      toast.show({ message: i18n().t("toast_create_error"), variant: "error" })
+      return
+    }
+    try {
+      setActionError(null)
+      await createWorkflow(props.api.client, {
+        name: goal.slice(0, 80),
+        chatSessionId: sessionID(),
+        config: result,
+      })
+      toast.show({ message: i18n().t("toast_created"), variant: "success" })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+      toast.show({ message: i18n().t("toast_create_error"), variant: "error" })
+    }
+  }
+
   // ── Keyboard navigation helpers ──────────────────────────────────────────
   function moveWorkflowSelection(delta: number) {
     const list = filteredWorkflows()
@@ -323,6 +432,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           <text fg={theme.text}>
             <b>{i18n().t("tab_workflow")}</b>
           </text>
+          <text fg={theme.textMuted}>│</text>
+          <text fg={theme.primary} onMouseUp={handleCreate}>
+            {i18n().t("ctrl_new")}
+          </text>
         </box>
         <box flexDirection="row" gap={3}>
           <text
@@ -405,10 +518,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   status={currentWorkflow()?.status ?? "pending"}
                   stats={workflowStats()}
                 />
-                <PauseResumeBar
+                <ControlBar
+                  lang={i18n().lang}
                   workflowId={wf().id}
                   currentStatus={() => wf().status}
-                  onAction={(action) => void pauseResume(action, wf().id)}
+                  onAction={(action) => handleControlAction(action, wf().id)}
                 />
                 <scrollbox flexGrow={1} minHeight={0} stickyScroll={false} stickyStart="top">
                   <Show
