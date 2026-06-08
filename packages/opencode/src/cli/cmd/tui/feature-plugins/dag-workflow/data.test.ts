@@ -24,6 +24,7 @@ import {
   useViolations,
   useNodeLogs,
   useWorkflowHistory,
+  useNodeAskMain,
 } from "./data"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { DAGWorkflowSession } from "@/dag/session/types"
@@ -500,3 +501,90 @@ describe("WP4 data.ts — nextIndex", () => {
     expect(nextIndex(3, 0, -1)).toBe(0)
   })
 })
+
+// ── useNodeAskMain ──────────────────────────────────────────────────────────
+
+function capturingEvent(): {
+  event: TuiPluginApi["event"]
+  fire: (type: string, properties: unknown) => void
+} {
+  const handlers: Record<string, (e: { properties: unknown }) => void> = {}
+  return {
+    event: {
+      on: (type: string, handler: (e: { properties: unknown }) => void) => {
+        handlers[type] = handler
+        return () => {
+          delete handlers[type]
+        }
+      },
+    } as unknown as TuiPluginApi["event"],
+    fire: (type, properties) => handlers[type]?.({ properties }),
+  }
+}
+
+describe("WP-TUI-2 data.ts — useNodeAskMain", () => {
+  it("returns null initially", async () => {
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useNodeAskMain({ event, workflowId: () => "wf-1" }),
+    )
+    expect(value.lastQuestion()).toBeNull()
+    dispose()
+  })
+
+  it("captures dag.node.ask_main when workflowID matches current workflow", async () => {
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useNodeAskMain({ event, workflowId: () => "wf-1" }),
+    )
+    fire("dag.node.ask_main", {
+      workflowID: "wf-1",
+      nodeID: "n-ask",
+      chatSessionID: "chat-ask",
+      question: "Need confirmation on branch",
+      context: "node n-ask needs user input",
+      timestamp: 1700000000000,
+    })
+    const q = value.lastQuestion()
+    expect(q).not.toBeNull()
+    expect(q!.nodeID).toBe("n-ask")
+    expect(q!.chatSessionID).toBe("chat-ask")
+    expect(q!.question).toBe("Need confirmation on branch")
+    expect(q!.context).toBe("node n-ask needs user input")
+    expect(q!.timestamp).toBe(1700000000000)
+    dispose()
+  })
+
+  it("ignores dag.node.ask_main when workflowID does NOT match", async () => {
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useNodeAskMain({ event, workflowId: () => "wf-1" }),
+    )
+    fire("dag.node.ask_main", {
+      workflowID: "wf-other",
+      nodeID: "n-ask",
+      question: "Unrelated question",
+      timestamp: 1700000000000,
+    })
+    expect(value.lastQuestion()).toBeNull()
+    dispose()
+  })
+
+  it("clear() resets lastQuestion to null", async () => {
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useNodeAskMain({ event, workflowId: () => "wf-1" }),
+    )
+    fire("dag.node.ask_main", {
+      workflowID: "wf-1",
+      nodeID: "n-ask",
+      question: "Are you sure?",
+      timestamp: 1700000000000,
+    })
+    expect(value.lastQuestion()).not.toBeNull()
+    value.clear()
+    expect(value.lastQuestion()).toBeNull()
+    dispose()
+  })
+})
+

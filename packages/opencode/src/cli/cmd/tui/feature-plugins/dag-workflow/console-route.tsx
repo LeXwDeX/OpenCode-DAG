@@ -15,7 +15,7 @@
  * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createMemo, createSignal, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
 import { calculateWorkflowProgress } from "@/dag/session/types"
@@ -26,6 +26,7 @@ import {
   useWorkflowHistory,
   useNodeLogs,
   useViolations,
+  useNodeAskMain,
   filterWorkflows,
   nextIndex,
   pauseWorkflow,
@@ -44,6 +45,7 @@ import { Sidebar } from "./sidebar"
 import { PauseResumeBar } from "./pause-resume-bar"
 import { useBindings } from "../../keymap"
 import { useLang } from "./i18n"
+import { useToast } from "@tui/ui/toast"
 
 const ROUTE = "dag-workflow"
 
@@ -130,6 +132,27 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     client: props.api.client,
     event: props.api.event,
     nodeId: selectedNodeID,
+  })
+
+  // ── WP-TUI-2: node ask_main subscription ─────────────────────────────────
+  const toast = useToast()
+  const { lastQuestion, clear: clearAskMain } = useNodeAskMain({
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+  })
+  createEffect(() => {
+    const q = lastQuestion()
+    if (!q) return
+    toast.show({
+      title: `Node asks: ${q.nodeID}`,
+      message: q.question,
+      variant: "info",
+      duration: 5000,
+    })
+    if (q.chatSessionID) {
+      props.api.route.navigate("session", { sessionID: q.chatSessionID })
+    }
+    clearAskMain()
   })
 
   const filteredWorkflows = createMemo(() =>

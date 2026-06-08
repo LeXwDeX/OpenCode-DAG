@@ -272,6 +272,20 @@ export type NodeLogsApi = {
   refresh: () => void
 }
 
+export type NodeAskMainPayload = {
+  workflowID: string
+  nodeID: string
+  chatSessionID?: string
+  question: string
+  context?: string
+  timestamp: number
+}
+
+export type NodeAskMainApi = {
+  lastQuestion: Accessor<NodeAskMainPayload | null>
+  clear: () => void
+}
+
 export function mapWorkflowHistory(h: {
   history_id: string
   workflow_id: string
@@ -637,4 +651,32 @@ export function useViolations(props: {
   })
 
   return { violations, error, refresh: () => void load() }
+}
+
+/**
+ * useNodeAskMain — 订阅 dag.node.ask_main 事件，将最新节点提问暴露为 signal。
+ *
+ * 仅监听事件（无 SDK 拉取）；通过 workflowId 过滤当前工作流的事件。
+ * 消费方典型用法：createEffect 观察 lastQuestion，触发 toast / 自动跳转后调 clear()。
+ */
+export function useNodeAskMain(props: {
+  event: EventBus
+  workflowId: Accessor<string | undefined>
+}): NodeAskMainApi {
+  const [lastQuestion, setLastQuestion] = createSignal<NodeAskMainPayload | null>(null)
+  const off = props.event.on("dag.node.ask_main", (e) => {
+    const wfId = props.workflowId()
+    if (wfId && e.properties.workflowID === wfId) {
+      setLastQuestion({
+        workflowID: e.properties.workflowID,
+        nodeID: e.properties.nodeID,
+        chatSessionID: e.properties.chatSessionID,
+        question: e.properties.question,
+        context: e.properties.context,
+        timestamp: num(e.properties.timestamp),
+      })
+    }
+  })
+  onCleanup(off)
+  return { lastQuestion, clear: () => setLastQuestion(null) }
 }
