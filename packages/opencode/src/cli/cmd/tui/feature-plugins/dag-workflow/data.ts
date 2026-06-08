@@ -286,6 +286,60 @@ export type NodeAskMainApi = {
   clear: () => void
 }
 
+// ============================================================================
+// Timeline / GraphStats 领域类型（WP-TUI-4）
+// ============================================================================
+
+export type TimelineEventType = "node_start" | "node_complete" | "node_failed" | "edge_traversal"
+
+export type TimelineEvent = {
+  type: TimelineEventType
+  nodeId: string
+  timestamp: number
+  duration: number | null
+  metadata?: Record<string, unknown>
+}
+
+export type NodeExecutionTime = {
+  nodeId: string
+  nodeName: string
+  startTime: number
+  endTime: number
+  duration: number
+  status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+}
+
+export type Timeline = {
+  workflowId: string
+  startTime: number
+  endTime: number | null
+  events: TimelineEvent[]
+  totalDuration: number
+  nodeExecutionTimes: Record<string, NodeExecutionTime>
+}
+
+export type GraphStats = {
+  totalNodes: number
+  totalEdges: number
+  criticalPathLength: number
+  parallelismDegree: number
+  estimatedCompletionTime: number
+}
+
+export type WorkflowTimelineApi = {
+  timeline: Accessor<Timeline | null>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
+export type WorkflowStatsApi = {
+  stats: Accessor<GraphStats | null>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
 export function mapWorkflowHistory(h: {
   history_id: string
   workflow_id: string
@@ -331,6 +385,76 @@ export function mapNodeLog(log: {
     log_data: log.log_data,
     execution_phase: log.execution_phase,
     created_at: log.created_at,
+  }
+}
+
+/** SDK DagTimeline → 领域 Timeline（SdkNumber 收敛） */
+export function mapTimeline(t: {
+  workflowId: string
+  startTime: SdkNumber
+  endTime: SdkNumber | null
+  events: ReadonlyArray<{
+    type: TimelineEventType
+    nodeId: string
+    timestamp: SdkNumber
+    duration?: SdkNumber | null
+    metadata?: Record<string, unknown>
+  }>
+  totalDuration: SdkNumber
+  nodeExecutionTimes?: Record<
+    string,
+    {
+      nodeId: string
+      nodeName: string
+      startTime: SdkNumber
+      endTime: SdkNumber
+      duration: SdkNumber
+      status: NodeExecutionTime["status"]
+    }
+  >
+}): Timeline {
+  return {
+    workflowId: t.workflowId,
+    startTime: num(t.startTime),
+    endTime: numOrNull(t.endTime),
+    events: t.events.map((e) => ({
+      type: e.type,
+      nodeId: e.nodeId,
+      timestamp: num(e.timestamp),
+      duration: numOrNull(e.duration),
+      ...(e.metadata ? { metadata: e.metadata } : {}),
+    })),
+    totalDuration: num(t.totalDuration),
+    nodeExecutionTimes: Object.fromEntries(
+      Object.entries(t.nodeExecutionTimes ?? {}).map(([k, v]) => [
+        k,
+        {
+          nodeId: v.nodeId,
+          nodeName: v.nodeName,
+          startTime: num(v.startTime),
+          endTime: num(v.endTime),
+          duration: num(v.duration),
+          status: v.status,
+        } as NodeExecutionTime,
+      ]),
+    ),
+  }
+}
+
+/** SDK DagGraphStatistics → 领域 GraphStats（SdkNumber 收敛） */
+export function mapGraphStats(s: {
+  totalNodes: SdkNumber
+  totalEdges: SdkNumber
+  criticalPathLength: SdkNumber
+  parallelismDegree: SdkNumber
+  estimatedCompletionTime: SdkNumber
+}): GraphStats {
+  return {
+    totalNodes: num(s.totalNodes),
+    totalEdges: num(s.totalEdges),
+    criticalPathLength: num(s.criticalPathLength),
+    parallelismDegree: num(s.parallelismDegree),
+    estimatedCompletionTime: num(s.estimatedCompletionTime),
   }
 }
 
@@ -452,6 +576,148 @@ export function useNodeLogs(props: {
   })
 
   return { logs, error, loading, refresh: () => void load() }
+}
+
+/**
+ * useWorkflowTimeline — 工作流执行时间线（WP-TUI-4）。
+ *
+ * 通过 SDK 只读路由 client.dag.getTimeline({workflowId}) 拉取节点执行时间戳
+ * 事件序列与节点耗时数据。订阅 dag.node.updated / dag.workflow.updated /
+ * dag.workflow.replanned / dag.node.progress 四个事件做读侧轮询刷新
+ * （不违反 §10.e Option C no-interrupt，因只做只读拉取）。
+ */
+export function useWorkflowTimeline(props: {
+  client: Client
+  event: EventBus
+  workflowId: Accessor<string | undefined>
+}): WorkflowTimelineApi {
+  const [timeline, setTimeline] = createSignal<Timeline | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const id = props.workflowId()
+    if (!id) {
+      gen++
+      setTimeline(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.getTimeline({ workflowId: id })
+      if (cancelled || my !== gen) return
+      setTimeline(res.data ? mapTimeline(res.data) : null)
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
+  })
+
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offR = props.event.on("dag.workflow.replanned", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offP = props.event.on("dag.node.progress", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offR()
+    offN()
+    offP()
+  })
+
+  return { timeline, error, loading, refresh: () => void load() }
+}
+
+/**
+ * useWorkflowStats — DAG 图统计（WP-TUI-4）。
+ *
+ * 通过 SDK 只读路由 client.dag.getStats({workflowId}) 拉取节点总数、边总数、
+ * 关键路径长度、并行度和预计完成时间。事件刷新策略与 useWorkflowTimeline 一致。
+ */
+export function useWorkflowStats(props: {
+  client: Client
+  event: EventBus
+  workflowId: Accessor<string | undefined>
+}): WorkflowStatsApi {
+  const [stats, setStats] = createSignal<GraphStats | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const id = props.workflowId()
+    if (!id) {
+      gen++
+      setStats(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.getStats({ workflowId: id })
+      if (cancelled || my !== gen) return
+      setStats(res.data ? mapGraphStats(res.data) : null)
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
+  })
+
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offR = props.event.on("dag.workflow.replanned", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offP = props.event.on("dag.node.progress", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offR()
+    offN()
+    offP()
+  })
+
+  return { stats, error, loading, refresh: () => void load() }
 }
 
 export async function pauseWorkflow(client: Client, workflowId: string) {

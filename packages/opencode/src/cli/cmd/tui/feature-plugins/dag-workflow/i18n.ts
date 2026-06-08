@@ -63,6 +63,13 @@ const DICT = {
     ticker_live: "Live:",
     ticker_idle: "Idle",
     ticker_reasoning: "reasoning\u2026",
+    title_timeline: "Timeline",
+    label_timeline: "Timeline",
+    label_stats: "Stats",
+    label_critical_path: "Critical",
+    label_parallelism: "Parallel",
+    label_eta: "ETA",
+    timeline_empty: "No timeline events",
   },
   zh: {
     tab_dialogue: "对话",
@@ -107,6 +114,13 @@ const DICT = {
     ticker_live: "实时：",
     ticker_idle: "空闲",
     ticker_reasoning: "推理中\u2026",
+    title_timeline: "时间线",
+    label_timeline: "时间线",
+    label_stats: "统计",
+    label_critical_path: "关键路径",
+    label_parallelism: "并行度",
+    label_eta: "预计完成",
+    timeline_empty: "暂无时间线事件",
   },
 } as const
 

@@ -125,6 +125,13 @@ describe("WP4 i18n — t() dict lookup", () => {
     ticker_live: ["Live:", "实时："],
     ticker_idle: ["Idle", "空闲"],
     ticker_reasoning: ["reasoning\u2026", "推理中\u2026"],
+    title_timeline: ["Timeline", "时间线"],
+    label_timeline: ["Timeline", "时间线"],
+    label_stats: ["Stats", "统计"],
+    label_critical_path: ["Critical", "关键路径"],
+    label_parallelism: ["Parallel", "并行度"],
+    label_eta: ["ETA", "预计完成"],
+    timeline_empty: ["No timeline events", "暂无时间线事件"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

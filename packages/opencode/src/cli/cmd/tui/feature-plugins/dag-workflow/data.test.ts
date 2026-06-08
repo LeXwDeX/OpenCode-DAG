@@ -15,6 +15,8 @@ import {
   mapWorkflow,
   mapWorkflowHistory,
   mapViolation,
+  mapTimeline,
+  mapGraphStats,
   filterWorkflows,
   nextIndex,
   pauseWorkflow,
@@ -25,6 +27,8 @@ import {
   useNodeLogs,
   useWorkflowHistory,
   useNodeAskMain,
+  useWorkflowTimeline,
+  useWorkflowStats,
 } from "./data"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { DAGWorkflowSession } from "@/dag/session/types"
@@ -521,6 +525,286 @@ function capturingEvent(): {
     fire: (type, properties) => handlers[type]?.({ properties }),
   }
 }
+
+// ── WP-TUI-4: Timeline / GraphStats mappers & hooks ────────────────────────
+
+const sdkTimeline = {
+  workflowId: "wf-1",
+  startTime: 1_700_000_000_000,
+  endTime: "Infinity" as const, // non-finite → null
+  events: [
+    { type: "node_start" as const, nodeId: "n1", timestamp: 1_700_000_001_000, duration: 1500 },
+    { type: "node_complete" as const, nodeId: "n1", timestamp: 1_700_000_002_500, duration: 1500 },
+    {
+      type: "node_failed" as const,
+      nodeId: "n2",
+      timestamp: 1_700_000_003_000,
+      duration: "NaN" as const, // non-finite → null
+      metadata: { reason: "timeout" },
+    },
+  ],
+  totalDuration: 3000,
+  nodeExecutionTimes: {
+    n1: {
+      nodeId: "n1",
+      nodeName: "Collect",
+      startTime: 1_700_000_001_000,
+      endTime: 1_700_000_002_500,
+      duration: 1500,
+      status: "completed" as const,
+    },
+    n2: {
+      nodeId: "n2",
+      nodeName: "Build",
+      startTime: 1_700_000_002_000,
+      endTime: "Infinity" as const, // non-finite → num() fallback 0
+      duration: "NaN" as const, // non-finite → num() fallback 0
+      status: "failed" as const,
+    },
+  },
+}
+
+const sdkStats = {
+  totalNodes: 5,
+  totalEdges: 4,
+  criticalPathLength: 12_000,
+  parallelismDegree: 3,
+  estimatedCompletionTime: "Infinity" as const, // non-finite → 0
+}
+
+describe("WP-TUI-4 data.ts — mapTimeline", () => {
+  it("converges finite/non-finite numbers and preserves event metadata", () => {
+    const t = mapTimeline(sdkTimeline)
+    expect(t.workflowId).toBe("wf-1")
+    expect(t.startTime).toBe(1_700_000_000_000)
+    expect(t.endTime).toBeNull() // Infinity → null
+    expect(t.totalDuration).toBe(3000)
+    expect(t.events).toHaveLength(3)
+    expect(t.events[0]!.duration).toBe(1500)
+    expect(t.events[2]!.duration).toBeNull() // NaN → null
+    expect(t.events[2]!.metadata).toEqual({ reason: "timeout" })
+  })
+
+  it("converges SdkNumber in nodeExecutionTimes (Infinity/NaN → num() fallback)", () => {
+    const t = mapTimeline(sdkTimeline)
+    const n2 = t.nodeExecutionTimes["n2"]!
+    expect(n2.nodeId).toBe("n2")
+    expect(n2.nodeName).toBe("Build")
+    expect(n2.status).toBe("failed")
+    expect(n2.endTime).toBe(0) // Infinity → fallback 0
+    expect(n2.duration).toBe(0) // NaN → fallback 0
+  })
+
+  it("handles empty events and missing nodeExecutionTimes", () => {
+    const t = mapTimeline({
+      workflowId: "wf-empty",
+      startTime: 1000,
+      endTime: null,
+      events: [],
+      totalDuration: 0,
+    })
+    expect(t.events).toEqual([])
+    expect(t.nodeExecutionTimes).toEqual({})
+  })
+})
+
+describe("WP-TUI-4 data.ts — mapGraphStats", () => {
+  it("converges SdkNumber → number (Infinity fallback to 0)", () => {
+    const s = mapGraphStats(sdkStats)
+    expect(s.totalNodes).toBe(5)
+    expect(s.totalEdges).toBe(4)
+    expect(s.criticalPathLength).toBe(12_000)
+    expect(s.parallelismDegree).toBe(3)
+    expect(s.estimatedCompletionTime).toBe(0) // Infinity → 0
+  })
+
+  it("treats null/undefined fields as 0", () => {
+    const s = mapGraphStats({
+      totalNodes: null as unknown as number,
+      totalEdges: undefined as unknown as number,
+      criticalPathLength: "NaN",
+      parallelismDegree: 1,
+      estimatedCompletionTime: 500,
+    })
+    expect(s.totalNodes).toBe(0)
+    expect(s.totalEdges).toBe(0)
+    expect(s.criticalPathLength).toBe(0)
+    expect(s.parallelismDegree).toBe(1)
+    expect(s.estimatedCompletionTime).toBe(500)
+  })
+})
+
+function fakeTimelineClient(overrides?: {
+  timeline?: unknown
+  stats?: unknown
+  error?: Error
+}): TuiPluginApi["client"] {
+  return {
+    dag: {
+      getTimeline: async () => {
+        if (overrides?.error) throw overrides.error
+        return { data: overrides?.timeline ?? sdkTimeline }
+      },
+      getStats: async () => {
+        if (overrides?.error) throw overrides.error
+        return { data: overrides?.stats ?? sdkStats }
+      },
+    },
+  } as unknown as TuiPluginApi["client"]
+}
+
+describe("WP-TUI-4 data.ts — useWorkflowTimeline", () => {
+  it("returns null initially when workflowId is undefined", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowTimeline({
+        client: fakeTimelineClient(),
+        event: fakeEvent,
+        workflowId: () => undefined,
+      }),
+    )
+    expect(value.timeline()).toBeNull()
+    expect(value.loading()).toBe(false)
+    expect(value.error()).toBeNull()
+    dispose()
+  })
+
+  it("loads timeline from the SDK client", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowTimeline({
+        client: fakeTimelineClient(),
+        event: fakeEvent,
+        workflowId: () => "wf-1",
+      }),
+    )
+    const tl = value.timeline()
+    expect(tl).not.toBeNull()
+    expect(tl!.workflowId).toBe("wf-1")
+    expect(tl!.events).toHaveLength(3)
+    expect(tl!.nodeExecutionTimes["n1"]!.nodeName).toBe("Collect")
+    expect(value.error()).toBeNull()
+    dispose()
+  })
+
+  it("surfaces an error message when the client rejects", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowTimeline({
+        client: fakeTimelineClient({ error: new Error("timeline unavailable") }),
+        event: fakeEvent,
+        workflowId: () => "wf-1",
+      }),
+    )
+    expect(value.error()).toBe("timeline unavailable")
+    expect(value.timeline()).toBeNull()
+    dispose()
+  })
+
+  it("refetches on dag.node.updated matching workflowID", async () => {
+    let calls = 0
+    const client = {
+      dag: {
+        getTimeline: async () => {
+          calls++
+          return { data: sdkTimeline }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowTimeline({ client, event, workflowId: () => "wf-1" }),
+    )
+    expect(calls).toBe(1) // initial load
+    fire("dag.node.updated", { workflowID: "wf-1" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+
+  it("ignores dag.node.updated for non-matching workflowID", async () => {
+    let calls = 0
+    const client = {
+      dag: {
+        getTimeline: async () => {
+          calls++
+          return { data: sdkTimeline }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      useWorkflowTimeline({ client, event, workflowId: () => "wf-1" }),
+    )
+    expect(calls).toBe(1)
+    fire("dag.node.updated", { workflowID: "other-wf" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+    dispose()
+  })
+})
+
+describe("WP-TUI-4 data.ts — useWorkflowStats", () => {
+  it("returns null when workflowId is undefined", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowStats({
+        client: fakeTimelineClient(),
+        event: fakeEvent,
+        workflowId: () => undefined,
+      }),
+    )
+    expect(value.stats()).toBeNull()
+    expect(value.loading()).toBe(false)
+    dispose()
+  })
+
+  it("loads stats from the SDK client", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowStats({
+        client: fakeTimelineClient(),
+        event: fakeEvent,
+        workflowId: () => "wf-1",
+      }),
+    )
+    const s = value.stats()
+    expect(s).not.toBeNull()
+    expect(s!.totalNodes).toBe(5)
+    expect(s!.parallelismDegree).toBe(3)
+    expect(value.error()).toBeNull()
+    dispose()
+  })
+
+  it("surfaces an error message when the client rejects", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowStats({
+        client: fakeTimelineClient({ error: new Error("stats unavailable") }),
+        event: fakeEvent,
+        workflowId: () => "wf-1",
+      }),
+    )
+    expect(value.error()).toBe("stats unavailable")
+    expect(value.stats()).toBeNull()
+    dispose()
+  })
+
+  it("refetches on dag.workflow.updated matching workflowID", async () => {
+    let calls = 0
+    const client = {
+      dag: {
+        getStats: async () => {
+          calls++
+          return { data: sdkStats }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      useWorkflowStats({ client, event, workflowId: () => "wf-1" }),
+    )
+    expect(calls).toBe(1)
+    fire("dag.workflow.updated", { workflowID: "wf-1" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+})
 
 describe("WP-TUI-2 data.ts — useNodeAskMain", () => {
   it("returns null initially", async () => {

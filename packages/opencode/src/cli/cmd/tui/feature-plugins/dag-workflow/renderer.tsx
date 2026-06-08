@@ -14,6 +14,7 @@ import type {
   DAGWorkflowProgress,
   DAGWorkflowStatus,
 } from "@/dag/session/types"
+import type { GraphStats } from "./data"
 import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
@@ -206,11 +207,14 @@ export function formatProgressSummary(
  * 渲染：
  * - 进度条可视化 [■■■■□□□□□□] XX%
  * - 下方摘要行：required / failed / running / ETA
+ * - （WP-TUI-4 可选）第三行：Critical / Parallel / ETA（来自 GraphStats）
  */
 export function DagProgressBar(props: {
   lang: Lang
   progress: DAGWorkflowProgress | null
   status: DAGWorkflowStatus
+  /** WP-TUI-4 可选图统计；additive extension，不影响原有签名 */
+  stats?: GraphStats | null
 }): JSX.Element {
   const { theme } = useTheme()
   const allNodes = () => props.progress?.all_nodes ?? { total: 0, completed: 0 }
@@ -222,6 +226,15 @@ export function DagProgressBar(props: {
   const empty = createMemo(() => barLength - filled())
   const barColor = createMemo(() => workflowStatusColor(props.status, theme))
   const summary = createMemo(() => formatProgressSummary(props.progress, props.lang))
+  const statsLine = createMemo(() => {
+    const s = props.stats
+    if (!s) return ""
+    return [
+      `${t(props.lang, "label_critical_path")}: ${formatDuration(s.criticalPathLength)}`,
+      `${t(props.lang, "label_parallelism")}: ${s.parallelismDegree}`,
+      `${t(props.lang, "label_eta")}: ${formatDuration(s.estimatedCompletionTime)}`,
+    ].join(" | ")
+  })
 
   return (
     <box flexDirection="column" gap={0}>
@@ -236,6 +249,9 @@ export function DagProgressBar(props: {
         <text fg={barColor()}>{percent()}%</text>
       </box>
       <text fg={theme.textMuted}>{summary()}</text>
+      <Show when={statsLine() !== ""}>
+        <text fg={theme.textMuted}>{statsLine()}</text>
+      </Show>
     </box>
   )
 }

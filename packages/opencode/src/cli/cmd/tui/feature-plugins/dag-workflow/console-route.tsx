@@ -27,6 +27,8 @@ import {
   useNodeLogs,
   useViolations,
   useNodeAskMain,
+  useWorkflowTimeline,
+  useWorkflowStats,
   filterWorkflows,
   nextIndex,
   pauseWorkflow,
@@ -41,6 +43,7 @@ import { LiveTicker } from "./live-ticker"
 import { NodeDialog } from "./node-dialog"
 import { WorkflowHistoryPanel } from "./history-panel"
 import { NodeLogsPanel } from "./node-logs-panel"
+import { TimelinePanel } from "./timeline-panel"
 import { Sidebar } from "./sidebar"
 import { PauseResumeBar } from "./pause-resume-bar"
 import { useBindings } from "../../keymap"
@@ -132,6 +135,23 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     client: props.api.client,
     event: props.api.event,
     nodeId: selectedNodeID,
+  })
+
+  // ── WP-TUI-4: timeline & graph stats ─────────────────────────────────────
+  const {
+    timeline: workflowTimeline,
+    error: timelineError,
+    loading: timelineLoading,
+  } = useWorkflowTimeline({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+  })
+
+  const { stats: workflowStats } = useWorkflowStats({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
   })
 
   // ── WP-TUI-2: node ask_main subscription ─────────────────────────────────
@@ -379,6 +399,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   lang={i18n().lang}
                   progress={progress()}
                   status={currentWorkflow()?.status ?? "pending"}
+                  stats={workflowStats()}
                 />
                 <PauseResumeBar
                   workflowId={wf().id}
@@ -451,6 +472,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 logs={nodeLogs()}
                 error={nodeLogsError()}
                 loading={nodeLogsLoading()}
+              />
+              <TimelinePanel
+                lang={i18n().lang}
+                timeline={workflowTimeline()}
+                loading={timelineLoading()}
+                error={timelineError()}
               />
             </scrollbox>
             <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
@@ -530,6 +557,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               logs={nodeLogs()}
               error={nodeLogsError()}
               loading={nodeLogsLoading()}
+            />
+            <TimelinePanel
+              lang={i18n().lang}
+              timeline={workflowTimeline()}
+              loading={timelineLoading()}
+              error={timelineError()}
             />
           </scrollbox>
           <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
