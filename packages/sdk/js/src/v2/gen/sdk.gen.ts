@@ -24,6 +24,8 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DagGetNodeLogsErrors,
+  DagGetNodeLogsResponses,
   DagGetStatsErrors,
   DagGetStatsResponses,
   DagGetTimelineErrors,
@@ -31,9 +33,15 @@ import type {
   DagGetViolationsErrors,
   DagGetViolationsResponses,
   DagGetWorkflowErrors,
+  DagGetWorkflowHistoryErrors,
+  DagGetWorkflowHistoryResponses,
   DagGetWorkflowResponses,
   DagListWorkflowsErrors,
   DagListWorkflowsResponses,
+  DagMutationPauseErrors,
+  DagMutationPauseResponses,
+  DagMutationResumeErrors,
+  DagMutationResumeResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute2,
   EventTuiPromptAppend2,
@@ -895,6 +903,200 @@ export class Dag extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<DagGetViolationsResponses, DagGetViolationsErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/violations",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG workflow history
+   *
+   * Retrieve replan audit-trail records for a DAG workflow.
+   */
+  public getWorkflowHistory<ThrowOnError extends boolean = false>(
+    parameters: {
+      limit?: string
+      workflowId: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "headers", key: "limit" },
+            { in: "path", key: "workflowId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      DagGetWorkflowHistoryResponses,
+      DagGetWorkflowHistoryErrors,
+      ThrowOnError
+    >({
+      url: "/dag/workflows/{workflowId}/history",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get DAG node logs
+   *
+   * Retrieve structured execution logs for a DAG node.
+   */
+  public getNodeLogs<ThrowOnError extends boolean = false>(
+    parameters: {
+      limit?: string
+      nodeId: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "headers", key: "limit" },
+            { in: "path", key: "nodeId" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagGetNodeLogsResponses, DagGetNodeLogsErrors, ThrowOnError>({
+      url: "/dag/nodes/{nodeId}/logs",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Pause a running DAG workflow
+   *
+   * Pauses the DAG workflow. In-flight nodes continue; new nodes are not spawned until resumed.
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationPauseResponses, DagMutationPauseErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume a paused DAG workflow
+   *
+   * Resumes the DAG workflow from paused state, triggering scheduleReadyNodes for pending nodes.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationResumeResponses, DagMutationResumeErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/resume",
+      ...options,
+      ...params,
+    })
+  }
+}
+
+export class DagMutation extends HeyApiClient {
+  /**
+   * Pause a running DAG workflow
+   *
+   * Pauses the DAG workflow. In-flight nodes continue; new nodes are not spawned until resumed.
+   */
+  public pause<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationPauseResponses, DagMutationPauseErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/pause",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Resume a paused DAG workflow
+   *
+   * Resumes the DAG workflow from paused state, triggering scheduleReadyNodes for pending nodes.
+   */
+  public resume<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationResumeResponses, DagMutationResumeErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/resume",
       ...options,
       ...params,
     })
@@ -5223,6 +5425,11 @@ export class OpencodeClient extends HeyApiClient {
   private _dag?: Dag
   get dag(): Dag {
     return (this._dag ??= new Dag({ client: this.client }))
+  }
+
+  private _dagMutation?: DagMutation
+  get dagMutation(): DagMutation {
+    return (this._dagMutation ??= new DagMutation({ client: this.client }))
   }
 
   private _experimental?: Experimental

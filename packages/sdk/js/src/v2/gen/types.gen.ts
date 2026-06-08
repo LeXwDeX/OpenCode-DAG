@@ -19,6 +19,7 @@ export type Event =
   | EventDagNodeUpdated1
   | EventDagNodeProgress1
   | EventDagNodeAskMain1
+  | EventDagWorkflowReplanned1
   | EventServerConnected
   | EventGlobalDisposed
   | EventServerInstanceDisposed
@@ -834,6 +835,7 @@ export type GlobalEvent = {
     | EventDagNodeUpdated
     | EventDagNodeProgress
     | EventDagNodeAskMain
+    | EventDagWorkflowReplanned
     | EventServerConnected
     | EventGlobalDisposed
     | EventServerInstanceDisposed
@@ -1448,7 +1450,7 @@ export type DagWorkflow = {
   id: string
   chat_session_id: string
   config: unknown
-  status: "pending" | "running" | "completed" | "failed" | "cancelled"
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
   metadata: {
     [key: string]: unknown
   }
@@ -1553,12 +1555,46 @@ export type DagViolation = {
     | "max_nodes_exceeded"
     | "max_concurrency_exceeded"
     | "timeout_exceeded"
+    | "execution_failed"
+    | "process_orphan"
   severity: "info" | "warning" | "error" | "critical"
   message: string
   timestamp: string
   details?: {
     [key: string]: unknown
   }
+}
+
+export type DagWorkflowHistoryResponse = {
+  history_id: string
+  workflow_id: string
+  chat_session_id: string
+  action: string
+  old_state: unknown
+  new_state: unknown
+  change_details: unknown
+  changed_by: string
+  created_at: string
+}
+
+export type DagNodeLogResponse = {
+  log_id: string
+  node_id: string
+  workflow_id: string
+  chat_session_id: string
+  log_level: string
+  log_message: string
+  log_data: unknown
+  execution_phase: string
+  created_at: string
+}
+
+export type DagPauseResponse = {
+  status: string
+}
+
+export type DagResumeResponse = {
+  status: string
 }
 
 export type ConsoleState = {
@@ -2721,7 +2757,7 @@ export type EventDagWorkflowUpdated = {
   properties: {
     workflowID: string
     chatSessionID?: string
-    status: "pending" | "running" | "completed" | "failed" | "cancelled"
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
     timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   }
 }
@@ -2760,6 +2796,22 @@ export type EventDagNodeAskMain = {
     question: string
     context?: string
     timestamp: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  }
+}
+
+export type EventDagWorkflowReplanned = {
+  id: string
+  type: "dag.workflow.replanned"
+  properties: {
+    workflowID: string
+    chatSessionID?: string
+    patchSummary: {
+      added: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      final_total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+    timestamp: string
   }
 }
 
@@ -4024,7 +4076,7 @@ export type EventDagWorkflowUpdated1 = {
   properties: {
     workflowID: string
     chatSessionID?: string
-    status: "pending" | "running" | "completed" | "failed" | "cancelled"
+    status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
     timestamp: number | "NaN" | "Infinity" | "-Infinity"
   }
 }
@@ -4063,6 +4115,22 @@ export type EventDagNodeAskMain1 = {
     question: string
     context?: string
     timestamp: number | "NaN" | "Infinity" | "-Infinity"
+  }
+}
+
+export type EventDagWorkflowReplanned1 = {
+  id: string
+  type: "dag.workflow.replanned"
+  properties: {
+    workflowID: string
+    chatSessionID?: string
+    patchSummary: {
+      added: number | "NaN" | "Infinity" | "-Infinity"
+      removed: number | "NaN" | "Infinity" | "-Infinity"
+      updated: number | "NaN" | "Infinity" | "-Infinity"
+      final_total: number | "NaN" | "Infinity" | "-Infinity"
+    }
+    timestamp: string
   }
 }
 
@@ -4689,6 +4757,126 @@ export type DagGetViolationsResponses = {
 }
 
 export type DagGetViolationsResponse = DagGetViolationsResponses[keyof DagGetViolationsResponses]
+
+export type DagGetWorkflowHistoryData = {
+  body?: never
+  headers?: {
+    limit?: string
+  }
+  path: {
+    workflowId: string
+  }
+  query?: never
+  url: "/dag/workflows/{workflowId}/history"
+}
+
+export type DagGetWorkflowHistoryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetWorkflowHistoryError = DagGetWorkflowHistoryErrors[keyof DagGetWorkflowHistoryErrors]
+
+export type DagGetWorkflowHistoryResponses = {
+  /**
+   * DAG workflow history (newest first)
+   */
+  200: Array<DagWorkflowHistoryResponse>
+}
+
+export type DagGetWorkflowHistoryResponse = DagGetWorkflowHistoryResponses[keyof DagGetWorkflowHistoryResponses]
+
+export type DagGetNodeLogsData = {
+  body?: never
+  headers?: {
+    limit?: string
+  }
+  path: {
+    nodeId: string
+  }
+  query?: never
+  url: "/dag/nodes/{nodeId}/logs"
+}
+
+export type DagGetNodeLogsErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagGetNodeLogsError = DagGetNodeLogsErrors[keyof DagGetNodeLogsErrors]
+
+export type DagGetNodeLogsResponses = {
+  /**
+   * DAG node execution logs (newest first)
+   */
+  200: Array<DagNodeLogResponse>
+}
+
+export type DagGetNodeLogsResponse = DagGetNodeLogsResponses[keyof DagGetNodeLogsResponses]
+
+export type DagMutationPauseData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/pause"
+}
+
+export type DagMutationPauseErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationPauseError = DagMutationPauseErrors[keyof DagMutationPauseErrors]
+
+export type DagMutationPauseResponses = {
+  /**
+   * Workflow pause confirmation
+   */
+  200: DagPauseResponse
+}
+
+export type DagMutationPauseResponse = DagMutationPauseResponses[keyof DagMutationPauseResponses]
+
+export type DagMutationResumeData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/resume"
+}
+
+export type DagMutationResumeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationResumeError = DagMutationResumeErrors[keyof DagMutationResumeErrors]
+
+export type DagMutationResumeResponses = {
+  /**
+   * Workflow resume confirmation
+   */
+  200: DagResumeResponse
+}
+
+export type DagMutationResumeResponse = DagMutationResumeResponses[keyof DagMutationResumeResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never

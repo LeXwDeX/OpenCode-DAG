@@ -24,6 +24,8 @@ import {
   useViolations,
   filterWorkflows,
   nextIndex,
+  pauseWorkflow,
+  resumeWorkflow,
 } from "./data"
 import {
   DagWorkflowRenderer,
@@ -33,6 +35,7 @@ import { AsciiDag } from "./ascii-dag"
 import { LiveTicker } from "./live-ticker"
 import { NodeDialog } from "./node-dialog"
 import { Sidebar } from "./sidebar"
+import { PauseResumeBar } from "./pause-resume-bar"
 import { useBindings } from "../../keymap"
 import { useLang } from "./i18n"
 
@@ -64,6 +67,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
   const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
+  const [actionError, setActionError] = createSignal<string | null>(null)
 
   // Filter/search state lives here (lifted from Sidebar) so that keyboard
   // navigation operates on the SAME filtered list the sidebar displays.
@@ -108,6 +112,29 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   function toggleView() {
     setViewMode((v) => (v === "tree" ? "ascii-dag" : "tree"))
+  }
+
+  async function pauseResume(action: "pause" | "resume", workflowId: string) {
+    try {
+      setActionError(null)
+      if (action === "pause") {
+        await pauseWorkflow(props.api.client, workflowId)
+        return
+      }
+      await resumeWorkflow(props.api.client, workflowId)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  function togglePauseResume() {
+    const wf = currentWorkflow()
+    if (!wf) return
+    if (wf.status === "running") {
+      void pauseResume("pause", wf.id)
+      return
+    }
+    if (wf.status === "paused") void pauseResume("resume", wf.id)
   }
 
   // ── Keyboard navigation helpers ──────────────────────────────────────────
@@ -156,6 +183,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       { key: "j,down", desc: "Next", group: "DAG", cmd() { moveSelection(1) } },
       { key: "k,up", desc: "Previous", group: "DAG", cmd() { moveSelection(-1) } },
       { key: "return", desc: "Select / Enter sub-session", group: "DAG", cmd() { confirmSelection() } },
+      { key: "<leader>p", desc: "Pause / resume workflow", group: "DAG", cmd() { togglePauseResume() } },
       { key: "<leader>v", desc: "Toggle DAG view (tree ↔ ASCII)", group: "DAG", cmd() { toggleView() } },
     ],
   }))
@@ -265,13 +293,13 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
         {/* Middle: 进度条 + 节点树 */}
         <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1} gap={1}>
-          <Show
-            when={!workflowError()}
-            fallback={
-              <box flexGrow={1} alignItems="center" justifyContent="center">
-                <text fg={theme.error}>{i18n().t("label_load_error")}: {workflowError()}</text>
-              </box>
-            }
+            <Show
+              when={!workflowError() && !actionError()}
+              fallback={
+                <box flexGrow={1} alignItems="center" justifyContent="center">
+                  <text fg={theme.error}>{i18n().t("label_load_error")}: {workflowError() ?? actionError()}</text>
+                </box>
+              }
           >
             <Show
               when={currentWorkflow()}
@@ -292,6 +320,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   completed={progress().completed}
                   total={progress().total}
                   status={progress().status}
+                />
+                <PauseResumeBar
+                  workflowId={wf().id}
+                  currentStatus={() => wf().status}
+                  onAction={(action) => void pauseResume(action, wf().id)}
                 />
                 <scrollbox flexGrow={1} minHeight={0} stickyScroll={false} stickyStart="top">
                   <Show

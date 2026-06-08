@@ -234,6 +234,14 @@ export type ViolationsApi = {
   refresh: () => void
 }
 
+export async function pauseWorkflow(client: Client, workflowId: string) {
+  return client.dag.pause({ workflowId })
+}
+
+export async function resumeWorkflow(client: Client, workflowId: string) {
+  return client.dag.resume({ workflowId })
+}
+
 function errMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
