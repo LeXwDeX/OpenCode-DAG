@@ -11,6 +11,7 @@ import type {
   DAGNodeSession,
   DAGViolation,
   DAGWorkflowSession,
+  DAGWorkflowProgress,
   DAGWorkflowStatus,
 } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
@@ -162,33 +163,79 @@ export function DagWorkflowRenderer(props: {
 }
 
 /**
- * DagProgressBar — workflow 进度条
+ * formatProgressSummary — 从 DAGWorkflowProgress 生成紧凑文本摘要
+ *
+ * 输出示例：
+ * - null → "—"
+ * - "0/0 nodes"（无节点）
+ * - "required: 3/5 · failed: 1 · 2/3 running · ETA: 2m 30s"
+ * - "5/5 nodes"（全完成，无 required/concurrency/ETA）
+ */
+export function formatProgressSummary(
+  progress: DAGWorkflowProgress | null | undefined,
+  lang: Lang,
+): string {
+  if (!progress) return "\u2014"
+  const all = progress.all_nodes
+  if (all.total === 0) {
+    return "0/0 " + (lang === "zh" ? "节点" : "nodes")
+  }
+  const req = progress.required
+  const parts: string[] = []
+  if (req.total > 0) {
+    parts.push(`${lang === "zh" ? "必需" : "required"}: ${req.completed}/${req.total}`)
+    if (req.failed > 0) {
+      parts.push(`${nodeStatusLabel(lang, "failed")}: ${req.failed}`)
+    }
+  }
+  if (progress.current_concurrency > 0) {
+    parts.push(`${progress.current_concurrency}/${progress.max_concurrency} ${nodeStatusLabel(lang, "running")}`)
+  }
+  if (progress.estimated_remaining_ms !== undefined && progress.estimated_remaining_ms > 0) {
+    parts.push(`ETA: ${formatDuration(progress.estimated_remaining_ms)}`)
+  }
+  if (parts.length === 0) {
+    return `${all.completed}/${all.total} ${lang === "zh" ? "节点" : "nodes"}`
+  }
+  return parts.join(" \u00b7 ")
+}
+
+/**
+ * DagProgressBar — workflow 进度条（rich progress 版本）
+ *
+ * 渲染：
+ * - 进度条可视化 [■■■■□□□□□□] XX%
+ * - 下方摘要行：required / failed / running / ETA
  */
 export function DagProgressBar(props: {
   lang: Lang
-  completed: number
-  total: number
+  progress: DAGWorkflowProgress | null
   status: DAGWorkflowStatus
 }): JSX.Element {
   const { theme } = useTheme()
+  const allNodes = () => props.progress?.all_nodes ?? { total: 0, completed: 0 }
   const percent = createMemo(() =>
-    props.total > 0 ? Math.round((props.completed / props.total) * 100) : 0,
+    allNodes().total > 0 ? Math.round((allNodes().completed / allNodes().total) * 100) : 0,
   )
   const barLength = 20
   const filled = createMemo(() => Math.round((percent() / 100) * barLength))
   const empty = createMemo(() => barLength - filled())
   const barColor = createMemo(() => workflowStatusColor(props.status, theme))
+  const summary = createMemo(() => formatProgressSummary(props.progress, props.lang))
 
   return (
-    <box flexDirection="row" gap={1}>
-      <text fg={theme.textMuted}>{t(props.lang, "label_progress")}:</text>
-      <text fg={barColor()}>
-        {"["}
-        <span style={{ fg: barColor() }}>{"\u25a0".repeat(filled())}</span>
-        <span style={{ fg: theme.textMuted }}>{"\u25a1".repeat(empty())}</span>
-        {"]"}
-      </text>
-      <text fg={barColor()}>{percent()}%</text>
+    <box flexDirection="column" gap={0}>
+      <box flexDirection="row" gap={1}>
+        <text fg={theme.textMuted}>{t(props.lang, "label_progress")}:</text>
+        <text fg={barColor()}>
+          {"["}
+          <span style={{ fg: barColor() }}>{"\u25a0".repeat(filled())}</span>
+          <span style={{ fg: theme.textMuted }}>{"\u25a1".repeat(empty())}</span>
+          {"]"}
+        </text>
+        <text fg={barColor()}>{percent()}%</text>
+      </box>
+      <text fg={theme.textMuted}>{summary()}</text>
     </box>
   )
 }

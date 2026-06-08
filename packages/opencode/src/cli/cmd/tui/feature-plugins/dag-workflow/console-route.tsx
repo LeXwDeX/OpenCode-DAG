@@ -15,8 +15,10 @@
  * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createMemo, createSignal, Show, type JSX } from "solid-js"
+import { createMemo, createSignal, Match, Show, Switch, type JSX } from "solid-js"
+import { useTerminalDimensions } from "@opentui/solid"
 import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
+import { calculateWorkflowProgress } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import {
   useWorkflowList,
@@ -72,6 +74,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
   const [actionError, setActionError] = createSignal<string | null>(null)
+
+  // Responsive breakpoint: wide (>120) → 3-column layout; narrow (≤120) → overlay panels
+  const dimensions = useTerminalDimensions()
+  const wide = createMemo(() => dimensions().width > 120)
+  const [sidebarExpanded, setSidebarExpanded] = createSignal(false)
+  const [detailExpanded, setDetailExpanded] = createSignal(false)
 
   // Filter/search state lives here (lifted from Sidebar) so that keyboard
   // navigation operates on the SAME filtered list the sidebar displays.
@@ -212,14 +220,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     ],
   }))
 
+  // Rich progress model via calculateWorkflowProgress (pure function on workflow session).
+  // Returns DAGWorkflowProgress with required/all_nodes stats, concurrency, and ETA.
   const progress = createMemo(() => {
     const wf = currentWorkflow()
-    if (!wf) return { completed: 0, total: 0, status: "pending" as const }
-    const completed = Object.values(wf.node_sessions).filter(
-      (n) => n.status === "completed",
-    ).length
-    const total = Object.values(wf.node_sessions).length
-    return { completed, total, status: wf.status }
+    if (!wf) return null
+    return calculateWorkflowProgress(wf)
   })
 
   function goToSessionTab() {
@@ -287,33 +293,35 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
       {/* 主体：左/中/右三区 */}
       <box flexDirection="row" flexGrow={1} minHeight={0}>
-        {/* Left: workflow 历史列表 */}
-        <box
-          flexGrow={0}
-          flexShrink={0}
-          width={34}
-          paddingLeft={1}
-          paddingTop={1}
-          paddingBottom={1}
-          border={["right"]}
-          borderColor={focusPane() === "list" ? theme.primary : theme.border}
-        >
-          <scrollbox flexGrow={1} minHeight={0}>
-            <Sidebar
-              lang={i18n().lang}
-              workflows={filteredWorkflows()}
-              statusFilter={statusFilter()}
-              search={search()}
-              currentWorkflowID={currentWorkflowID()}
-              onStatusFilter={(s) => setStatusFilter(s)}
-              onSearch={(q) => setSearch(q)}
-              onSelect={(id: string) => {
-                setCurrentWorkflowID(id)
-                setSelectedNodeID(null)
-              }}
-            />
-          </scrollbox>
-        </box>
+        {/* Left: workflow 历史列表 — inline when wide, hidden when narrow */}
+        <Show when={wide()}>
+          <box
+            flexGrow={0}
+            flexShrink={0}
+            width={34}
+            paddingLeft={1}
+            paddingTop={1}
+            paddingBottom={1}
+            border={["right"]}
+            borderColor={focusPane() === "list" ? theme.primary : theme.border}
+          >
+            <scrollbox flexGrow={1} minHeight={0}>
+              <Sidebar
+                lang={i18n().lang}
+                workflows={filteredWorkflows()}
+                statusFilter={statusFilter()}
+                search={search()}
+                currentWorkflowID={currentWorkflowID()}
+                onStatusFilter={(s) => setStatusFilter(s)}
+                onSearch={(q) => setSearch(q)}
+                onSelect={(id: string) => {
+                  setCurrentWorkflowID(id)
+                  setSelectedNodeID(null)
+                }}
+              />
+            </scrollbox>
+          </box>
+        </Show>
 
         {/* Middle: 进度条 + 节点树 */}
         <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1} gap={1}>
@@ -341,9 +349,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
                   lang={i18n().lang}
-                  completed={progress().completed}
-                  total={progress().total}
-                  status={progress().status}
+                  progress={progress()}
+                  status={currentWorkflow()?.status ?? "pending"}
                 />
                 <PauseResumeBar
                   workflowId={wf().id}
@@ -378,41 +385,43 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           </Show>
         </box>
 
-        {/* Right: 选中节点详情 + 实时 ticker */}
-        <box
-          flexGrow={0}
-          flexShrink={0}
-          width={42}
-          paddingLeft={1}
-          paddingRight={1}
-          paddingTop={1}
-          paddingBottom={1}
-          border={["left"]}
-          borderColor={theme.border}
-          gap={1}
-        >
-          <scrollbox flexGrow={1} minHeight={0}>
-            <NodeDialog
-              lang={i18n().lang}
-              node={selectedNode()}
-              onClose={() => setSelectedNodeID(null)}
-              route={props.api.route}
-            />
-            <WorkflowHistoryPanel
-              lang={i18n().lang}
-              history={workflowHistory()}
-              error={workflowHistoryError()}
-              loading={workflowHistoryLoading()}
-            />
-            <NodeLogsPanel
-              lang={i18n().lang}
-              logs={nodeLogs()}
-              error={nodeLogsError()}
-              loading={nodeLogsLoading()}
-            />
-          </scrollbox>
-          <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
-        </box>
+        {/* Right: 选中节点详情 + 实时 ticker — inline when wide, hidden when narrow */}
+        <Show when={wide()}>
+          <box
+            flexGrow={0}
+            flexShrink={0}
+            width={42}
+            paddingLeft={1}
+            paddingRight={1}
+            paddingTop={1}
+            paddingBottom={1}
+            border={["left"]}
+            borderColor={theme.border}
+            gap={1}
+          >
+            <scrollbox flexGrow={1} minHeight={0}>
+              <NodeDialog
+                lang={i18n().lang}
+                node={selectedNode()}
+                onClose={() => setSelectedNodeID(null)}
+                route={props.api.route}
+              />
+              <WorkflowHistoryPanel
+                lang={i18n().lang}
+                history={workflowHistory()}
+                error={workflowHistoryError()}
+                loading={workflowHistoryLoading()}
+              />
+              <NodeLogsPanel
+                lang={i18n().lang}
+                logs={nodeLogs()}
+                error={nodeLogsError()}
+                loading={nodeLogsLoading()}
+              />
+            </scrollbox>
+            <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
+          </box>
+        </Show>
       </box>
 
       {/* 底部快捷键提示 */}
