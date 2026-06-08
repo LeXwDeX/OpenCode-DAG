@@ -47,11 +47,7 @@ import {
   DagProgressBar,
 } from "./renderer"
 import { AsciiDag } from "./ascii-dag"
-import { LiveTicker } from "./live-ticker"
-import { NodeDialog } from "./node-dialog"
-import { WorkflowHistoryPanel } from "./history-panel"
-import { NodeLogsPanel } from "./node-logs-panel"
-import { TimelinePanel } from "./timeline-panel"
+import { DetailPane } from "./detail-pane"
 import { ViolationsList } from "./violations-list"
 import { Sidebar } from "./sidebar"
 import { ControlBar, parseReplanConcurrency, type ControlAction } from "./control-bar"
@@ -574,34 +570,24 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             borderColor={theme.border}
             gap={1}
           >
-            <scrollbox flexGrow={1} minHeight={0}>
-              <NodeDialog
-                lang={i18n().lang}
-                node={selectedNode()}
-                onClose={() => setSelectedNodeID(null)}
-                route={props.api.route}
-                toolCounts={toolCounts}
-              />
-              <WorkflowHistoryPanel
-                lang={i18n().lang}
-                history={workflowHistory()}
-                error={workflowHistoryError()}
-                loading={workflowHistoryLoading()}
-              />
-              <NodeLogsPanel
-                lang={i18n().lang}
-                logs={nodeLogs()}
-                error={nodeLogsError()}
-                loading={nodeLogsLoading()}
-              />
-              <TimelinePanel
-                lang={i18n().lang}
-                timeline={workflowTimeline()}
-                loading={timelineLoading()}
-                error={timelineError()}
-              />
-            </scrollbox>
-            <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
+            <DetailPane
+              lang={i18n().lang}
+              node={selectedNode()}
+              toolCounts={toolCounts}
+              route={props.api.route}
+              onNodeClose={() => setSelectedNodeID(null)}
+              history={workflowHistory()}
+              historyError={workflowHistoryError()}
+              historyLoading={workflowHistoryLoading()}
+              logs={nodeLogs()}
+              logsError={nodeLogsError()}
+              logsLoading={nodeLogsLoading()}
+              timeline={workflowTimeline()}
+              timelineError={timelineError()}
+              timelineLoading={timelineLoading()}
+              event={props.api.event}
+              nodes={nodes()}
+            />
           </box>
         </Show>
       </box>
@@ -657,37 +643,27 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           gap={1}
           zIndex={100}
         >
-          <scrollbox flexGrow={1} minHeight={0}>
-            <NodeDialog
-              lang={i18n().lang}
-              node={selectedNode()}
-              onClose={() => {
-                setSelectedNodeID(null)
-                setDetailExpanded(false)
-              }}
-              route={props.api.route}
-              toolCounts={toolCounts}
-            />
-            <WorkflowHistoryPanel
-              lang={i18n().lang}
-              history={workflowHistory()}
-              error={workflowHistoryError()}
-              loading={workflowHistoryLoading()}
-            />
-            <NodeLogsPanel
-              lang={i18n().lang}
-              logs={nodeLogs()}
-              error={nodeLogsError()}
-              loading={nodeLogsLoading()}
-            />
-            <TimelinePanel
-              lang={i18n().lang}
-              timeline={workflowTimeline()}
-              loading={timelineLoading()}
-              error={timelineError()}
-            />
-          </scrollbox>
-          <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />
+          <DetailPane
+            lang={i18n().lang}
+            node={selectedNode()}
+            toolCounts={toolCounts}
+            route={props.api.route}
+            onNodeClose={() => {
+              setSelectedNodeID(null)
+              setDetailExpanded(false)
+            }}
+            history={workflowHistory()}
+            historyError={workflowHistoryError()}
+            historyLoading={workflowHistoryLoading()}
+            logs={nodeLogs()}
+            logsError={nodeLogsError()}
+            logsLoading={nodeLogsLoading()}
+            timeline={workflowTimeline()}
+            timelineError={timelineError()}
+            timelineLoading={timelineLoading()}
+            event={props.api.event}
+            nodes={nodes()}
+          />
         </box>
       </Show>
 
