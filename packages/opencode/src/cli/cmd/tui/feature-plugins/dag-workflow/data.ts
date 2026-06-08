@@ -539,21 +539,21 @@ export function mapGraphStats(s: {
   }
 }
 
-/** 事件订阅配置工厂：workflowId 过滤 */
-function wfEvents(wfID: string): EventSubscription[] {
+/** 事件订阅配置工厂：workflowId 过滤（动态读 accessor，订阅注册后仍跟踪当前值） */
+function wfEvents(wfID: Accessor<string | undefined>): EventSubscription[] {
   return [
-    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID },
-    { name: "dag.workflow.replanned", filter: (p) => p.workflowID === wfID },
-    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID },
-    { name: "dag.node.progress", filter: (p) => p.workflowID === wfID },
+    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID() },
+    { name: "dag.workflow.replanned", filter: (p) => p.workflowID === wfID() },
+    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID() },
+    { name: "dag.node.progress", filter: (p) => p.workflowID === wfID() },
   ]
 }
 
-/** 事件订阅配置工厂：nodeId 过滤 */
-function nodeEvents(nodeID: string): EventSubscription[] {
+/** 事件订阅配置工厂：nodeId 过滤（动态读 accessor，订阅注册后仍跟踪当前值） */
+function nodeEvents(nodeID: Accessor<string | null | undefined>): EventSubscription[] {
   return [
-    { name: "dag.node.updated", filter: (p) => p.nodeID === nodeID },
-    { name: "dag.node.progress", filter: (p) => p.nodeID === nodeID },
+    { name: "dag.node.updated", filter: (p) => p.nodeID === nodeID() },
+    { name: "dag.node.progress", filter: (p) => p.nodeID === nodeID() },
   ]
 }
 
@@ -572,7 +572,7 @@ export function useWorkflowHistory(props: {
     },
     params: props.workflowId,
     skipWhen: (p) => !p,
-    events: wfEvents(props.workflowId() ?? ""),
+    events: wfEvents(props.workflowId),
     client: props.client,
     event: props.event,
   })
@@ -594,7 +594,7 @@ export function useNodeLogs(props: {
     },
     params: props.nodeId,
     skipWhen: (p) => !p,
-    events: nodeEvents(props.nodeId() ?? ""),
+    events: nodeEvents(props.nodeId),
    client: props.client,
     event: props.event,
   })
@@ -624,7 +624,7 @@ export function useWorkflowTimeline(props: {
     },
     params: props.workflowId,
     skipWhen: (p) => !p,
-    events: wfEvents(props.workflowId() ?? ""),
+    events: wfEvents(props.workflowId),
     client: props.client,
     event: props.event,
   })
@@ -652,7 +652,7 @@ export function useWorkflowStats(props: {
     },
     params: props.workflowId,
     skipWhen: (p) => !p,
-    events: wfEvents(props.workflowId() ?? ""),
+    events: wfEvents(props.workflowId),
     client: props.client,
     event: props.event,
   })
@@ -826,9 +826,9 @@ export function useViolations(props: {
   event: EventBus
   workflowId: Accessor<string | undefined>
 }): ViolationsApi {
-  const wf2Events = (wfID: string): EventSubscription[] => [
-    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID },
-    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID },
+  const wf2Events = (wfID: Accessor<string | undefined>): EventSubscription[] => [
+    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID() },
+    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID() },
   ]
   const r = createPolledResource<DAGViolation[]>({
     initial: [],
@@ -840,7 +840,7 @@ export function useViolations(props: {
     },
     params: props.workflowId,
     skipWhen: (p) => !p,
-    events: wf2Events(props.workflowId() ?? ""),
+    events: wf2Events(props.workflowId),
     client: props.client,
     event: props.event,
   })

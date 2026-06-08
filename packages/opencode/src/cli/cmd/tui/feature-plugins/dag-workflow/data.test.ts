@@ -8,7 +8,7 @@
  * - useViolations: 无 server 路由，恒返回空集合
  */
 import { describe, it, expect } from "bun:test"
-import { createRoot } from "solid-js"
+import { createRoot, createSignal } from "solid-js"
 import {
   mapNode,
   mapNodeLog,
@@ -1271,6 +1271,140 @@ describe("data.ts — createPolledResource", () => {
     // The in-flight fetch should be cancelled — resolving it now should not update data
     fetchResolve!()
     await new Promise<void>((r) => setTimeout(r, 20))
+  })
+
+  // Regression: event filter closures must read the params accessor's CURRENT value,
+  // not the value captured when the subscription was first registered. (review INFO #3)
+  it("filter reads accessor's current value, not the value at registration time", async () => {
+    const [pid, setPid] = createSignal<string | undefined>(undefined)
+    let calls = 0
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => {
+          calls++
+          return Promise.resolve([`call-${calls}`])
+        },
+        params: pid,
+        skipWhen: (p) => !p,
+        // mirrors wfEvents: filter dynamically reads the accessor
+        events: [{ name: "dag.workflow.updated", filter: (p) => p.workflowID === pid() }],
+        client: fakeClient(),
+        event,
+      }),
+    )
+    // initial pid=undefined → skipWhen short-circuits load → no fetch yet
+    expect(calls).toBe(0)
+    // event for wf-B while pid is still undefined → filter must NOT match
+    fire("dag.workflow.updated", { workflowID: "wf-B" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(0)
+
+    // switch params to wf-B → createEffect re-runs load → first real fetch
+    setPid("wf-B")
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+
+    // event for wf-B now matches because filter reads pid()'s CURRENT value (wf-B)
+    fire("dag.workflow.updated", { workflowID: "wf-B" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+})
+
+// ── Bug regression: hook event subscriptions must track workflowId/nodeId changes ──
+//
+// Before the fix, wfEvents/nodeEvents received a static string snapshot
+// (`wfEvents(props.workflowId() ?? "")`) evaluated once at hook init — when
+// workflowId() is typically undefined → "". The filter closure then compared
+// `p.workflowID === ""` forever, so real events never matched and live refresh
+// silently broke. The fix passes the accessor so the filter reads it dynamically.
+
+describe("data.ts — live-refresh subscriptions track id changes (P1 regression)", () => {
+  it("useWorkflowHistory refetches on dag.workflow.updated after workflowId becomes defined", async () => {
+    const [wfId, setWfId] = createSignal<string | undefined>(undefined)
+    let calls = 0
+    const client = {
+      dag: {
+        getWorkflowHistory: async () => {
+          calls++
+          return { data: [] }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      useWorkflowHistory({ client, event, workflowId: wfId }),
+    )
+    // workflowId undefined at init → fetch skipped
+    expect(calls).toBe(0)
+
+    // workflowId becomes defined → initial load runs once
+    setWfId("wf-A")
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+
+    // a matching workflow event must trigger a refetch (broken pre-fix: filter held "")
+    fire("dag.workflow.updated", { workflowID: "wf-A" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+
+  it("useNodeLogs refetches on dag.node.updated after nodeId becomes defined", async () => {
+    const [nodeId, setNodeId] = createSignal<string | null | undefined>(undefined)
+    let calls = 0
+    const client = {
+      dag: {
+        getNodeLogs: async () => {
+          calls++
+          return { data: [] }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      useNodeLogs({ client, event, nodeId }),
+    )
+    expect(calls).toBe(0)
+
+    setNodeId("node-X")
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+
+    fire("dag.node.updated", { nodeID: "node-X" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+
+  it("useViolations refetches on dag.workflow.updated after workflowId becomes defined", async () => {
+    const [wfId, setWfId] = createSignal<string | undefined>(undefined)
+    let calls = 0
+    const client = {
+      dag: {
+        getViolations: async () => {
+          calls++
+          return { data: [] }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      useViolations({ client, event, workflowId: wfId }),
+    )
+    expect(calls).toBe(0)
+
+    setWfId("wf-V")
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+
+    fire("dag.workflow.updated", { workflowID: "wf-V" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
   })
 })
 
