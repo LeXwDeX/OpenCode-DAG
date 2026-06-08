@@ -10,6 +10,7 @@ import type {
   UpdateNodeConfigInput,
   UpdateNodeStatusInput,
 } from "./session-service"
+import { validateWorkflowConfigLimits } from "./limits"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -230,36 +231,10 @@ export function applyReplanPatchToConfig(
   return { ok: true, newConfigNodes }
 }
 
-/**
- * Single source of truth for the workflow config caps:
- *   - node count ≤ 20
- *   - max_concurrency ∈ [1, 10]
- *
- * Consumed by `createWorkflow` (session-service.ts) at creation and reused by
- * `validateReplanPostConfig` for post-replan validation. Reason strings are
- * stable and shared so both entry points report identical messages.
- */
-export function validateWorkflowConfigLimits(
-  // max_concurrency is typed as `number | undefined` because the runtime config
-  // reaching this function (CreateWorkflowInput.config is `any`, HTTP create body
-  // is Schema.Unknown) can physically omit the field. A missing/non-numeric value
-  // must be rejected, not silently bypassed — see the guard below.
-  config: { nodes: unknown[]; max_concurrency: number | undefined },
-): { ok: true } | { ok: false; reason: string } {
-  if (config.nodes.length > 20) {
-    return { ok: false, reason: `node cap exceeded: ${config.nodes.length} > 20` }
-  }
-  // P0: undefined/null/non-finite must NOT bypass the 1..10 cap. Pre-guard, an
-  // undefined value made both `< 1` and `> 10` evaluate false, returning ok:true
-  // for a config that violates the concurrency iron rule.
-  if (typeof config.max_concurrency !== "number" || !Number.isFinite(config.max_concurrency)) {
-    return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
-  }
-  if (config.max_concurrency < 1 || config.max_concurrency > 10) {
-    return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
-  }
-  return { ok: true }
-}
+// Re-export for backward compatibility: all existing `from "./workflow-engine"` imports
+// of validateWorkflowConfigLimits (including test files) continue to work unchanged.
+// Canonical implementation lives in ./limits.ts (breaks session-service↔workflow-engine cycle).
+export { validateWorkflowConfigLimits } from "./limits"
 
 /**
  * Validates the post-patch config: node cap (20), concurrency range (1..10),

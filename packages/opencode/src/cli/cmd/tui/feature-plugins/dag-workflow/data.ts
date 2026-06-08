@@ -595,7 +595,7 @@ export function useNodeLogs(props: {
     params: props.nodeId,
     skipWhen: (p) => !p,
     events: nodeEvents(props.nodeId),
-   client: props.client,
+    client: props.client,
     event: props.event,
   })
   return { logs: r.data, error: r.error, loading: r.loading, refresh: r.refresh }

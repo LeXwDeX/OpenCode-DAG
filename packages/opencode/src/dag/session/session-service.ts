@@ -27,7 +27,7 @@ import type {
 import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
 import { FallbackTrigger } from "../state-machine/types"
-import { validateWorkflowConfigLimits } from "./workflow-engine"
+import { validateWorkflowConfigLimits } from "./limits"
 
 // ============================================================================
 // Iron Law Enforcement: Module-Level Event Bus & Validation Helpers
@@ -195,7 +195,7 @@ export interface CreateWorkflowInput {
 /**
  * Raised when a workflow config violates the 20-node / 1..10-concurrency caps
  * at creation time. Caps are sourced exclusively from
- * `validateWorkflowConfigLimits` (workflow-engine.ts).
+ * `validateWorkflowConfigLimits` (limits.ts).
  */
 export class WorkflowConfigValidationError extends Error {
   constructor(reason: string) {
