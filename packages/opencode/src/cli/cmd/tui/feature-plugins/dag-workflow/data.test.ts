@@ -33,6 +33,7 @@ import {
   useWorkflowTimeline,
   useWorkflowStats,
   useNodeToolCounts,
+  createPolledResource,
 } from "./data"
 import { countToolParts } from "./live-ticker"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
@@ -1040,6 +1041,236 @@ describe("WP-TUI-5 data.ts — useNodeToolCounts", () => {
     })
     expect(value()).toEqual({})
     dispose()
+  })
+})
+
+// ── createPolledResource factory ──────────────────────────────────────────
+
+describe("data.ts — createPolledResource", () => {
+  it("fetches data and populates data/error/loading signals", async () => {
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => Promise.resolve(["a", "b"]),
+        params: () => "p1",
+        skipWhen: (p) => !p,
+        events: [],
+        client: fakeClient(),
+        event: fakeEvent,
+      }),
+    )
+    expect(value.data()).toEqual(["a", "b"])
+    expect(value.error()).toBeNull()
+    expect(value.loading()).toBe(false)
+    dispose()
+  })
+
+  it("resets to initial when skipWhen returns true", async () => {
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => Promise.resolve(["a"]),
+        params: () => undefined,
+        skipWhen: (p) => !p,
+        events: [],
+        client: fakeClient(),
+        event: fakeEvent,
+      }),
+    )
+    expect(value.data()).toEqual([])
+    expect(value.error()).toBeNull()
+    expect(value.loading()).toBe(false)
+    dispose()
+  })
+
+  it("surfaces an error message when fetch rejects", async () => {
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: null as string | null,
+        fetch: () => Promise.reject(new Error("network down")),
+        params: () => "p1",
+        events: [],
+        client: fakeClient(),
+        event: fakeEvent,
+      }),
+    )
+    expect(value.error()).toBe("network down")
+    expect(value.data()).toBeNull()
+    dispose()
+  })
+
+  it("refresh() manually triggers a fetch", async () => {
+    let calls = 0
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as number[],
+        fetch: () => {
+          calls++
+          return Promise.resolve([calls])
+        },
+        params: () => "p1",
+        events: [],
+        client: fakeClient(),
+        event: fakeEvent,
+      }),
+    )
+    expect(calls).toBe(1)
+    expect(value.data()).toEqual([1])
+    value.refresh()
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    expect(value.data()).toEqual([2])
+    dispose()
+  })
+
+  it("gen guard: fast params switch — old slow response does not overwrite new data", async () => {
+    let resolveFirst: (v: string[]) => void
+    let resolveSecond: (v: string[]) => void
+    const first = new Promise<string[]>((r) => { resolveFirst = r })
+    const second = new Promise<string[]>((r) => { resolveSecond = r })
+    let callIndex = 0
+
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => {
+          callIndex++
+          return callIndex === 1 ? first : second
+        },
+        params: () => "p1",
+        skipWhen: (p) => !p,
+        events: [],
+        client: fakeClient(),
+        event: fakeEvent,
+      }),
+    )
+
+    // initial load is the first (slow) call
+    expect(callIndex).toBe(1)
+
+    // trigger a second call via refresh — simulates fast params switch
+    value.refresh()
+    expect(callIndex).toBe(2)
+
+    // resolve second (newer) first — should update data
+    resolveSecond!(["new"])
+    await new Promise<void>((r) => setTimeout(r, 10))
+
+    // resolve first (older) — should NOT overwrite
+    resolveFirst!(["old"])
+    await new Promise<void>((r) => setTimeout(r, 10))
+
+    expect(value.data()).toEqual(["new"])
+    dispose()
+  })
+
+  it("event subscription triggers refresh when filter matches", async () => {
+    let calls = 0
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => {
+          calls++
+          return Promise.resolve([`call-${calls}`])
+        },
+        params: () => "wf-1",
+        skipWhen: (p) => !p,
+        events: [
+          { name: "dag.workflow.updated", filter: (props) => props.workflowID === "wf-1" },
+        ],
+        client: fakeClient(),
+        event,
+      }),
+    )
+    expect(calls).toBe(1)
+    fire("dag.workflow.updated", { workflowID: "wf-1" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+
+  it("event subscription ignores events when filter does NOT match", async () => {
+    let calls = 0
+    const { fire, event } = capturingEvent()
+    const { dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => {
+          calls++
+          return Promise.resolve([`call-${calls}`])
+        },
+        params: () => "wf-1",
+        skipWhen: (p) => !p,
+        events: [
+          { name: "dag.workflow.updated", filter: (props) => props.workflowID === "wf-1" },
+        ],
+        client: fakeClient(),
+        event,
+      }),
+    )
+    expect(calls).toBe(1)
+    fire("dag.workflow.updated", { workflowID: "other-wf" })
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(1)
+    dispose()
+  })
+
+  it("event subscription triggers refresh without filter (unconditional)", async () => {
+    let calls = 0
+    const { fire, event } = capturingEvent()
+    const { value, dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => {
+          calls++
+          return Promise.resolve([`call-${calls}`])
+        },
+        params: () => "session-1",
+        events: [{ name: "dag.workflow.updated" }],
+        client: fakeClient(),
+        event,
+      }),
+    )
+    expect(calls).toBe(1)
+    fire("dag.workflow.updated", {})
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(calls).toBe(2)
+    dispose()
+  })
+
+  it("onCleanup cancels in-flight fetch and unsubscribes events", async () => {
+    let fetchResolve: () => void
+    const forever = new Promise<string[]>((r) => { fetchResolve = () => r(["data"]) })
+    let eventOffCalled = 0
+    const evt = {
+      on: (_name: string, _handler: unknown) => {
+        return () => { eventOffCalled++ }
+      },
+    } as unknown as TuiPluginApi["event"]
+
+    const { dispose } = await withRoot(() =>
+      createPolledResource({
+        initial: [] as string[],
+        fetch: () => forever,
+        params: () => "p1",
+        skipWhen: (p) => !p,
+        events: [
+          { name: "dag.workflow.updated", filter: (props) => props.workflowID === "p1" },
+          { name: "dag.node.updated", filter: (props) => props.workflowID === "p1" },
+        ],
+        client: fakeClient(),
+        event: evt,
+      }),
+    )
+
+    // Dispose calls onCleanup: cancelled=true + unsub all events
+    dispose()
+    expect(eventOffCalled).toBe(2)
+
+    // The in-flight fetch should be cancelled — resolving it now should not update data
+    fetchResolve!()
+    await new Promise<void>((r) => setTimeout(r, 20))
   })
 })
 

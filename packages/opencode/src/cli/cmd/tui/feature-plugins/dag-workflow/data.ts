@@ -27,6 +27,87 @@ type Client = TuiPluginApi["client"]
 type EventBus = TuiPluginApi["event"]
 
 // ============================================================================
+// createPolledResource 工厂（6 个单-data hook 共用 load/gen/cancellation/cleanup）
+
+export type PolledResource<T> = {
+  data: Accessor<T>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
+export type EventSubscription = {
+  name: string
+  filter?: (props: Record<string, unknown>) => boolean
+}
+
+/**
+ * createPolledResource — 轮询数据工厂，消除 6 个 fetch hook 的 load/gen/cleanup 重复。
+ *
+ * 内部管理 signal 群（data/error/loading）+ load + gen 竞态防护 + createEffect(params 跟踪)
+ * + 事件订阅 + onCleanup(退订 + cancelled 守卫)。
+ *
+ * useWorkflowDetail 因合并两个 signal（workflow + nodes）的特殊性，不纳入工厂。
+ */
+export function createPolledResource<T>(config: {
+  initial: T
+  fetch: () => Promise<T>
+  params: Accessor<unknown>
+  skipWhen?: (params: unknown) => boolean
+  events?: EventSubscription[]
+  client: Client
+  event: EventBus
+}): PolledResource<T> {
+  const [data, setData] = createSignal<T>(config.initial)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const p = config.params()
+    if (config.skipWhen?.(p)) {
+      ++gen
+      setData(() => config.initial)
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const result = await config.fetch()
+      if (cancelled || my !== gen) return
+      setData(() => result)
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    config.params()
+    void load()
+  })
+
+  const offs = (config.events ?? []).map((sub) =>
+    config.event.on(sub.name as EventSubscription["name"] & Parameters<EventBus["on"]>[0], (e) => {
+      if (sub.filter?.(e.properties as Record<string, unknown>) ?? true) void load()
+    }),
+  )
+
+  onCleanup(() => {
+    cancelled = true
+    for (const off of offs) off()
+  })
+
+  return { data, error, loading, refresh: () => void load() }
+}
+
+// ============================================================================
 // SDK → 领域类型映射
 //
 // SDK 生成的数字字段是 `number | "NaN" | "Infinity" | ...` 联合（OpenAPI 序列化
@@ -458,68 +539,44 @@ export function mapGraphStats(s: {
   }
 }
 
+/** 事件订阅配置工厂：workflowId 过滤 */
+function wfEvents(wfID: string): EventSubscription[] {
+  return [
+    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID },
+    { name: "dag.workflow.replanned", filter: (p) => p.workflowID === wfID },
+    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID },
+    { name: "dag.node.progress", filter: (p) => p.workflowID === wfID },
+  ]
+}
+
+/** 事件订阅配置工厂：nodeId 过滤 */
+function nodeEvents(nodeID: string): EventSubscription[] {
+  return [
+    { name: "dag.node.updated", filter: (p) => p.nodeID === nodeID },
+    { name: "dag.node.progress", filter: (p) => p.nodeID === nodeID },
+  ]
+}
+
 export function useWorkflowHistory(props: {
   client: Client
   event: EventBus
   workflowId: Accessor<string | undefined>
 }): WorkflowHistoryApi {
-  const [history, setHistory] = createSignal<WorkflowHistory[]>([])
-  const [error, setError] = createSignal<string | null>(null)
-  const [loading, setLoading] = createSignal(false)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const id = props.workflowId()
-    if (!id) {
-      gen++
-      setHistory([])
-      setError(null)
-      setLoading(false)
-      return
-    }
-    const my = ++gen
-    setLoading(true)
-    try {
+  const r = createPolledResource<WorkflowHistory[]>({
+    initial: [],
+    fetch: async () => {
+      const id = props.workflowId()
+      if (!id) return []
       const res = await props.client.dag.getWorkflowHistory({ workflowId: id, limit: "50" })
-      if (cancelled || my !== gen) return
-      setHistory((res.data ?? []).map(mapWorkflowHistory))
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    } finally {
-      if (!cancelled && my === gen) setLoading(false)
-    }
-  }
-
-  createEffect(() => {
-    props.workflowId()
-    void load()
+      return (res.data ?? []).map(mapWorkflowHistory)
+    },
+    params: props.workflowId,
+    skipWhen: (p) => !p,
+    events: wfEvents(props.workflowId() ?? ""),
+    client: props.client,
+    event: props.event,
   })
-
-  const matches = (wfID: string) => wfID === props.workflowId()
-  const offW = props.event.on("dag.workflow.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offR = props.event.on("dag.workflow.replanned", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offP = props.event.on("dag.node.progress", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offW()
-    offR()
-    offN()
-    offP()
-  })
-
-  return { history, error, loading, refresh: () => void load() }
+  return { history: r.data, error: r.error, loading: r.loading, refresh: r.refresh }
 }
 
 export function useNodeLogs(props: {
@@ -527,55 +584,21 @@ export function useNodeLogs(props: {
   event: EventBus
   nodeId: Accessor<string | null | undefined>
 }): NodeLogsApi {
-  const [logs, setLogs] = createSignal<NodeLog[]>([])
-  const [error, setError] = createSignal<string | null>(null)
-  const [loading, setLoading] = createSignal(false)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const id = props.nodeId()
-    if (!id) {
-      gen++
-      setLogs([])
-      setError(null)
-      setLoading(false)
-      return
-    }
-    const my = ++gen
-    setLoading(true)
-    try {
+  const r = createPolledResource<NodeLog[]>({
+    initial: [],
+    fetch: async () => {
+      const id = props.nodeId()
+      if (!id) return []
       const res = await props.client.dag.getNodeLogs({ nodeId: id, limit: "100" })
-      if (cancelled || my !== gen) return
-      setLogs((res.data ?? []).map(mapNodeLog))
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    } finally {
-      if (!cancelled && my === gen) setLoading(false)
-    }
-  }
-
-  createEffect(() => {
-    props.nodeId()
-    void load()
+      return (res.data ?? []).map(mapNodeLog)
+    },
+    params: props.nodeId,
+    skipWhen: (p) => !p,
+    events: nodeEvents(props.nodeId() ?? ""),
+   client: props.client,
+    event: props.event,
   })
-
-  const matches = (nodeID: string) => nodeID === props.nodeId()
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.nodeID)) void load()
-  })
-  const offP = props.event.on("dag.node.progress", (e) => {
-    if (matches(e.properties.nodeID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offN()
-    offP()
-  })
-
-  return { logs, error, loading, refresh: () => void load() }
+  return { logs: r.data, error: r.error, loading: r.loading, refresh: r.refresh }
 }
 
 /**
@@ -591,63 +614,21 @@ export function useWorkflowTimeline(props: {
   event: EventBus
   workflowId: Accessor<string | undefined>
 }): WorkflowTimelineApi {
-  const [timeline, setTimeline] = createSignal<Timeline | null>(null)
-  const [error, setError] = createSignal<string | null>(null)
-  const [loading, setLoading] = createSignal(false)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const id = props.workflowId()
-    if (!id) {
-      gen++
-      setTimeline(null)
-      setError(null)
-      setLoading(false)
-      return
-    }
-    const my = ++gen
-    setLoading(true)
-    try {
+  const r = createPolledResource<Timeline | null>({
+    initial: null,
+    fetch: async () => {
+      const id = props.workflowId()
+      if (!id) return null
       const res = await props.client.dag.getTimeline({ workflowId: id })
-      if (cancelled || my !== gen) return
-      setTimeline(res.data ? mapTimeline(res.data) : null)
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    } finally {
-      if (!cancelled && my === gen) setLoading(false)
-    }
-  }
-
-  createEffect(() => {
-    props.workflowId()
-    void load()
+      return res.data ? mapTimeline(res.data) : null
+    },
+    params: props.workflowId,
+    skipWhen: (p) => !p,
+    events: wfEvents(props.workflowId() ?? ""),
+    client: props.client,
+    event: props.event,
   })
-
-  const matches = (wfID: string) => wfID === props.workflowId()
-  const offW = props.event.on("dag.workflow.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offR = props.event.on("dag.workflow.replanned", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offP = props.event.on("dag.node.progress", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offW()
-    offR()
-    offN()
-    offP()
-  })
-
-  return { timeline, error, loading, refresh: () => void load() }
+  return { timeline: r.data, error: r.error, loading: r.loading, refresh: r.refresh }
 }
 
 /**
@@ -661,63 +642,21 @@ export function useWorkflowStats(props: {
   event: EventBus
   workflowId: Accessor<string | undefined>
 }): WorkflowStatsApi {
-  const [stats, setStats] = createSignal<GraphStats | null>(null)
-  const [error, setError] = createSignal<string | null>(null)
-  const [loading, setLoading] = createSignal(false)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const id = props.workflowId()
-    if (!id) {
-      gen++
-      setStats(null)
-      setError(null)
-      setLoading(false)
-      return
-    }
-    const my = ++gen
-    setLoading(true)
-    try {
+  const r = createPolledResource<GraphStats | null>({
+    initial: null,
+    fetch: async () => {
+      const id = props.workflowId()
+      if (!id) return null
       const res = await props.client.dag.getStats({ workflowId: id })
-      if (cancelled || my !== gen) return
-      setStats(res.data ? mapGraphStats(res.data) : null)
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    } finally {
-      if (!cancelled && my === gen) setLoading(false)
-    }
-  }
-
-  createEffect(() => {
-    props.workflowId()
-    void load()
+      return res.data ? mapGraphStats(res.data) : null
+    },
+    params: props.workflowId,
+    skipWhen: (p) => !p,
+    events: wfEvents(props.workflowId() ?? ""),
+    client: props.client,
+    event: props.event,
   })
-
-  const matches = (wfID: string) => wfID === props.workflowId()
-  const offW = props.event.on("dag.workflow.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offR = props.event.on("dag.workflow.replanned", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offP = props.event.on("dag.node.progress", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offW()
-    offR()
-    offN()
-    offP()
-  })
-
-  return { stats, error, loading, refresh: () => void load() }
+  return { stats: r.data, error: r.error, loading: r.loading, refresh: r.refresh }
 }
 
 // ============================================================================
@@ -783,42 +722,21 @@ export function useWorkflowList(props: {
   event: EventBus
   session_id: Accessor<string>
 }): WorkflowListApi {
-  const [list, setList] = createSignal<DAGWorkflowSession[]>([])
-  const [error, setError] = createSignal<string | null>(null)
-  const [loading, setLoading] = createSignal(false)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const sid = props.session_id()
-    const my = ++gen
-    setLoading(true)
-    try {
+  const r = createPolledResource<DAGWorkflowSession[]>({
+    initial: [],
+    fetch: async () => {
+      const sid = props.session_id()
       const res = await props.client.dag.listWorkflows(sid ? { chatSessionId: sid } : {})
-      if (cancelled || my !== gen) return
       const data = res.data
-      if (Array.isArray(data)) setList(data.map((w) => mapWorkflow(w)))
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    } finally {
-      if (!cancelled && my === gen) setLoading(false)
-    }
-  }
-
-  createEffect(() => {
-    props.session_id()
-    void load()
+      if (Array.isArray(data)) return data.map((w) => mapWorkflow(w))
+      return []
+    },
+    params: props.session_id,
+    events: [{ name: "dag.workflow.updated" }],
+    client: props.client,
+    event: props.event,
   })
-
-  const off = props.event.on("dag.workflow.updated", () => void load())
-  onCleanup(() => {
-    cancelled = true
-    off()
-  })
-
-  return { list, error, loading, refresh: () => void load() }
+  return { list: r.data, error: r.error, loading: r.loading, refresh: r.refresh }
 }
 
 /**
@@ -908,50 +826,25 @@ export function useViolations(props: {
   event: EventBus
   workflowId: Accessor<string | undefined>
 }): ViolationsApi {
-  const [violations, setViolations] = createSignal<DAGViolation[]>([])
-  const [error, setError] = createSignal<string | null>(null)
-  let cancelled = false
-  let gen = 0
-
-  async function load() {
-    const id = props.workflowId()
-    if (!id) {
-      gen++
-      setViolations([])
-      setError(null)
-      return
-    }
-    const my = ++gen
-    try {
+  const wf2Events = (wfID: string): EventSubscription[] => [
+    { name: "dag.workflow.updated", filter: (p) => p.workflowID === wfID },
+    { name: "dag.node.updated", filter: (p) => p.workflowID === wfID },
+  ]
+  const r = createPolledResource<DAGViolation[]>({
+    initial: [],
+    fetch: async () => {
+      const id = props.workflowId()
+      if (!id) return []
       const res = await props.client.dag.getViolations({ workflowId: id })
-      if (cancelled || my !== gen) return
-      setViolations((res.data ?? []).map(mapViolation))
-      setError(null)
-    } catch (e) {
-      if (cancelled || my !== gen) return
-      setError(errMessage(e))
-    }
-  }
-
-  createEffect(() => {
-    props.workflowId()
-    void load()
+      return (res.data ?? []).map(mapViolation)
+    },
+    params: props.workflowId,
+    skipWhen: (p) => !p,
+    events: wf2Events(props.workflowId() ?? ""),
+    client: props.client,
+    event: props.event,
   })
-
-  const matches = (wfID: string) => wfID === props.workflowId()
-  const offW = props.event.on("dag.workflow.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  const offN = props.event.on("dag.node.updated", (e) => {
-    if (matches(e.properties.workflowID)) void load()
-  })
-  onCleanup(() => {
-    cancelled = true
-    offW()
-    offN()
-  })
-
-  return { violations, error, refresh: () => void load() }
+  return { violations: r.data, error: r.error, refresh: r.refresh }
 }
 
 /**
