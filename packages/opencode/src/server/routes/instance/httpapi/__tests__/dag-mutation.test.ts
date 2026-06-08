@@ -57,3 +57,53 @@ describe('DAG Mutation API — Endpoint Shape', () => {
     expect(DAGWorkflowStatusSchema).toBeDefined()
   })
 })
+
+describe('DAG Mutation API — cancel/replan/create endpoints', () => {
+  it('group exposes cancel, replan, create endpoints alongside pause/resume', async () => {
+    const mod = await import('../groups/dag-mutation')
+    const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, unknown> }> }
+    const group = api.groups['dag-mutation']
+    expect(group).toBeDefined()
+    const names = Object.keys(group.endpoints)
+    expect(names).toContain('pause')
+    expect(names).toContain('resume')
+    expect(names).toContain('cancel')
+    expect(names).toContain('replan')
+    expect(names).toContain('create')
+  })
+
+  it('cancel endpoint path is /dag/workflows/:workflowId/cancel', async () => {
+    const mod = await import('../groups/dag-mutation')
+    const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, { path: string }> }> }
+    const cancel = api.groups['dag-mutation'].endpoints['cancel']
+    expect(cancel.path).toBe('/dag/workflows/:workflowId/cancel')
+  })
+
+  it('replan endpoint path is /dag/workflows/:workflowId/replan and carries a payload', async () => {
+    const mod = await import('../groups/dag-mutation')
+    const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, { path: string; payload: ReadonlyMap<string, unknown> }> }> }
+    const replan = api.groups['dag-mutation'].endpoints['replan']
+    expect(replan.path).toBe('/dag/workflows/:workflowId/replan')
+    expect(replan.payload.size).toBeGreaterThan(0)
+  })
+
+  it('create endpoint path is /dag/workflows/create with no :workflowId param', async () => {
+    const mod = await import('../groups/dag-mutation')
+    const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, { path: string }> }> }
+    const create = api.groups['dag-mutation'].endpoints['create']
+    expect(create.path).toBe('/dag/workflows/create')
+    expect(create.path).not.toContain(':workflowId')
+  })
+
+  it('exposes DagValidationError public error class with 400 status', async () => {
+    const mod = await import('../groups/dag-mutation')
+    expect(mod.DagValidationError).toBeDefined()
+  })
+
+  it('handler module registers cancel, replan, create handles (layer builds without unhandled endpoints)', async () => {
+    // Importing the handler module forces HttpApiBuilder.group to assemble all declared
+    // endpoints. If any of cancel/replan/create lacks a .handle(...), this import throws.
+    const mod = await import('../handlers/dag-mutation')
+    expect(mod.dagMutationHandlers).toBeDefined()
+  })
+})

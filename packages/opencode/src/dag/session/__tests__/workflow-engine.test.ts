@@ -5,6 +5,7 @@
 import { Effect } from 'effect';
 import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus } from '../types';
 import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
+import { validateWorkflowConfigLimits } from '../workflow-engine';
 
 // Helper to create a complete DAGNodeConfig
 function makeNodeConfig(
@@ -1061,6 +1062,47 @@ describe('WP1.3: Node Log Writer — real DB integration', () => {
     // Verify node was updated despite the race
     const node = Effect.runSync(service.getNode(`${wid}::A`)) as any
     expect(node?.status).toBe('completed')
+  })
+})
+
+describe('validateWorkflowConfigLimits: 20/10 cap single source of truth', () => {
+  const nodes = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ id: `n${i}` }))
+
+  it('accepts exactly 20 nodes', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(20), max_concurrency: 5 })).toEqual({ ok: true })
+  })
+
+  it('rejects 21 nodes with node cap reason', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(21), max_concurrency: 5 })).toEqual({
+      ok: false,
+      reason: 'node cap exceeded: 21 > 20',
+    })
+  })
+
+  it('accepts max_concurrency = 1 (lower bound)', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: 1 })).toEqual({ ok: true })
+  })
+
+  it('accepts max_concurrency = 10 (upper bound)', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: 10 })).toEqual({ ok: true })
+  })
+
+  it('rejects max_concurrency = 0 with range reason', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: 0 })).toEqual({
+      ok: false,
+      reason: 'max_concurrency must be 1..10, got 0',
+    })
+  })
+
+  it('rejects max_concurrency = 11 with range reason', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: 11 })).toEqual({
+      ok: false,
+      reason: 'max_concurrency must be 1..10, got 11',
+    })
+  })
+
+  it('accepts empty config (0 nodes, concurrency 1)', () => {
+    expect(validateWorkflowConfigLimits({ nodes: [], max_concurrency: 1 })).toEqual({ ok: true })
   })
 })
 

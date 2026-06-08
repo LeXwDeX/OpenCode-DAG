@@ -27,6 +27,7 @@ import type {
 import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
 import { FallbackTrigger } from "../state-machine/types"
+import { validateWorkflowConfigLimits } from "./workflow-engine"
 
 // ============================================================================
 // Iron Law Enforcement: Module-Level Event Bus & Validation Helpers
@@ -191,6 +192,18 @@ export interface CreateWorkflowInput {
   metadata?: Record<string, unknown>
 }
 
+/**
+ * Raised when a workflow config violates the 20-node / 1..10-concurrency caps
+ * at creation time. Caps are sourced exclusively from
+ * `validateWorkflowConfigLimits` (workflow-engine.ts).
+ */
+export class WorkflowConfigValidationError extends Error {
+  constructor(reason: string) {
+    super(reason)
+    this.name = "WorkflowConfigValidationError"
+  }
+}
+
 export interface CreateNodeInput {
   workflowId: string
   /** caller-provided id (e.g. ${workflowId}::${cfgId}); falls back to auto-generated */
@@ -267,7 +280,7 @@ export interface AppendNodeLogInput {
 // ============================================================================
 
 export interface IDAGSessionService {
-  readonly createWorkflow: (input: CreateWorkflowInput) => Effect.Effect<DAGWorkflowSession>
+  readonly createWorkflow: (input: CreateWorkflowInput) => Effect.Effect<DAGWorkflowSession, WorkflowConfigValidationError>
   readonly getWorkflow: (workflowId: string) => Effect.Effect<DAGWorkflowSession | undefined>
   readonly listWorkflowsByChatSession: (chatSessionId: string) => Effect.Effect<DAGWorkflowSession[]>
   readonly listAllWorkflows: () => Effect.Effect<DAGWorkflowSession[]>
@@ -307,10 +320,18 @@ export interface IDAGSessionService {
 const make = Effect.gen(function* () {
   
   const createWorkflow: IDAGSessionService["createWorkflow"] = (input) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
+      const limits = validateWorkflowConfigLimits({
+        nodes: input.config?.nodes ?? [],
+        max_concurrency: input.config?.max_concurrency,
+      })
+      if (!limits.ok) {
+        return yield* Effect.fail(new WorkflowConfigValidationError(limits.reason))
+      }
+
       const now = Date.now()
       const workflowId = `workflow_${now}_${Math.random().toString(36).slice(2)}`
-      
+
       Database.use((db) => {
         db.insert(dagWorkflows).values({
           workflow_id: workflowId,
@@ -325,7 +346,7 @@ const make = Effect.gen(function* () {
           completed_at: null,
         }).run()
       })
-      
+
       return {
         id: workflowId,
         chat_session_id: input.chatSessionId,

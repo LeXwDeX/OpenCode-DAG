@@ -1051,3 +1051,98 @@ describe('Observation Layer — appendNodeLog real DB round-trip', () => {
     expect(String(log.created_at).length).toBeGreaterThanOrEqual(13)
   })
 })
+
+// ============================================================================
+// 14. createWorkflow — config cap validation (20 nodes / 1..10 concurrency)
+// ============================================================================
+
+describe('createWorkflow — config cap validation', () => {
+  const originalDb = (globalThis as any).__OPENCODE_DB_FLAG__
+  let Flag: any
+  let Database: any
+
+  beforeAll(async () => {
+    Flag = (await import('@opencode-ai/core/flag/flag')).Flag
+    Database = await import('@/storage/db')
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+  })
+
+  afterAll(async () => {
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb ?? undefined
+    Database.Client.reset()
+  })
+
+  const makeNodes = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `n${i}`,
+      name: `n${i}`,
+      dependencies: [],
+      required: false,
+      worker_type: 'mock',
+      worker_config: {},
+    }))
+
+  it('legal config (≤20 nodes, concurrency 1..10) creates a pending workflow', async () => {
+    const { DAGSessionService } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    const workflow = Effect.runSync(service.createWorkflow({
+      name: 'legal-config',
+      chatSessionId: 'chat-legal',
+      config: { name: 'legal-config', nodes: makeNodes(20), max_concurrency: 10 },
+    }))
+    expect(workflow.status).toBe('pending')
+    expect(workflow.id).toMatch(/^workflow_/)
+  })
+
+  it('>20 nodes → fails with WorkflowConfigValidationError', async () => {
+    const { DAGSessionService, WorkflowConfigValidationError } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    const exit = Effect.runSyncExit(service.createWorkflow({
+      name: 'too-many-nodes',
+      chatSessionId: 'chat-overcap',
+      config: { name: 'too-many-nodes', nodes: makeNodes(21), max_concurrency: 5 },
+    }))
+    expect(exit._tag).toBe('Failure')
+    const error = Effect.runSync(Effect.flip(service.createWorkflow({
+      name: 'too-many-nodes',
+      chatSessionId: 'chat-overcap',
+      config: { name: 'too-many-nodes', nodes: makeNodes(21), max_concurrency: 5 },
+    })))
+    expect(error).toBeInstanceOf(WorkflowConfigValidationError)
+    expect(error.message).toBe('node cap exceeded: 21 > 20')
+  })
+
+  it('max_concurrency = 11 → fails', async () => {
+    const { DAGSessionService, WorkflowConfigValidationError } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    const error = Effect.runSync(Effect.flip(service.createWorkflow({
+      name: 'concurrency-high',
+      chatSessionId: 'chat-c11',
+      config: { name: 'concurrency-high', nodes: makeNodes(1), max_concurrency: 11 },
+    })))
+    expect(error).toBeInstanceOf(WorkflowConfigValidationError)
+    expect(error.message).toBe('max_concurrency must be 1..10, got 11')
+  })
+
+  it('max_concurrency = 0 → fails', async () => {
+    const { DAGSessionService, WorkflowConfigValidationError } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    const error = Effect.runSync(Effect.flip(service.createWorkflow({
+      name: 'concurrency-zero',
+      chatSessionId: 'chat-c0',
+      config: { name: 'concurrency-zero', nodes: makeNodes(1), max_concurrency: 0 },
+    })))
+    expect(error).toBeInstanceOf(WorkflowConfigValidationError)
+    expect(error.message).toBe('max_concurrency must be 1..10, got 0')
+  })
+})

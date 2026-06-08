@@ -231,6 +231,27 @@ export function applyReplanPatchToConfig(
 }
 
 /**
+ * Single source of truth for the workflow config caps:
+ *   - node count ≤ 20
+ *   - max_concurrency ∈ [1, 10]
+ *
+ * Consumed by `createWorkflow` (session-service.ts) at creation and reused by
+ * `validateReplanPostConfig` for post-replan validation. Reason strings are
+ * stable and shared so both entry points report identical messages.
+ */
+export function validateWorkflowConfigLimits(
+  config: { nodes: unknown[]; max_concurrency: number },
+): { ok: true } | { ok: false; reason: string } {
+  if (config.nodes.length > 20) {
+    return { ok: false, reason: `node cap exceeded: ${config.nodes.length} > 20` }
+  }
+  if (config.max_concurrency < 1 || config.max_concurrency > 10) {
+    return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
+  }
+  return { ok: true }
+}
+
+/**
  * Validates the post-patch config: node cap (20), concurrency range (1..10),
  * dependency resolution, required-node integrity, and cycle absence.
  */
@@ -240,11 +261,9 @@ export function validateReplanPostConfig(
   workflow: { config: DAGConfig },
 ): ReplanValidateResult {
   const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
-  if (newConfigNodes.length > 20) {
-    return { ok: false, reason: `node cap exceeded: ${newConfigNodes.length} > 20` }
-  }
-  if (newMaxConcurrency < 1 || newMaxConcurrency > 10) {
-    return { ok: false, reason: `max_concurrency must be 1..10, got ${newMaxConcurrency}` }
+  const limits = validateWorkflowConfigLimits({ nodes: newConfigNodes, max_concurrency: newMaxConcurrency })
+  if (!limits.ok) {
+    return { ok: false, reason: limits.reason }
   }
   const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
   for (const n of newConfigNodes) {
