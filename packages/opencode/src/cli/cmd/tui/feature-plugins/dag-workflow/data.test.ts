@@ -11,7 +11,9 @@ import { describe, it, expect } from "bun:test"
 import { createRoot } from "solid-js"
 import {
   mapNode,
+  mapNodeLog,
   mapWorkflow,
+  mapWorkflowHistory,
   mapViolation,
   filterWorkflows,
   nextIndex,
@@ -20,6 +22,8 @@ import {
   useWorkflowList,
   useWorkflowDetail,
   useViolations,
+  useNodeLogs,
+  useWorkflowHistory,
 } from "./data"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { DAGWorkflowSession } from "@/dag/session/types"
@@ -65,12 +69,38 @@ const sdkWorkflow = {
   duration_ms: "NaN" as const,
 }
 
+const sdkHistory = {
+  history_id: "hist-1",
+  workflow_id: "wf-1",
+  chat_session_id: "chat-1",
+  action: "replan",
+  old_state: { nodes: 1 },
+  new_state: { nodes: 2 },
+  change_details: { added: ["n2"] },
+  changed_by: "main",
+  created_at: "2026-01-01T00:00:00.000Z",
+}
+
+const sdkNodeLog = {
+  log_id: "log-1",
+  node_id: "n1",
+  workflow_id: "wf-1",
+  chat_session_id: "chat-1",
+  log_level: "info",
+  log_message: "started execution",
+  log_data: { step: 1 },
+  execution_phase: "execute",
+  created_at: "2026-01-01T00:00:01.000Z",
+}
+
 // ── fake client / event ────────────────────────────────────────────────────
 
 function fakeClient(overrides?: {
   list?: unknown[]
   detail?: { workflow: unknown; nodes: unknown[] } | null
   violations?: unknown[]
+  history?: unknown[]
+  logs?: unknown[]
 }): TuiPluginApi["client"] {
   return {
     dag: {
@@ -82,6 +112,8 @@ function fakeClient(overrides?: {
             : overrides.detail,
       }),
       getViolations: async () => ({ data: overrides?.violations ?? [] }),
+      getWorkflowHistory: async () => ({ data: overrides?.history ?? [sdkHistory] }),
+      getNodeLogs: async () => ({ data: overrides?.logs ?? [sdkNodeLog] }),
     },
   } as unknown as TuiPluginApi["client"]
 }
@@ -162,6 +194,24 @@ describe("WP4 data.ts — mapWorkflow", () => {
   it("defaults node_sessions to empty when no nodes given", () => {
     const wf = mapWorkflow(sdkWorkflow)
     expect(wf.node_sessions).toEqual({})
+  })
+})
+
+describe("WP4 data.ts — observation mappers", () => {
+  it("maps workflow history rows without dropping JSON details", () => {
+    const row = mapWorkflowHistory(sdkHistory)
+    expect(row.history_id).toBe("hist-1")
+    expect(row.action).toBe("replan")
+    expect(row.changed_by).toBe("main")
+    expect(row.change_details).toEqual({ added: ["n2"] })
+  })
+
+  it("maps node log rows without dropping structured log data", () => {
+    const row = mapNodeLog(sdkNodeLog)
+    expect(row.log_id).toBe("log-1")
+    expect(row.log_level).toBe("info")
+    expect(row.execution_phase).toBe("execute")
+    expect(row.log_data).toEqual({ step: 1 })
   })
 })
 
@@ -278,6 +328,78 @@ describe("WP4 data.ts — useViolations", () => {
       }),
     )
     expect(value.violations()).toEqual([])
+    dispose()
+  })
+})
+
+describe("WP4 data.ts — useWorkflowHistory", () => {
+  it("loads workflow history from the SDK client", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowHistory({ client: fakeClient(), event: fakeEvent, workflowId: () => "wf-1" }),
+    )
+    expect(value.history()).toHaveLength(1)
+    expect(value.history()[0]!.history_id).toBe("hist-1")
+    expect(value.error()).toBeNull()
+    dispose()
+  })
+
+  it("returns [] when workflowId is undefined", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowHistory({ client: fakeClient(), event: fakeEvent, workflowId: () => undefined }),
+    )
+    expect(value.history()).toEqual([])
+    expect(value.loading()).toBe(false)
+    dispose()
+  })
+
+  it("surfaces an error message when history loading fails", async () => {
+    const client = {
+      dag: {
+        getWorkflowHistory: async () => {
+          throw new Error("history unavailable")
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { value, dispose } = await withRoot(() =>
+      useWorkflowHistory({ client, event: fakeEvent, workflowId: () => "wf-1" }),
+    )
+    expect(value.error()).toBe("history unavailable")
+    dispose()
+  })
+})
+
+describe("WP4 data.ts — useNodeLogs", () => {
+  it("loads node logs from the SDK client", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useNodeLogs({ client: fakeClient(), event: fakeEvent, nodeId: () => "n1" }),
+    )
+    expect(value.logs()).toHaveLength(1)
+    expect(value.logs()[0]!.log_id).toBe("log-1")
+    expect(value.error()).toBeNull()
+    dispose()
+  })
+
+  it("returns [] when nodeId is null", async () => {
+    const { value, dispose } = await withRoot(() =>
+      useNodeLogs({ client: fakeClient(), event: fakeEvent, nodeId: () => null }),
+    )
+    expect(value.logs()).toEqual([])
+    expect(value.loading()).toBe(false)
+    dispose()
+  })
+
+  it("surfaces an error message when logs loading fails", async () => {
+    const client = {
+      dag: {
+        getNodeLogs: async () => {
+          throw new Error("logs unavailable")
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    const { value, dispose } = await withRoot(() =>
+      useNodeLogs({ client, event: fakeEvent, nodeId: () => "n1" }),
+    )
+    expect(value.error()).toBe("logs unavailable")
     dispose()
   })
 })

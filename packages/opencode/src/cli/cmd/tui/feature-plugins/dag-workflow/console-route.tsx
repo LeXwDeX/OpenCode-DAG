@@ -21,6 +21,8 @@ import { useTheme } from "@tui/context/theme"
 import {
   useWorkflowList,
   useWorkflowDetail,
+  useWorkflowHistory,
+  useNodeLogs,
   useViolations,
   filterWorkflows,
   nextIndex,
@@ -34,6 +36,8 @@ import {
 import { AsciiDag } from "./ascii-dag"
 import { LiveTicker } from "./live-ticker"
 import { NodeDialog } from "./node-dialog"
+import { WorkflowHistoryPanel } from "./history-panel"
+import { NodeLogsPanel } from "./node-logs-panel"
 import { Sidebar } from "./sidebar"
 import { PauseResumeBar } from "./pause-resume-bar"
 import { useBindings } from "../../keymap"
@@ -98,6 +102,26 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     client: props.api.client,
     event: props.api.event,
     workflowId: currentWorkflowID,
+  })
+
+  const {
+    history: workflowHistory,
+    error: workflowHistoryError,
+    loading: workflowHistoryLoading,
+  } = useWorkflowHistory({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+  })
+
+  const {
+    logs: nodeLogs,
+    error: nodeLogsError,
+    loading: nodeLogsLoading,
+  } = useNodeLogs({
+    client: props.api.client,
+    event: props.api.event,
+    nodeId: selectedNodeID,
   })
 
   const filteredWorkflows = createMemo(() =>
@@ -373,6 +397,18 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               node={selectedNode()}
               onClose={() => setSelectedNodeID(null)}
               route={props.api.route}
+            />
+            <WorkflowHistoryPanel
+              lang={i18n().lang}
+              history={workflowHistory()}
+              error={workflowHistoryError()}
+              loading={workflowHistoryLoading()}
+            />
+            <NodeLogsPanel
+              lang={i18n().lang}
+              logs={nodeLogs()}
+              error={nodeLogsError()}
+              loading={nodeLogsLoading()}
             />
           </scrollbox>
           <LiveTicker lang={i18n().lang} event={props.api.event} nodes={nodes()} />

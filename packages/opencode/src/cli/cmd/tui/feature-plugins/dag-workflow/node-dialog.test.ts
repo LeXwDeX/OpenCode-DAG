@@ -8,6 +8,7 @@
  */
 import { describe, it, expect } from "bun:test"
 import { nodeStatusLabel, workflowStatusLabel, t } from "./i18n"
+import { formatNodeDuration, formatNodeTime, truncateNodeText } from "./node-dialog"
 import type { I18nKey } from "./i18n"
 import type { DAGNodeStatus, DAGWorkflowStatus } from "@/dag/session/types"
 
@@ -96,6 +97,16 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_retries: ["Retries", "重试"],
     label_deps: ["Deps", "依赖"],
     label_error: ["Error", "错误"],
+    label_timing: ["Timing", "时间"],
+    label_start_time: ["Start", "开始"],
+    label_end_time: ["End", "结束"],
+    label_completed_at: ["Completed", "完成"],
+    label_output: ["Output", "输出"],
+    label_snapshot_logs: ["Snapshot logs", "快照日志"],
+    title_workflow_history: ["Workflow History", "工作流历史"],
+    title_node_logs: ["Node Logs", "节点日志"],
+    history_empty: ["No history", "暂无历史"],
+    node_logs_empty: ["No node logs", "暂无节点日志"],
     filter_all: ["All", "全部"],
     title_violations: ["Violations", "违规记录"],
     cmd_open_title: ["Open DAG Workflow", "打开 DAG 工作流面板"],
@@ -122,4 +133,33 @@ describe("WP4 i18n — t() dict lookup", () => {
       expect(t("zh", key)).toBe(cases[key][1])
     })
   }
+})
+
+describe("WP4 NodeDialog — output and timing helpers", () => {
+  it("formats missing times as '-'", () => {
+    expect(formatNodeTime(null)).toBe("-")
+    expect(formatNodeTime(undefined)).toBe("-")
+  })
+
+  it("formats numeric and ISO times deterministically", () => {
+    expect(formatNodeTime(0)).toBe("1970-01-01T00:00:00.000Z")
+    expect(formatNodeTime("2026-01-01T00:00:00.000Z")).toBe("2026-01-01T00:00:00.000Z")
+  })
+
+  it("formats missing and present durations", () => {
+    expect(formatNodeDuration(null)).toBe("-")
+    expect(formatNodeDuration(42)).toBe("42ms")
+  })
+
+  it("truncates long output deterministically", () => {
+    const result = truncateNodeText("x".repeat(2_100))
+    expect(result.length).toBeLessThanOrEqual(2_001)
+    expect(result.endsWith("…")).toBe(true)
+  })
+
+  it("truncates output to twenty lines", () => {
+    const result = truncateNodeText(Array.from({ length: 25 }, (_, i) => `line-${i}`).join("\n"))
+    expect(result.split("\n")).toHaveLength(21)
+    expect(result.endsWith("…")).toBe(true)
+  })
 })

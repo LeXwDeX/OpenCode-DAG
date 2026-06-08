@@ -58,10 +58,29 @@ export function NodeDialog(props: {
           <text fg={theme.textMuted}>
             {t(props.lang, "label_retries")}: {node().retry_count}/{node().max_retries}
           </text>
+          <box gap={0}>
+            <text fg={theme.textMuted}>{t(props.lang, "label_timing")}</text>
+            <text fg={theme.textMuted}>{t(props.lang, "label_start_time")}: {formatNodeTime(node().start_time)}</text>
+            <text fg={theme.textMuted}>{t(props.lang, "label_end_time")}: {formatNodeTime(node().end_time)}</text>
+            <text fg={theme.textMuted}>{t(props.lang, "label_completed_at")}: {formatNodeTime(node().completed_at)}</text>
+            <text fg={theme.textMuted}>{t(props.lang, "label_duration")}: {formatNodeDuration(node().duration_ms)}</text>
+          </box>
           <Show when={node().dependencies.length > 0}>
             <text fg={theme.textMuted}>
               {t(props.lang, "label_deps")}: {node().dependencies.join(", ")}
             </text>
+          </Show>
+          <Show when={node().output !== null && node().output !== undefined}>
+            <box gap={0}>
+              <text fg={theme.textMuted}>{t(props.lang, "label_output")}</text>
+              <text fg={theme.text} wrapMode="word">{truncateNodeText(node().output)}</text>
+            </box>
+          </Show>
+          <Show when={node().logs.length > 0}>
+            <box gap={0}>
+              <text fg={theme.textMuted}>{t(props.lang, "label_snapshot_logs")}</text>
+              <text fg={theme.text} wrapMode="word">{truncateNodeText(node().logs.join("\n"))}</text>
+            </box>
           </Show>
           <Show when={node().error_info}>
             <text fg={theme.error}>
@@ -93,4 +112,33 @@ export function NodeDialog(props: {
       )}
     </Show>
   )
+}
+
+export function formatNodeTime(value: number | string | null | undefined): string {
+  if (value === null || value === undefined) return "-"
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? "-" : date.toISOString()
+}
+
+export function formatNodeDuration(value: number | null | undefined): string {
+  return value === null || value === undefined ? "-" : `${value}ms`
+}
+
+export function truncateNodeText(value: unknown): string {
+  return truncateText(stringifyUnknown(value))
+}
+
+function stringifyUnknown(value: unknown): string {
+  if (typeof value === "string") return value
+  try {
+    return JSON.stringify(value) ?? String(value)
+  } catch {
+    return String(value)
+  }
+}
+
+function truncateText(value: string): string {
+  const byLines = value.split("\n")
+  const lineLimited = byLines.length > 20 ? `${byLines.slice(0, 20).join("\n")}\n…` : value
+  return lineLimited.length > 2000 ? `${lineLimited.slice(0, 2000)}…` : lineLimited
 }

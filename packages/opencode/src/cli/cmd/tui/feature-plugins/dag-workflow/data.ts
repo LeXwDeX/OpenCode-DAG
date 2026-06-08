@@ -234,6 +234,212 @@ export type ViolationsApi = {
   refresh: () => void
 }
 
+export type WorkflowHistory = {
+  history_id: string
+  workflow_id: string
+  chat_session_id: string
+  action: string
+  old_state: unknown
+  new_state: unknown
+  change_details: unknown
+  changed_by: string | null
+  created_at: string
+}
+
+export type NodeLog = {
+  log_id: string
+  node_id: string
+  workflow_id: string
+  chat_session_id: string
+  log_level: string
+  log_message: string
+  log_data: unknown
+  execution_phase: string | null
+  created_at: string
+}
+
+export type WorkflowHistoryApi = {
+  history: Accessor<WorkflowHistory[]>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
+export type NodeLogsApi = {
+  logs: Accessor<NodeLog[]>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
+export function mapWorkflowHistory(h: {
+  history_id: string
+  workflow_id: string
+  chat_session_id: string
+  action: string
+  old_state: unknown
+  new_state: unknown
+  change_details: unknown
+  changed_by: string | null
+  created_at: string
+}): WorkflowHistory {
+  return {
+    history_id: h.history_id,
+    workflow_id: h.workflow_id,
+    chat_session_id: h.chat_session_id,
+    action: h.action,
+    old_state: h.old_state,
+    new_state: h.new_state,
+    change_details: h.change_details,
+    changed_by: h.changed_by,
+    created_at: h.created_at,
+  }
+}
+
+export function mapNodeLog(log: {
+  log_id: string
+  node_id: string
+  workflow_id: string
+  chat_session_id: string
+  log_level: string
+  log_message: string
+  log_data: unknown
+  execution_phase: string | null
+  created_at: string
+}): NodeLog {
+  return {
+    log_id: log.log_id,
+    node_id: log.node_id,
+    workflow_id: log.workflow_id,
+    chat_session_id: log.chat_session_id,
+    log_level: log.log_level,
+    log_message: log.log_message,
+    log_data: log.log_data,
+    execution_phase: log.execution_phase,
+    created_at: log.created_at,
+  }
+}
+
+export function useWorkflowHistory(props: {
+  client: Client
+  event: EventBus
+  workflowId: Accessor<string | undefined>
+}): WorkflowHistoryApi {
+  const [history, setHistory] = createSignal<WorkflowHistory[]>([])
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const id = props.workflowId()
+    if (!id) {
+      gen++
+      setHistory([])
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.getWorkflowHistory({ workflowId: id, limit: "50" })
+      if (cancelled || my !== gen) return
+      setHistory((res.data ?? []).map(mapWorkflowHistory))
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    void load()
+  })
+
+  const matches = (wfID: string) => wfID === props.workflowId()
+  const offW = props.event.on("dag.workflow.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offR = props.event.on("dag.workflow.replanned", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  const offP = props.event.on("dag.node.progress", (e) => {
+    if (matches(e.properties.workflowID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offW()
+    offR()
+    offN()
+    offP()
+  })
+
+  return { history, error, loading, refresh: () => void load() }
+}
+
+export function useNodeLogs(props: {
+  client: Client
+  event: EventBus
+  nodeId: Accessor<string | null | undefined>
+}): NodeLogsApi {
+  const [logs, setLogs] = createSignal<NodeLog[]>([])
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const id = props.nodeId()
+    if (!id) {
+      gen++
+      setLogs([])
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const res = await props.client.dag.getNodeLogs({ nodeId: id, limit: "100" })
+      if (cancelled || my !== gen) return
+      setLogs((res.data ?? []).map(mapNodeLog))
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    props.nodeId()
+    void load()
+  })
+
+  const matches = (nodeID: string) => nodeID === props.nodeId()
+  const offN = props.event.on("dag.node.updated", (e) => {
+    if (matches(e.properties.nodeID)) void load()
+  })
+  const offP = props.event.on("dag.node.progress", (e) => {
+    if (matches(e.properties.nodeID)) void load()
+  })
+  onCleanup(() => {
+    cancelled = true
+    offN()
+    offP()
+  })
+
+  return { logs, error, loading, refresh: () => void load() }
+}
+
 export async function pauseWorkflow(client: Client, workflowId: string) {
   return client.dag.pause({ workflowId })
 }
