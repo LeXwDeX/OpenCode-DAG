@@ -1104,5 +1104,35 @@ describe('validateWorkflowConfigLimits: 20/10 cap single source of truth', () =>
   it('accepts empty config (0 nodes, concurrency 1)', () => {
     expect(validateWorkflowConfigLimits({ nodes: [], max_concurrency: 1 })).toEqual({ ok: true })
   })
+
+  // P0: max_concurrency=undefined/missing must NOT bypass the 1..10 concurrency
+  // iron rule. Pre-fix, `undefined < 1` and `undefined > 10` are both false, so
+  // the range check is skipped and ok:true is returned for a config that violates
+  // the concurrency cap.
+  it('rejects max_concurrency = undefined (P0: must not bypass cap)', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: undefined })).toEqual({
+      ok: false,
+      reason: 'max_concurrency must be 1..10, got undefined',
+    })
+  })
+
+  it('rejects config missing max_concurrency field entirely (P0)', () => {
+    // Runtime config from the HTTP create endpoint is Schema.Unknown, so the
+    // field can be physically absent. Reading an absent field yields undefined.
+    const configMissingField = { nodes: nodes(1) } as { nodes: unknown[]; max_concurrency: number | undefined }
+    expect(validateWorkflowConfigLimits(configMissingField)).toEqual({
+      ok: false,
+      reason: 'max_concurrency must be 1..10, got undefined',
+    })
+  })
+
+  it('rejects max_concurrency = null (P0)', () => {
+    expect(
+      validateWorkflowConfigLimits({ nodes: nodes(1), max_concurrency: null as unknown as number }),
+    ).toEqual({
+      ok: false,
+      reason: 'max_concurrency must be 1..10, got null',
+    })
+  })
 })
 

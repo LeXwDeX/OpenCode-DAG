@@ -240,10 +240,20 @@ export function applyReplanPatchToConfig(
  * stable and shared so both entry points report identical messages.
  */
 export function validateWorkflowConfigLimits(
-  config: { nodes: unknown[]; max_concurrency: number },
+  // max_concurrency is typed as `number | undefined` because the runtime config
+  // reaching this function (CreateWorkflowInput.config is `any`, HTTP create body
+  // is Schema.Unknown) can physically omit the field. A missing/non-numeric value
+  // must be rejected, not silently bypassed — see the guard below.
+  config: { nodes: unknown[]; max_concurrency: number | undefined },
 ): { ok: true } | { ok: false; reason: string } {
   if (config.nodes.length > 20) {
     return { ok: false, reason: `node cap exceeded: ${config.nodes.length} > 20` }
+  }
+  // P0: undefined/null/non-finite must NOT bypass the 1..10 cap. Pre-guard, an
+  // undefined value made both `< 1` and `> 10` evaluate false, returning ok:true
+  // for a config that violates the concurrency iron rule.
+  if (typeof config.max_concurrency !== "number" || !Number.isFinite(config.max_concurrency)) {
+    return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
   }
   if (config.max_concurrency < 1 || config.max_concurrency > 10) {
     return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
