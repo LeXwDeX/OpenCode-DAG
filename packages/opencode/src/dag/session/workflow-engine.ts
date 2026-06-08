@@ -4,7 +4,12 @@
 
 import { Cause, Effect, Result } from "effect"
 import { DAGSessionService, emitWorkflowReplannedEvent } from "./session-service"
-import type { CreateNodeInput, UpdateNodeConfigInput, UpdateNodeStatusInput } from "./session-service"
+import type {
+  AppendNodeLogInput,
+  CreateNodeInput,
+  UpdateNodeConfigInput,
+  UpdateNodeStatusInput,
+} from "./session-service"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -403,6 +408,11 @@ const make = Effect.gen(function* () {
   const sessionService = dagSessionService
   const violationAPI = new ViolationQueryAPI(sessionService)
 
+  // §10.e: non-interrupting log helper for node lifecycle events.
+  // appendNodeLog failures are swallowed so they never break node execution.
+  const safeAppendLog = (input: AppendNodeLogInput): Effect.Effect<void, never, never> =>
+    sessionService.appendNodeLog(input).pipe(Effect.catchCause(() => Effect.void))
+
   let _promptOps: PromptOps | undefined
 
   const setPromptOps = (ops: PromptOps) => {
@@ -452,6 +462,18 @@ const make = Effect.gen(function* () {
       // 0. Paused guard (§10.e Option C): if workflow is paused, bail out
       //    without changing node status (pending stays pending).
       const wf = yield* sessionService.getWorkflow(workflowId)
+      // #1 spawn_start — logged immediately on fiber entry (before paused guard)
+      if (wf?.chat_session_id) {
+        yield* safeAppendLog({
+          nodeId: node.node_id,
+          workflowId,
+          chatSessionId: wf.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Spawn started for node ${node.node_id}`,
+          executionPhase: 'spawn_start',
+          logData: { worker_type: node.config.worker_type },
+        })
+      }
       if (wf && wf.status === 'paused') {
         return
       }
@@ -482,6 +504,18 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
           Effect.ignore
         )
+        // #2 worker_missing
+        if (wf?.chat_session_id) {
+          yield* safeAppendLog({
+            nodeId: node.node_id,
+            workflowId,
+            chatSessionId: wf.chat_session_id,
+            logLevel: 'error',
+            logMessage: `Worker type missing: ${node.config.worker_type} for node ${node.node_id}`,
+            executionPhase: 'worker_missing',
+            logData: { worker_type: node.config.worker_type },
+          })
+        }
         return
       }
 
@@ -537,6 +571,16 @@ const make = Effect.gen(function* () {
         title: node.config.name + ' (DAG node)',
         ...(worktreePath ? { directory: worktreePath } : {}),
       })
+      // #3 session_created
+      yield* safeAppendLog({
+        nodeId: node.node_id,
+        workflowId,
+        chatSessionId: workflow.chat_session_id,
+        logLevel: 'info',
+        logMessage: `Child session created: ${childSession.id} for node ${node.node_id}`,
+        executionPhase: 'session_created',
+        logData: { child_session_id: childSession.id },
+      })
 
       // 4. Persist chat_session_id metadata (§10 timing fix - BEFORE updateNodeStatus('running'))
       if (sessionService.updateNodeMetadata) {
@@ -546,6 +590,16 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] node metadata update failed: ${err}`)),
           Effect.ignore
         )
+        // #4 metadata_written
+        yield* safeAppendLog({
+          nodeId: node.node_id,
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Metadata written for node ${node.node_id}`,
+          executionPhase: 'metadata_written',
+          logData: { child_session_id: childSession.id },
+        })
       }
 
       // 5. NOW mark as running (persist-first, before prompt)
@@ -556,6 +610,15 @@ const make = Effect.gen(function* () {
         Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
         Effect.ignore
       )
+      // #5 running
+      yield* safeAppendLog({
+        nodeId: node.node_id,
+        workflowId,
+        chatSessionId: workflow.chat_session_id,
+        logLevel: 'info',
+        logMessage: `Node status set to running: ${node.node_id}`,
+        executionPhase: 'running',
+      })
 
       // 6. Prepend DAG node instructions + run prompt with timeout and retry
       const promptInstruction = [
@@ -582,9 +645,29 @@ const make = Effect.gen(function* () {
             Effect.ignore
           )
           yield* Effect.logWarning(`[DAG] retrying node ${node.node_id}, attempt ${attempt + 1}/${maxRetries + 1}`)
+          // #7 retry_attempt
+          yield* safeAppendLog({
+            nodeId: node.node_id,
+            workflowId,
+            chatSessionId: workflow.chat_session_id,
+            logLevel: 'debug',
+            logMessage: `Retry attempt ${attempt + 1}/${maxRetries + 1} for node ${node.node_id}`,
+            executionPhase: 'retry_attempt',
+            logData: { attempt: attempt + 1, max_retries: maxRetries },
+          })
         }
         
         const timeoutMs = node.config.timeout_ms ?? 300_000
+        // #6 prompt_started
+        yield* safeAppendLog({
+          nodeId: node.node_id,
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Prompt started for node ${node.node_id}, attempt ${attempt + 1}`,
+          executionPhase: 'prompt_started',
+          logData: { attempt: attempt + 1, timeout_ms: timeoutMs },
+        })
         const result = yield* _promptOps.prompt({
           sessionID: childSession.id,
           messageID: MessageID.ascending(),
@@ -604,6 +687,17 @@ const make = Effect.gen(function* () {
           const failure = Result.getFailure(result)
           const errMsg = failure._tag === 'Some' ? String(failure.value) : 'unknown error'
           yield* Effect.logWarning(`[DAG] node ${node.node_id} attempt ${attempt + 1} failed: ${errMsg}`)
+          // #8/#9 prompt_failed or timeout (detected from error message)
+          const isTimeout = errMsg.includes('timed out')
+          yield* safeAppendLog({
+            nodeId: node.node_id,
+            workflowId,
+            chatSessionId: workflow.chat_session_id,
+            logLevel: 'error',
+            logMessage: isTimeout ? `Node prompt timed out: ${errMsg}` : `Node prompt failed: ${errMsg}`,
+            executionPhase: isTimeout ? 'timeout' : 'prompt_failed',
+            logData: { attempt: attempt + 1, error: errMsg },
+          })
           attempt++
           if (attempt > maxRetries) {
             yield* sessionService.updateNodeStatus({
@@ -630,6 +724,15 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
           Effect.ignore
         )
+        // #10 node_complete_missing
+        yield* safeAppendLog({
+          nodeId: node.node_id,
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          logLevel: 'warn',
+          logMessage: `Node did not call node_complete tool: ${node.node_id}`,
+          executionPhase: 'node_complete_missing',
+        })
       }
     }).pipe(
       Effect.ensuring(Effect.sync(() => {
@@ -684,6 +787,7 @@ const make = Effect.gen(function* () {
     failedNodeId: string,
   ): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
+      const wfForLog = yield* sessionService.getWorkflow(workflowId)
       const allNodes = yield* sessionService.listNodes(workflowId)
       const descendants = findPendingDescendants(allNodes, failedNodeId)
       for (const d of descendants) {
@@ -694,6 +798,18 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] cascade-skip status update failed for ${d.node_id}: ${err}`)),
           Effect.ignore
         )
+        // #13 cascade_skip
+        if (wfForLog?.chat_session_id) {
+          yield* safeAppendLog({
+            nodeId: d.node_id,
+            workflowId,
+            chatSessionId: wfForLog.chat_session_id,
+            logLevel: 'warn',
+            logMessage: `Cascade skip: ${d.node_id} skipped due to failure of ${failedNodeId}`,
+            executionPhase: 'cascade_skip',
+            logData: { failed_node_id: failedNodeId },
+          })
+        }
       }
     }).pipe(Effect.catchCause((cause) => Effect.logWarning(`[DAG] cascadeSkipDownstream(${workflowId}, ${failedNodeId}) failed: ${Cause.squash(cause)}`)))
 
@@ -804,6 +920,19 @@ const make = Effect.gen(function* () {
         status: 'completed',
         outputData: output
       })
+
+      // #11 completed
+      const wf = yield* sessionService.getWorkflow(workflowId)
+      if (wf?.chat_session_id) {
+        yield* safeAppendLog({
+          nodeId,
+          workflowId,
+          chatSessionId: wf.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Node completed: ${nodeId}`,
+          executionPhase: 'completed',
+        })
+      }
       
       // 2. 调度下一批准备就绪的节点
       yield* scheduleReadyNodes(workflowId)
@@ -825,6 +954,20 @@ const make = Effect.gen(function* () {
         status: 'failed',
         error: error.message
       })
+
+      // #12 failed
+      const wfForLog = yield* sessionService.getWorkflow(workflowId)
+      if (wfForLog?.chat_session_id) {
+        yield* safeAppendLog({
+          nodeId,
+          workflowId,
+          chatSessionId: wfForLog.chat_session_id,
+          logLevel: 'error',
+          logMessage: `Node failed: ${nodeId} — ${error.message}`,
+          executionPhase: 'failed',
+          logData: { error: error.message },
+        })
+      }
 
       // 2. Conditional violation type (required vs optional)
       const allNodesForViolation = yield* sessionService.listNodes(workflowId)

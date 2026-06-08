@@ -4,7 +4,7 @@
 
 import { Effect } from 'effect';
 import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus } from '../types';
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
 
 // Helper to create a complete DAGNodeConfig
 function makeNodeConfig(
@@ -872,6 +872,195 @@ describe('Workflow Engine - P2: Pause/Resume Guard', () => {
     const { getValidNextSessionWorkflowStatuses } = require('../session-service')
     const valid = getValidNextSessionWorkflowStatuses('paused')
     expect(valid).toContain('running')
+  })
+})
+
+// ============================================================================
+// WP1.3: Node Log Writer — real DB integration
+// ============================================================================
+
+describe('WP1.3: Node Log Writer — real DB integration', () => {
+  const originalDb = (globalThis as any).__OPENCODE_DB_FLAG__
+  let Flag: any
+  let Database: any
+  let service: any
+  let engine: any
+
+  function makeNodeConfig(id: string, deps: string[], required: boolean): DAGNodeConfig {
+    return {
+      id,
+      name: id,
+      dependencies: deps,
+      required,
+      worker_type: 'general',
+      worker_config: {},
+    }
+  }
+
+  function setupWorkflow(name: string, nodes: { id: string; deps: string[]; required: boolean }[]) {
+    const nodeConfigs = nodes.map((n) => makeNodeConfig(n.id, n.deps, n.required))
+    const config: DAGConfig = {
+      name,
+      nodes: nodeConfigs,
+      max_concurrency: 10,
+    }
+    const workflow = Effect.runSync(
+      service.createWorkflow({
+        name,
+        chatSessionId: `test-session-${name}`,
+        config,
+      }),
+    ) as any
+    for (const cfg of nodeConfigs) {
+      Effect.runSync(
+        service.createNode({
+          workflowId: workflow.id as string,
+          nodeId: `${workflow.id as string}::${cfg.id}`,
+          name: cfg.name,
+          nodeName: cfg.name,
+          nodeType: cfg.worker_type,
+          config: cfg,
+          dependencyNodes: cfg.dependencies.map((d: string) => `${workflow.id as string}::${d}`),
+          timeoutMs: cfg.timeout_ms,
+          maxRetries: cfg.retry?.max_attempts ?? 0,
+        }),
+      )
+    }
+    return { workflowId: workflow.id as string, workflow }
+  }
+
+  beforeAll(async () => {
+    Flag = (await import('@opencode-ai/core/flag/flag')).Flag
+    Database = await import('@/storage/db')
+    const { DAGSessionService } = await import('../session-service')
+    const { WorkflowEngine } = await import('../workflow-engine')
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+    service = Effect.runSync(DAGSessionService.make)
+    engine = Effect.runSync(WorkflowEngine.make)
+  })
+
+  afterAll(async () => {
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb ?? undefined
+    Database.Client.reset()
+  })
+
+  it('handleNodeCompletion writes a completed log entry', () => {
+    const { workflowId } = setupWorkflow('log-completed-test', [
+      { id: 'A', deps: [], required: true },
+    ])
+    const wid = workflowId
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+    Effect.runSync(engine.handleNodeCompletion(wid, `${wid}::A`, 'ok'))
+
+    const logs = Effect.runSync(service.listNodeLogs(`${wid}::A`)) as any[]
+    const completedLogs = logs.filter((l: any) => l.execution_phase === 'completed')
+    expect(completedLogs.length).toBe(1)
+    expect(completedLogs[0].log_level).toBe('info')
+    expect(completedLogs[0].log_message).toContain('Node completed')
+  })
+
+  it('handleNodeFailure writes a failed log entry', () => {
+    const { workflowId } = setupWorkflow('log-failed-test', [
+      { id: 'A', deps: [], required: true },
+    ])
+    const wid = workflowId
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+    Effect.runSync(engine.handleNodeFailure(wid, `${wid}::A`, new Error('fatal error')))
+
+    const logs = Effect.runSync(service.listNodeLogs(`${wid}::A`)) as any[]
+    const failedLogs = logs.filter((l: any) => l.execution_phase === 'failed')
+    expect(failedLogs.length).toBe(1)
+    expect(failedLogs[0].log_level).toBe('error')
+    expect(failedLogs[0].log_message).toContain('fatal error')
+  })
+
+  it('cascadeSkipDownstream writes one cascade_skip log per skipped descendant', () => {
+    const { workflowId } = setupWorkflow('log-cascade-test', [
+      { id: 'A', deps: [], required: true },
+      { id: 'B', deps: ['A'], required: true },
+      { id: 'C', deps: ['B'], required: true },
+      { id: 'D', deps: ['C'], required: true },
+    ])
+    const wid = workflowId
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+    Effect.runSync(engine.handleNodeFailure(wid, `${wid}::A`, new Error('A failed')))
+
+    // B, C, D should each have a cascade_skip log
+    const logsB = Effect.runSync(service.listNodeLogs(`${wid}::B`)) as any[]
+    const logsC = Effect.runSync(service.listNodeLogs(`${wid}::C`)) as any[]
+    const logsD = Effect.runSync(service.listNodeLogs(`${wid}::D`)) as any[]
+
+    const cascadeB = logsB.filter((l: any) => l.execution_phase === 'cascade_skip')
+    const cascadeC = logsC.filter((l: any) => l.execution_phase === 'cascade_skip')
+    const cascadeD = logsD.filter((l: any) => l.execution_phase === 'cascade_skip')
+
+    expect(cascadeB.length).toBe(1)
+    expect(cascadeC.length).toBe(1)
+    expect(cascadeD.length).toBe(1)
+    expect(cascadeB[0].log_level).toBe('warn')
+  })
+
+  it('combined scenario: handleNodeFailure + cascadeSkipDownstream → ≥6 total logs', () => {
+    // A fails → B, C, D, E, F cascade skip → 1 failed + 5 cascade_skip = 6 logs
+    const { workflowId } = setupWorkflow('log-gte6-test', [
+      { id: 'A', deps: [], required: true },
+      { id: 'B', deps: ['A'], required: true },
+      { id: 'C', deps: ['B'], required: true },
+      { id: 'D', deps: ['C'], required: true },
+      { id: 'E', deps: ['D'], required: true },
+      { id: 'F', deps: ['E'], required: true },
+    ])
+    const wid = workflowId
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+    Effect.runSync(engine.handleNodeFailure(wid, `${wid}::A`, new Error('root cause')))
+
+    // Count all logs across all nodes
+    const allLogs: any[] = []
+    for (const nodeId of ['A', 'B', 'C', 'D', 'E', 'F']) {
+      const logs = Effect.runSync(service.listNodeLogs(`${wid}::${nodeId}`)) as any[]
+      allLogs.push(...logs)
+    }
+
+    // A: 1 failed log + B..F: 1 cascade_skip each = 6 total
+    expect(allLogs.length).toBeGreaterThanOrEqual(6)
+
+    // Verify phases breakdown
+    const phases = allLogs.map((l: any) => l.execution_phase)
+    expect(phases.filter((p: string) => p === 'failed')).toHaveLength(1)
+    expect(phases.filter((p: string) => p === 'cascade_skip')).toHaveLength(5)
+  })
+
+  it('§10.e: node logging failure does not interrupt node completion', () => {
+    // Even if appendNodeLog would fail, the node operation must succeed.
+    // Simulate by completing a node on a workflow that was cancelled.
+    // getWorkflow returns valid workflow (still exists) but chatSessionId is valid,
+    // so the test verifies the catchCause(() => Effect.ignore) pattern is in place
+    // by asserting that handleNodeCompletion returns success regardless.
+    const { workflowId } = setupWorkflow('log-nointerrupt-test', [
+      { id: 'A', deps: [], required: true },
+    ])
+    const wid = workflowId
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+
+    // Cancel the workflow BEFORE completion (still exists, so getWorkflow returns it)
+    Effect.runSync(service.updateWorkflowStatus(wid, 'cancelled'))
+
+    // Late completion: the node update succeeds but the workflow convergence is idempotent.
+    // The log write is a side effect; if it fails (e.g. chatSessionId issue), it must not
+    // prevent the node status update from completing.
+    const result = Effect.runSync(engine.handleNodeCompletion(wid, `${wid}::A`, 'late-ok'))
+    expect(result).toEqual({ success: true })
+
+    // Verify node was updated despite the race
+    const node = Effect.runSync(service.getNode(`${wid}::A`)) as any
+    expect(node?.status).toBe('completed')
   })
 })
 

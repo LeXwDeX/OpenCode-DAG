@@ -13,7 +13,7 @@
  * - Violation detection logic
  */
 
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import {
   calculateWorkflowProgress,
   createEmptyWorkflowSession,
@@ -923,5 +923,131 @@ describe('Iron Law #3: emitWorkflowReplannedEvent', () => {
     expect(ev.patch_summary.added).toBe(2)
     // cleanup
     mod.setEventBus(undefined)
+  })
+})
+
+// ============================================================================
+// 13. Observation Layer — appendNodeLog real DB round-trip
+// ============================================================================
+
+describe('Observation Layer — appendNodeLog real DB round-trip', () => {
+  const originalDb = (globalThis as any).__OPENCODE_DB_FLAG__
+  let Flag: any
+  let Database: any
+
+  beforeAll(async () => {
+    Flag = (await import('@opencode-ai/core/flag/flag')).Flag
+    Database = await import('@/storage/db')
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+  })
+
+  afterAll(async () => {
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb ?? undefined
+    Database.Client.reset()
+  })
+
+  it('appendNodeLog persists and listNodeLogs returns the entry', async () => {
+    const { DAGSessionService } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    // Create a workflow + node
+    const workflow = Effect.runSync(service.createWorkflow({
+      name: 'log-roundtrip-test',
+      chatSessionId: 'chat-roundtrip-1',
+      config: {
+        name: 'log-roundtrip-test',
+        nodes: [],
+        max_concurrency: 1,
+      },
+    }))
+
+    const node = Effect.runSync(service.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::node-A`,
+      name: 'node-A',
+      nodeName: 'node-A',
+      nodeType: 'mock',
+      config: {
+        id: 'node-A',
+        name: 'node-A',
+        dependencies: [],
+        required: true,
+        worker_type: 'mock',
+        worker_config: {},
+      },
+    }))
+
+    // Append a log entry
+    const log = Effect.runSync(service.appendNodeLog({
+      nodeId: node.node_id,
+      workflowId: workflow.id,
+      chatSessionId: workflow.chat_session_id,
+      logLevel: 'info',
+      logMessage: 'test log entry',
+      executionPhase: 'spawn_start',
+    }))
+
+    // Verify returned DagNodeLog type
+    expect(log.log_id).toMatch(/^log_/)
+    expect(log.node_id).toBe(node.node_id)
+    expect(log.workflow_id).toBe(workflow.id)
+    expect(log.chat_session_id).toBe(workflow.chat_session_id)
+    expect(log.log_level).toBe('info')
+    expect(log.log_message).toBe('test log entry')
+    expect(log.execution_phase).toBe('spawn_start')
+    expect(typeof log.created_at).toBe('number')
+
+    // Verify listNodeLogs returns the entry
+    const logs = Effect.runSync(service.listNodeLogs(node.node_id))
+    expect(logs.length).toBeGreaterThanOrEqual(1)
+    const found = logs.find((l: any) => l.log_id === log.log_id)
+    expect(found).toBeDefined()
+    expect(found!.log_message).toBe('test log entry')
+  })
+
+  it('appendNodeLog returns DagNodeLog with millisecond-precision timestamp', async () => {
+    const { DAGSessionService } = await import('../session-service')
+    const { Effect } = await import('effect')
+    const service = Effect.runSync(DAGSessionService.make)
+
+    const workflow = Effect.runSync(service.createWorkflow({
+      name: 'log-timestamp-test',
+      chatSessionId: 'chat-ts-1',
+      config: { name: 'log-timestamp-test', nodes: [], max_concurrency: 1 },
+    }))
+
+    const node = Effect.runSync(service.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::node-ts`,
+      name: 'node-ts',
+      nodeName: 'node-ts',
+      nodeType: 'mock',
+      config: {
+        id: 'node-ts',
+        name: 'node-ts',
+        dependencies: [],
+        required: true,
+        worker_type: 'mock',
+        worker_config: {},
+      },
+    }))
+
+    const before = Date.now()
+    const log = Effect.runSync(service.appendNodeLog({
+      nodeId: node.node_id,
+      workflowId: workflow.id,
+      chatSessionId: workflow.chat_session_id,
+      logLevel: 'debug',
+      logMessage: 'timestamp precision check',
+    }))
+    const after = Date.now()
+
+    expect(log.created_at).toBeGreaterThanOrEqual(before)
+    expect(log.created_at).toBeLessThanOrEqual(after)
+    // Millisecond precision: created_at should be a 13-digit number (epoch ms)
+    expect(String(log.created_at).length).toBeGreaterThanOrEqual(13)
   })
 })
