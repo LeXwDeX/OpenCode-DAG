@@ -85,6 +85,21 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
   const [actionError, setActionError] = createSignal<string | null>(null)
 
+  // actionError toast: operation failures (pause/resume/cancel/replan/create) shown
+  // as transient toast rather than occupying the middle-pane layout. Data-load
+  // errors (workflowError) still use the mid-pane fallback since no content is available.
+  createEffect(() => {
+    const err = actionError()
+    if (!err) return
+    toast.show({
+      title: i18n().t("toast_action_error"),
+      message: err,
+      variant: "error",
+      duration: 8000,
+    })
+    setActionError(null)
+  })
+
   // Responsive breakpoint: wide (>120) → 3-column layout; narrow (≤120) → overlay panels
   const dimensions = useTerminalDimensions()
   const wide = createMemo(() => dimensions().width > 120)
@@ -487,10 +502,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         {/* Middle: 进度条 + 节点树 */}
         <box flexGrow={1} minHeight={0} paddingLeft={2} paddingRight={2} paddingTop={1} gap={1}>
             <Show
-              when={!workflowError() && !actionError()}
+              when={!workflowError()}
               fallback={
                 <box flexGrow={1} alignItems="center" justifyContent="center">
-                  <text fg={theme.error}>{i18n().t("label_load_error")}: {workflowError() ?? actionError()}</text>
+                  <text fg={theme.error}>{i18n().t("label_load_error")}: {workflowError()}</text>
                 </box>
               }
           >

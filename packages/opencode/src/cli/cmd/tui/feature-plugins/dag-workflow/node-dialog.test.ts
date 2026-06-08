@@ -150,6 +150,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     toast_created: ["Workflow created (pending). Start it via a chat turn.", "工作流已创建（待启动），请通过对话轮启动。"],
     toast_replan_range: ["Concurrency must be between 1 and 10", "并发数必须在 1 到 10 之间"],
     toast_create_error: ["Failed to create workflow", "创建工作流失败"],
+    toast_action_error: ["Action failed", "操作失败"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

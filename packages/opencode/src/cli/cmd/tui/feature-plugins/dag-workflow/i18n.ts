@@ -88,6 +88,7 @@ const DICT = {
     toast_created: "Workflow created (pending). Start it via a chat turn.",
     toast_replan_range: "Concurrency must be between 1 and 10",
     toast_create_error: "Failed to create workflow",
+    toast_action_error: "Action failed",
   },
   zh: {
     tab_dialogue: "对话",
@@ -157,6 +158,7 @@ const DICT = {
     toast_created: "工作流已创建（待启动），请通过对话轮启动。",
     toast_replan_range: "并发数必须在 1 到 10 之间",
     toast_create_error: "创建工作流失败",
+    toast_action_error: "操作失败",
   },
 } as const
 
