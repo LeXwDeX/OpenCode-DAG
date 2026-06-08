@@ -720,12 +720,47 @@ export function useWorkflowStats(props: {
   return { stats, error, loading, refresh: () => void load() }
 }
 
+// ============================================================================
+// 写路径 wrapper（铁律：TUI 写必须经 server API + 状态机）
+//
+// SDK 读写分离：只读走 client.dag.*（Dag class），状态变更走
+// client.dagMutation.*（DagMutation class）。所有 wrapper 仅转发到 server
+// POST 路由，由 WorkflowEngine + sessionService 状态机校验，TUI 不直接改状态。
+// ============================================================================
+
 export async function pauseWorkflow(client: Client, workflowId: string) {
-  return client.dag.pause({ workflowId })
+  return client.dagMutation.pause({ workflowId })
 }
 
 export async function resumeWorkflow(client: Client, workflowId: string) {
-  return client.dag.resume({ workflowId })
+  return client.dagMutation.resume({ workflowId })
+}
+
+export async function cancelWorkflow(client: Client, workflowId: string) {
+  return client.dagMutation.cancel({ workflowId })
+}
+
+export type ReplanPatchInput = {
+  add_nodes?: unknown[]
+  remove_nodes?: string[]
+  update_nodes?: unknown[]
+  new_max_concurrency?: number
+  changed_by?: string
+}
+
+export async function replanWorkflow(
+  client: Client,
+  workflowId: string,
+  patch: ReplanPatchInput,
+) {
+  return client.dagMutation.replan({ workflowId, dagReplanPatchBody: patch })
+}
+
+export async function createWorkflow(
+  client: Client,
+  input: { name: string; chatSessionId: string; config: unknown },
+) {
+  return client.dagMutation.create({ dagCreateWorkflowBody: input })
 }
 
 function errMessage(e: unknown): string {

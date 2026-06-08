@@ -21,6 +21,9 @@ import {
   nextIndex,
   pauseWorkflow,
   resumeWorkflow,
+  cancelWorkflow,
+  replanWorkflow,
+  createWorkflow,
   useWorkflowList,
   useWorkflowDetail,
   useViolations,
@@ -412,10 +415,10 @@ describe("WP4 data.ts — useNodeLogs", () => {
 })
 
 describe("WP1.1 data.ts — mutation wrappers", () => {
-  it("pauseWorkflow calls client.dag.pause with workflowId", async () => {
+  it("pauseWorkflow calls client.dagMutation.pause with workflowId", async () => {
     const calls: unknown[] = []
     const client = {
-      dag: {
+      dagMutation: {
         pause: async (input: unknown) => {
           calls.push(input)
           return { data: { ok: true } }
@@ -428,10 +431,10 @@ describe("WP1.1 data.ts — mutation wrappers", () => {
     expect(calls).toEqual([{ workflowId: "wf-1" }])
   })
 
-  it("resumeWorkflow calls client.dag.resume with workflowId", async () => {
+  it("resumeWorkflow calls client.dagMutation.resume with workflowId", async () => {
     const calls: unknown[] = []
     const client = {
-      dag: {
+      dagMutation: {
         resume: async (input: unknown) => {
           calls.push(input)
           return { data: { ok: true } }
@@ -442,6 +445,58 @@ describe("WP1.1 data.ts — mutation wrappers", () => {
     await resumeWorkflow(client, "wf-1")
 
     expect(calls).toEqual([{ workflowId: "wf-1" }])
+  })
+
+  it("cancelWorkflow calls client.dagMutation.cancel with workflowId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dagMutation: {
+        cancel: async (input: unknown) => {
+          calls.push(input)
+          return { data: { status: "cancelled" } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    await cancelWorkflow(client, "wf-1")
+
+    expect(calls).toEqual([{ workflowId: "wf-1" }])
+  })
+
+  it("replanWorkflow calls client.dagMutation.replan with workflowId + body", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dagMutation: {
+        replan: async (input: unknown) => {
+          calls.push(input)
+          return { data: { ok: true } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    await replanWorkflow(client, "wf-1", { new_max_concurrency: 5, changed_by: "user" })
+
+    expect(calls).toEqual([
+      { workflowId: "wf-1", dagReplanPatchBody: { new_max_concurrency: 5, changed_by: "user" } },
+    ])
+  })
+
+  it("createWorkflow calls client.dagMutation.create with body", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dagMutation: {
+        create: async (input: unknown) => {
+          calls.push(input)
+          return { data: { workflowId: "wf-new", nodeCount: 2, status: "pending" } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    await createWorkflow(client, { name: "Flow", chatSessionId: "sess-1", config: { nodes: [] } })
+
+    expect(calls).toEqual([
+      { dagCreateWorkflowBody: { name: "Flow", chatSessionId: "sess-1", config: { nodes: [] } } },
+    ])
   })
 })
 

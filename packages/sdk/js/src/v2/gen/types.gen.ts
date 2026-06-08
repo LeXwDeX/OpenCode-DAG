@@ -1597,6 +1597,53 @@ export type DagResumeResponse = {
   status: string
 }
 
+export type DagCancelResponse = {
+  status: string
+}
+
+export type DagReplanPatchBody = {
+  add_nodes?: Array<unknown>
+  remove_nodes?: Array<string>
+  update_nodes?: Array<unknown>
+  new_max_concurrency?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  changed_by?: string
+}
+
+export type DagReplanResultResponse =
+  | {
+      ok: true
+      workflow_id: string
+      history_id: string
+      nodes_added: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      nodes_removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      nodes_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      final_total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  | {
+      ok: false
+      reason: string
+      detail?: unknown
+    }
+
+export type DagCreateWorkflowBody = {
+  name: string
+  chatSessionId: string
+  config: unknown
+}
+
+export type DagCreateWorkflowResponse = {
+  workflowId: string
+  nodeCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  status: string
+}
+
+export type DagValidationError = {
+  name: "DagValidationError"
+  data: {
+    message: string
+  }
+}
+
 export type ConsoleState = {
   consoleManagedProviders: Array<string>
   activeOrgName?: string
@@ -4877,6 +4924,94 @@ export type DagMutationResumeResponses = {
 }
 
 export type DagMutationResumeResponse = DagMutationResumeResponses[keyof DagMutationResumeResponses]
+
+export type DagMutationCancelData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/cancel"
+}
+
+export type DagMutationCancelErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationCancelError = DagMutationCancelErrors[keyof DagMutationCancelErrors]
+
+export type DagMutationCancelResponses = {
+  /**
+   * Workflow cancel confirmation
+   */
+  200: DagCancelResponse
+}
+
+export type DagMutationCancelResponse = DagMutationCancelResponses[keyof DagMutationCancelResponses]
+
+export type DagMutationReplanData = {
+  body?: DagReplanPatchBody
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/replan"
+}
+
+export type DagMutationReplanErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationReplanError = DagMutationReplanErrors[keyof DagMutationReplanErrors]
+
+export type DagMutationReplanResponses = {
+  /**
+   * Workflow replan result
+   */
+  200: DagReplanResultResponse
+}
+
+export type DagMutationReplanResponse = DagMutationReplanResponses[keyof DagMutationReplanResponses]
+
+export type DagMutationCreateData = {
+  body?: DagCreateWorkflowBody
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/create"
+}
+
+export type DagMutationCreateErrors = {
+  /**
+   * DagValidationError | InvalidRequestError
+   */
+  400: DagValidationError | InvalidRequestError
+}
+
+export type DagMutationCreateError = DagMutationCreateErrors[keyof DagMutationCreateErrors]
+
+export type DagMutationCreateResponses = {
+  /**
+   * Workflow created
+   */
+  200: DagCreateWorkflowResponse
+}
+
+export type DagMutationCreateResponse = DagMutationCreateResponses[keyof DagMutationCreateResponses]
 
 export type ExperimentalConsoleGetData = {
   body?: never

@@ -24,6 +24,7 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DagCreateWorkflowBody,
   DagGetNodeLogsErrors,
   DagGetNodeLogsResponses,
   DagGetStatsErrors,
@@ -38,10 +39,17 @@ import type {
   DagGetWorkflowResponses,
   DagListWorkflowsErrors,
   DagListWorkflowsResponses,
+  DagMutationCancelErrors,
+  DagMutationCancelResponses,
+  DagMutationCreateErrors,
+  DagMutationCreateResponses,
   DagMutationPauseErrors,
   DagMutationPauseResponses,
+  DagMutationReplanErrors,
+  DagMutationReplanResponses,
   DagMutationResumeErrors,
   DagMutationResumeResponses,
+  DagReplanPatchBody,
   EventSubscribeResponses,
   EventTuiCommandExecute2,
   EventTuiPromptAppend2,
@@ -971,70 +979,6 @@ export class Dag extends HeyApiClient {
       ...params,
     })
   }
-
-  /**
-   * Pause a running DAG workflow
-   *
-   * Pauses the DAG workflow. In-flight nodes continue; new nodes are not spawned until resumed.
-   */
-  public pause<ThrowOnError extends boolean = false>(
-    parameters: {
-      workflowId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "workflowId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<DagMutationPauseResponses, DagMutationPauseErrors, ThrowOnError>({
-      url: "/dag/workflows/{workflowId}/pause",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Resume a paused DAG workflow
-   *
-   * Resumes the DAG workflow from paused state, triggering scheduleReadyNodes for pending nodes.
-   */
-  public resume<ThrowOnError extends boolean = false>(
-    parameters: {
-      workflowId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "workflowId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<DagMutationResumeResponses, DagMutationResumeErrors, ThrowOnError>({
-      url: "/dag/workflows/{workflowId}/resume",
-      ...options,
-      ...params,
-    })
-  }
 }
 
 export class DagMutation extends HeyApiClient {
@@ -1099,6 +1043,114 @@ export class DagMutation extends HeyApiClient {
       url: "/dag/workflows/{workflowId}/resume",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Cancel a DAG workflow
+   *
+   * Cancels the DAG workflow. When no in-memory engine exists, the status is downgraded via sessionService.updateWorkflowStatus(cancelled); an already-terminal workflow returns its current status idempotently (no 500).
+   */
+  public cancel<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationCancelResponses, DagMutationCancelErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Replan a running DAG workflow
+   *
+   * Mutates a running DAG workflow's node set. When no in-memory engine exists, returns {ok:false, reason:'not_running'} without touching persistence.
+   */
+  public replan<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+      dagReplanPatchBody?: DagReplanPatchBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "dagReplanPatchBody", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationReplanResponses, DagMutationReplanErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/replan",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Create a DAG workflow
+   *
+   * Creates a DAG workflow and persists its nodes. Status stays pending — no engine is made, no daemon is forked. Config-limit violations are translated to a 400 DagValidationError.
+   */
+  public create<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      dagCreateWorkflowBody?: DagCreateWorkflowBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "dagCreateWorkflowBody", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationCreateResponses, DagMutationCreateErrors, ThrowOnError>({
+      url: "/dag/workflows/create",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 }
