@@ -276,15 +276,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/types.ts`（DAGNodeCondition interface + DAG_CONDITION_OPS const + DAGNodeConfig.condition optional 字段，INFO 4 JSDoc 注明区别）+ `packages/opencode/src/dag/session/limits.ts`（validateNodeCondition helper）+ `packages/opencode/src/dag/session/session-service.ts`（createWorkflow 校验循环）+ `packages/opencode/src/dag/session/workflow-engine.ts`（validateReplanPostConfig 校验链扩展）+ `packages/opencode/src/dag/API.md`（§8 DAG 配置类型）+ `packages/opencode/src/dag/USER_GUIDE.md`（DAGNodeCondition 小节）+ `packages/opencode/src/dag/session/__tests__/node-condition-schema.test.ts`（18 tests，INFO 3 命名避开 scenario-25）。
 
-#### WP-B2 — 条件求值挂到就绪判定
+#### WP-B2 — 条件求值挂到就绪判定 ✅ 已完成
 
-- **前置/输入契约**：WP-B1 完成。输入 = 一个依赖已满足的节点 + 其依赖节点的状态/output。
-- **输出契约**：在依赖满足判定之后，对声明了 condition 的节点求值条件，输出"应执行 / 应跳过"的决策。求值是**纯函数**（无副作用、无 DB 写、无状态变更）。
-- **验收标准**：条件为真 → 节点照常进入就绪；条件为假 → 节点标记为"待跳过"（实际 skip 由 WP-B3 执行）；无 condition 的节点行为不变。
-- **边界条件**：(a) 条件引用的上游 output 为空/缺失 → 求值需有确定语义（不得抛异常中断调度，应有默认决策并可审计）；(b) 求值不得阻塞调度（同步纯函数）；(c) 多个条件节点并存时求值相互独立。
-- **测试覆盖要求**：求值纯函数单元测试（真/假/上游 output 缺失/多节点独立）；就绪判定集成测试（条件真→ready，条件假→待跳过，无 condition→不变）。
-- **archgate 关注点**：求值是否真纯函数（无副作用）；挂点是否在依赖满足之后（不破坏依赖语义）；上游 output 缺失的确定性语义。
-- **DoD**：通用 DoD + 条件求值纯函数 + 就绪判定正确分流 + 缺失 output 有确定语义。
+独立纯函数模块 `condition-eval.ts`（仅 `import type` from `./types`，零 Effect/DB/Logger 依赖）：3 函数 + 1 接口。`evaluateCondition(condition, outputValue): boolean` 穷举 switch 覆盖 8 ops（`DAGConditionOp` 联合类型 TS 编译期强制完整白名单）；`buildOutputMap(allNodes): Map<nodeId, output>` 仅 completed 节点聚合 output；`splitByCondition(readyNodes, outputMap): ConditionEvalResult {executeList, skipCandidates}` 同步纯函数分流。8 ops null/missing 语义完整文档化（JSDoc 顶部表格）：`exists`/`not_exists` 明确针对 null 设计；`eq`/`ne` 用 null 严格比较；`gt`/`lt`/`gte`/`lte` null 视为缺失返回 false（auditable default，不抛异常）。挂点在 `scheduleReadyNodes` 内（line 914-915）：`getReadyNodes` 返回后、spawn 循环前调用 `splitByCondition`；spawn 循环（line 927/930）改为 iterate `executeList`。无 condition 节点（`cond == null`）保持 executeList（向后兼容）。`void skipCandidates` 显式标记前向占位（WP-B3 消费）。多节点求值相互独立（for-of loop 每节点独立 evaluateCondition）。`getWorkflowStatus` (line 1059-1109) 路径完全未触碰（INFO 2 honored）。56 tests 覆盖 8 ops × 真/假/null/缺失 + splitByCondition 三态路由 + buildOutputMap 纯投影 + 纯度验证。验收：56 条件求值 + 18 schema 回归 + 308 DAG session + 53 DAG core + typecheck 0 errors。purity grep 0 forbidden（3 matches 在 JSDoc，非代码引用）。INFO 1/2/3 均处理。
+
+地基承载：`packages/opencode/src/dag/session/condition-eval.ts`（144 行，evaluateCondition + splitByCondition + buildOutputMap + ConditionEvalResult interface + 8 ops null 语义 JSDoc 表）+ `packages/opencode/src/dag/session/workflow-engine.ts`（scheduleReadyNodes 内 condition split + spawn 循环 iterate executeList）+ `packages/opencode/src/dag/session/__tests__/node-condition-eval.test.ts`（56 tests）。
 
 #### WP-B3 — 条件不满足主动 skip + 下游级联
 

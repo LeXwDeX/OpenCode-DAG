@@ -11,6 +11,7 @@ import type {
   UpdateNodeStatusInput,
 } from "./session-service"
 import { validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { buildOutputMap, splitByCondition } from "./condition-eval"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -907,6 +908,13 @@ const make = Effect.gen(function* () {
       )
       const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
 
+      // WP-B2: Condition evaluation split — pure function, no side effects.
+      // Nodes whose conditions are false go to skipCandidates (deferred to WP-B3).
+      // Nodes without conditions (undefined/null) remain in executeList (backward compatible).
+      const outputMap = buildOutputMap(allNodes)
+      const { executeList, skipCandidates } = splitByCondition(readyNodes, outputMap)
+      void skipCandidates // WP-B3 will consume this for actual skip + cascade
+
       // T3: Enforce concurrency cap — account for in-flight spawned nodes (spawned but not yet settled)
       const inFlightCount = [...spawnedNodes]
         .filter(id => id.startsWith(`${workflowId}::`))
@@ -916,10 +924,10 @@ const make = Effect.gen(function* () {
       const budget = maxConcurrency - runningNodeIds.size - inFlightCount
       if (budget <= 0) return { scheduled: 0 }
 
-      const limit = Math.min(readyNodes.length, budget)
+      const limit = Math.min(executeList.length, budget)
       let scheduled = 0
       for (let i = 0; i < limit; i++) {
-        const node = readyNodes[i]
+        const node = executeList[i]
         if (!spawnedNodes.has(node.node_id)) {
           spawnedNodes.add(node.node_id)
           yield* spawnReadyNode(workflowId, node).pipe(Effect.forkDetach)
