@@ -10,6 +10,7 @@ import { EventBus } from "./state-machine/EventBus"
 import type { IWorktreeManager } from "./worktree-manager/IWorktreeManager"
 import { WorktreeManager } from "./worktree-manager/WorktreeManager"
 import { SessionPrompt } from "@/session/prompt"
+import type { PromptOps } from "@/session/prompt-ops"
 
 // ── Service Tags ──
 
@@ -60,11 +61,21 @@ const dagQueryLayer = Layer.effect(
     const sessionService = yield* DAGSessionService.make
     // WP-A1: acquire headless promptOps capability for recovery continuation.
     // The reference is held but NOT invoked (WP-A1 boundary: no eager prompt).
-    // WP-A2 will thread this into the resumed WorkflowEngine constructor.
+    // WP-A2: adapt SessionPrompt.Interface → PromptOps by picking the 4 required
+    // methods. The `prompt` method's error channel (Image.Error) is widened via
+    // structural cast — the consumer (spawnReadyNode) catches all errors via
+    // Effect.catchCause anyway, so the narrower error type is safe.
     const _promptSvc = yield* SessionPrompt.Service
-    // B3 crash recovery: scan for orphaned running workflows (no in-memory engine)
-    // and mark them failed with audit violations before the query layer becomes available.
-    yield* recoverOrphanedWorkflows(sessionService).pipe(
+    const recoveryPromptOps: PromptOps = {
+      cancel: _promptSvc.cancel,
+      resolvePromptParts: _promptSvc.resolvePromptParts,
+      prompt: _promptSvc.prompt as PromptOps["prompt"],
+      loop: _promptSvc.loop,
+    }
+    // B3 / WP-A2 crash recovery: scan for orphaned running workflows (no in-memory engine).
+    // With promptOps (WP-A2): attempts engine rebuild + daemon restart for each orphan.
+    // Without promptOps (legacy): marks orphans failed with audit violations.
+    yield* recoverOrphanedWorkflows(sessionService, recoveryPromptOps).pipe(
       Effect.tapError(err => Effect.logWarning(`[DAG recovery] top-level failure (non-fatal): ${err}`)),
       Effect.ignore,
     )

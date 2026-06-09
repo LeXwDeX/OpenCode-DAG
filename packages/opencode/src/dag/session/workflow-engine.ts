@@ -400,6 +400,15 @@ export function unregisterEngine(workflowId: string): void {
   }
 }
 
+/**
+ * Sets the concurrency cap for a workflow in the module-level registry.
+ * Used by recovery assembly (WP-A2) to restore the cap without calling
+ * startWorkflow (which would attempt an illegal running→running transition).
+ */
+export function setWorkflowConcurrency(workflowId: string, maxConcurrency: number): void {
+  concurrencyRegistry.set(workflowId, maxConcurrency)
+}
+
 /** @internal test-only — exposes module-private spawnedNodes set for unit testing */
 export const __internal_spawnedNodes = (): Set<string> => spawnedNodes
 /** @internal test-only — exposes module-private replanInFlight set for unit testing */

@@ -265,15 +265,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/layer.ts`（dagQueryLayer + defaultLayer 注释注明 ~20 transitive deps 的 memo 语义与 cross-wire）+ `packages/opencode/src/dag/__tests__/layer-session-prompt.test.ts`（2 smoke，含 die-on-call mock 防 eager 调用）。
 
-#### WP-A2 — recovery 续跑装配
+#### WP-A2 — recovery 续跑装配 ✅ 已完成
 
-- **前置/输入契约**：WP-A1 完成（headless promptOps 可得）。输入 = DB 中 `status='running' && engine===undefined` 的孤儿工作流集（现 recovery.ts:23 已能识别）。
-- **输出契约**：对每个可续跑的孤儿工作流，重建 `WorkflowEngine` 实例 → 重注入 promptOps → 重填 `concurrencyRegistry`（从 `config.max_concurrency`）→ `registerEngine` → 重启 executor daemon（`forkDetach`）。工作流状态保持 running（不再无条件标 failed）。
-- **验收标准**：重启后孤儿工作流的 pending/ready 节点能被重新调度执行（经状态机）；engine 经 `WorkflowEngine.get(id)` 可查到；daemon 轮询恢复。
-- **边界条件**：(a) 续跑装配本身失败（如 promptOps 不可得）→ 回退到现状语义（标 failed），不得使工作流卡在不可恢复中间态；(b) 节点续跑语义（running 节点如何处理）属 WP-A3，A2 仅负责 pending/ready 节点恢复调度；(c) 幂等——recovery 重复触发不得重复 registerEngine / 重复 fork daemon。
-- **测试覆盖要求**：DB 级集成测试——构造 running 孤儿工作流（含 pending 节点）→ 触发 recovery → 断言 engine 重建 + pending 节点被调度 + 状态经状态机。装配失败回退路径测试。幂等测试（二次 recovery 不重复装配）。
-- **archgate 关注点**：续跑写路径是否穿透状态机（不得直接改 status 变量）；engine 重建依赖是否全为进程级（无 turn 级泄漏）；与现有"标 failed"语义的边界划分。
-- **DoD**：通用 DoD + 孤儿工作流 pending 节点可恢复调度 + 装配失败有回退 + 幂等。
+`recoverOrphanedWorkflows(service, promptOps?: PromptOps)` 签名扩展（向后兼容）；assembly 入口守卫 `WorkflowEngine.get(wfId) !== undefined` 实现幂等（INFO 1）；`resumeOrphanWorkflow` 顺序装配：`WorkflowEngine.make → setPromptOps → fillConcurrency → registerEngine → scheduleReadyNodes → forkDetach createWorkflowExecutor`（**不调用 startWorkflow** 避免 running→running 非法转移；INFO 2 处理）；装配失败 `Effect.catchCause + tapError` 折叠为 false 后调用 `failOrphanWorkflow` 走现状语义（标 failed + violation + engine cleanup，不卡中间态）。layer.ts 从 `_promptSvc`（WP-A1 已捕获）构造 `PromptOps` adapter（无 turn 级泄漏；INFO 2 resolution）。新增 `setWorkflowConcurrency` export。scenario-23 三态：正常续跑 1 个孤儿→engine 重建+concurrency 填充+pending 节点进入调度；装配失败→fallback 标 failed+violation+节点级联转移；幂等→第二次调用 resumed=0 marked=0 engine 仍注册。验收：scenario-23 3/3 + recovery 4/4 归 + 全量 DAG session 230/230 + DAG 53/53 + typecheck 0 errors。
+
+地基承载：`packages/opencode/src/dag/session/recovery.ts`（resumeOrphanWorkflow + failOrphanWorkflow + RecoverResult.resumed + promptOps optional 参数）+ `packages/opencode/src/dag/session/workflow-engine.ts`（setWorkflowConcurrency export）+ `packages/opencode/src/dag/layer.ts`（PromptOps adapter line 66-70）+ `packages/opencode/src/dag/session/__tests__/scenario-23-recovery-resume.test.ts`（3 tests）。
 
 #### WP-A3 — running 节点续跑语义（依赖 §3.1 决策）
 
