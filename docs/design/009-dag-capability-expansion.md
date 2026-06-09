@@ -77,25 +77,15 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 ---
 
-### 特性 B — 条件分支（工作量：中）
+### 特性 B — 条件分支 ✅ 特性整体已完成（commit `629a62264`）
 
-**目标**：节点可声明执行条件，条件不满足时主动跳过（区别于"上游失败级联跳过"）。
+节点可声明执行条件，条件不满足时主动跳过（区别于"上游失败级联跳过"）。WP-B1（DAGNodeConfig.condition 字段 structured object + 8 ops 白名单 + schema 校验 required↔condition 互斥 + ref⊆dependencies + canonical 文档 API.md + USER_GUIDE.md 同步，INFO I4 FallbackConfig.condition 语义差异表）+ WP-B2（独立纯函数模块 condition-eval.ts 仅 import type，scheduleReadyNodes 路径分流，8 ops null 语义完整文档化，INFO I1/I2/I3 全处理）+ WP-B3（cascadeSkipDownstream 参数泛化 triggerNodeId + triggerType，scheduleReadyNodes 消费 skipCandidates 状态机 skip + violation + log + cascade，审计双轨 condition_skip vs cascade_skip，INFO I1-I4 全处理；maybeFinalizeWorkflow 幂等守卫保证终态收敛）。
 
-**核心约束**：
-- 条件求值是**纯函数**（输入：依赖节点状态/output；输出：bool），不得有副作用
-- 条件不满足 → 走状态机 skip 转移（复用 `NodeStateMachine.skipNode` 语义），不得直接改状态变量
-- 条件语义必须可序列化（存 config，replan 可改），不得是闭包/代码注入
-- required 节点的条件跳过需明确语义（required + 条件不满足 是否违反"required 不可跳过"铁律 → **见 §3.2 决策**）
+**已锁定决策**：§3.2 required 节点禁止声明 condition（schema 层拒绝，铁律 #1 优先）。条件节点默认 non-required，required 节点无条件执行。
 
-**WP 拆解**：
+**四铁律守恒**：铁律 #1 转移表扩展在 getValidNextSessionNodeStatuses 内 + 所有 skip 经 sessionService.updateNodeStatus；铁律 #2 skipped 是终态不可回退；铁律 #3 pending→skipped 合法转移在转移表；铁律 #4 required 由 WP-B1 schema 拦截。scenario-25 DB 级集成测试 6 cases 覆盖单节点 skip + 下游级联 + 多依赖不误跳 + 终态收敛 + 共享下游重叠 + 条件 vs 失败对比；全量 DAG 回归 314/314 + DAG core 53/53 + typecheck 0 errors。
 
-| WP | 内容 | 工作量 | 关键约束 |
-|---|---|---|---|
-| B1 | `DAGNodeConfig.condition` 字段 + schema 校验 + canonical 文档更新 | 小 | 声明式条件语法，禁代码注入 |
-| B2 | 条件求值挂到就绪判定（依赖满足后求值，决定 ready vs skip） | 中 | 求值纯函数，挂点在 `getReadyNodes` 后 |
-| B3 | 条件不满足 → 主动 skip + 下游级联（扩展 `cascadeSkipDownstream` 触发源） | 中 | 复用 skip 状态转移；下游语义与失败级联一致 |
-
-**依赖**：B1 → B2 → B3。独立于 A。
+**INFO 已知限制（pre-existing latent defects 不在 WP-B3 scope）**：getReadyNodes 不过滤 skipped 节点；updateNodeStatus throw 在 Effect.sync 内变 defect——被 skippedNodeIds 集合 + inFlight filter + 状态机拒绝 skipped→running 三层防护屏障覆盖，不影响功能正确性。
 
 ---
 
