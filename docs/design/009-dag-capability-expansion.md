@@ -147,14 +147,16 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 **决策**：方案 1——schema 校验在 createWorkflow / validateWorkflowConfigLimits（`limits.ts`）阶段拒绝 `required && condition` 同时存在的节点配置；非法配置直接返回 clear error 不进入 DB。用户写错了会得清晰错误消息（reason = "required node cannot declare condition" 或等价）。条件节点默认 non-required，required 节点默认无条件执行。
 
-### 3.3 [特性 D] sub-DAG 递归深度上限 + 父子桥机制 — **待决策**
+### 3.3 [特性 D] sub-DAG 递归深度上限 + 父子桥机制 — **已决策：事件桥 + 深度 ≤ 3**（用户 2026-06-08 确认）
 
-- **递归深度上限**：防无限嵌套。建议硬上限（如深度 ≤ 3），超限 schema 拒绝。
-- **父子桥机制**：
-  - **轮询**：父节点 fiber 启动子工作流后轮询子 `getWorkflowStatus` 至终态（侵入小，占 fiber）
-  - **事件桥**：`maybeFinalizeWorkflow` 收敛时发事件，父节点订阅（解耦，需新事件类型 + 订阅注册）
+- **递归深度上限（已选）**：**深度 ≤ 3**（允许父→子→孙三层嵌套，超过 3 层 schema 拒绝）。平衡表达力与复杂度——超过 3 层基本是设计错误；深度 2 表达力受限，深度 5 复杂度显著上升难以调试。schema 校验阶段强制（在 createWorkflow / replan / validateWorkflowConfigLimits 入口）。
+- **父子桥机制（已选）**：**事件桥**——子工作流 `maybeFinalizeWorkflow` 收敛时发事件（需新事件类型如 `workflow.completed`/`workflow.failed`/`workflow.cancelled`），父节点订阅。父节点订阅事件 + 状态机转移 + 取消级联（父取消时级联取消子工作流）。
 
-**决策建议**：事件桥（与现有 EventBus 架构一致，不占 fiber）。最终决策在 WP-D3 启动前确认。
+**决策理由**：
+- 事件桥与现有 EventBus 架构一致（`IEventBus` / `SharedEventBusTag` 已就绪）
+- 不占 fiber（父节点 fiber 启动子工作流后即可释放 fiber，由事件驱动状态转移）
+- 解耦父子工作流生命周期（vs 轮询占 fiber + tight coupling）
+- 取消级联通过订阅 `workflow.cancelled` 事件实现（子工作流监听父状态事件）
 
 ---
 
@@ -292,15 +294,11 @@ archgate（架构校验，触治理面强制）
 
 ### 特性 D — sub-DAG
 
-#### WP-D1 — startWorkflowFromConfig 去 Tool.Context 化
+#### WP-D1 — startWorkflowFromConfig 去 Tool.Context 化 ✅ 已完成
 
-- **前置/输入契约**：无前置 WP。现状 `startWorkflowFromConfig`（dagworker.ts:182）强绑 `Tool.Context`（用 ctx.sessionID / ctx.extra.promptOps / ctx.abort）。
-- **输出契约**：提取一个**不依赖 Tool.Context** 的核心启动函数，参数化 `promptOps / chatSessionId / abortSignal`（或等价中止机制）。工具路径（dagworker）与递归路径（sub-DAG spawn）共用此核心函数——**单一来源**，消除重复。
-- **验收标准**：dagworker 工具路径经重构后行为不变（现有 dagworker 测试全绿）；核心函数可在非工具上下文（仅持有 promptOps/sessionId/abort）被调用启动工作流。
-- **边界条件**：(a) 中止机制——原 `ctx.abort.addEventListener` 需被参数化的 abortSignal 等价替代，保证取消语义不丢；(b) 工具路径回归——所有 ctx 依赖点平移到参数，无遗漏；(c) 单一来源——不得留下两份启动逻辑。
-- **测试覆盖要求**：现有 dagworker 启动测试不回归；核心函数单元测试（仅传 promptOps/sessionId/abort 即可启动）；中止语义测试（abortSignal 触发取消）。
-- **archgate 关注点**：单一来源（无重复启动逻辑）；中止语义等价保持；参数化是否泄漏 Tool.Context 依赖。
-- **DoD**：通用 DoD + 工具路径行为不变 + 核心函数可 headless 启动 + 中止等价 + 单一来源。
+独立 headless core 函数模块 `core-start.ts`（172 行，仅 import 自 dag/session/* 同域模块，0 Tool.Context / 0 Core path / 0 DB schema 变更）。`bootstrapWorkflowFromConfig({dagConfig, dagSessionService, agentRegistry, chatSessionId, promptOps, abortSignal, parentWorkflowId?, parentNodeId?}): BootstrapWorkflowResult`——参数化形式 + object literal（与 codebase 既有风格一致；命名避开 WorkflowEngine.startWorkflow 接口方法，INFO-4 honored）。7 步启动序列完整封装：Step1 RequiredNodesValidator（console.warn 合规 INFO-5）+ Step2 validateWorkerTypes（迁入 core，INFO-1 honored）+ Step3 dagSessionService.createWorkflow + Step4 dagSessionService.createNode *N（namespace `${workflowId}::${nodeId}`）+ Step5 WorkflowEngine.make + setPromptOps + Step6 registerEngine + WorkflowEngine.startWorkflow（status→running）+ Step7a forkDetach createWorkflowExecutor + Step7b abortSignal.addEventListener onAbort。`tool/dagworker.ts` 重构为 22 行 thin adapter（ctx 解构 → promptOps 提取 + guard → bootstrapWorkflowFromConfig 调用 → 透传返回），单一来源 grep 验证 0 matches（createWorkflow/createNode/RequiredNodesValidator/registerEngine/setPromptOps/forkDetach/addEventListener.abort）。validateWorkerTypes + WorkerTypeAgentRegistry 从 dagworker.ts 迁出但 re-export 保持向后兼容（dagworker.test.ts 3 tests 不回归）。abortSignal.addEventListener 注册时序 L178 forkDetach < L185 addEventListener 明确保持，确保 daemon 已启动 cancelWorkflow 调用时可达。4 unit tests（core-start.test.ts：headless happy path + DB 验证 + abort wired + validateWorkerTypes 正/负 + validator pass-through）。archgate 5 项约束全 honored：单一来源（grep 0）/ core 函数签名无 Tool.Context 泄漏（grep 0 Tool import）/ abort 时序正确 / 工具路径向后兼容（签名形态保留 + 返回类型保留 + re-export 兼容）/ 状态变更全经 dagSessionService + WorkflowEngine API（不绕过状态机，铁律 #4）。INFO 1-5 全处理。review INFO 3 项（P4 恒真断言 validator pass-through / P5 pre-existing EffectBridge import / P5 inline type import 风格）不阻塞。验收：core-start 4/4 + dagworker 3/3 + DAG session 373/373 + DAG core 53/53 + typecheck 0 errors。
+
+地基承载：`packages/opencode/src/dag/session/core-start.ts`（172 行，bootstrapWorkflowFromConfig + validateWorkerTypes + WorkerTypeAgentRegistry + BootstrapWorkflowResult type + 7 步 sequence JSDoc + INFO-1/2/3/4/5 处理说明 + 调用方文档）+ `packages/opencode/src/tool/dagworker.ts`（startWorkflowFromConfig 重构为 thin adapter 22 行；re-export validateWorkerTypes + WorkerTypeAgentRegistry；清理孤儿 import）+ `packages/opencode/src/dag/session/__tests__/core-start.test.ts`（4 tests）。
 
 #### WP-D2 — worker_type="dag" 分发
 

@@ -20,15 +20,20 @@ import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
-import { WorkflowEngine, registerEngine } from "../dag/session/workflow-engine"
+import { WorkflowEngine } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import type { WorkflowExecutor } from "../dag/session/workflow-executor"
 import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
 import type { IDAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGNodeConfig, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
-import { RequiredNodesValidator } from "../dag/session/required-nodes-validator"
-import type { PromptOps } from "@/session/prompt-ops"
+import type { DAGConfig, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
+import {
+  bootstrapWorkflowFromConfig,
+  type WorkerTypeAgentRegistry,
+} from "../dag/session/core-start"
+// Re-export for backward compatibility: existing consumers (dagworker.test.ts
+// and any future code) continue to import these from "./dagworker".
+export { validateWorkerTypes, type WorkerTypeAgentRegistry } from "../dag/session/core-start"
 import {
   DAG_TEMPLATE_IDS,
   listDAGTemplates,
@@ -143,41 +148,22 @@ function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, 
   return lines.join("\n")
 }
 
-export type WorkerTypeAgentRegistry = {
-  readonly get: (agent: string) => Effect.Effect<Agent.Info | undefined, unknown>
-  readonly list: () => Effect.Effect<Agent.Info[], unknown>
-}
-
-export const validateWorkerTypes = (
-  agentService: WorkerTypeAgentRegistry,
-  nodes: DAGNodeConfig[],
-) =>
-  Effect.gen(function* () {
-    const unique = [...new Set(nodes.map((n) => n.worker_type))]
-    const missing: string[] = []
-    for (const workerType of unique) {
-      const found = yield* agentService.get(workerType).pipe(
-        Effect.catchCause(() => Effect.succeed(undefined)),
-      )
-      if (!found) missing.push(workerType)
-    }
-    if (missing.length === 0) return
-    const registered = yield* agentService.list().pipe(
-      Effect.catchCause(() => Effect.succeed([] as Agent.Info[])),
-    )
-    const names = registered.map((a) => a.name).sort()
-    return yield* Effect.fail(
-      new Error(
-        `Unknown DAG worker_type: ${missing.join(", ")}. Currently registered agents: ${names.length ? names.join(", ") : "<none>"}. Configure custom agents in opencode.json agent.* or change worker_type before starting DAG.`,
-      ),
-    )
-  })
-
 /**
- * Shared start workflow body used by both the `start` and `template_start`
- * actions. Performs validation, materialises nodes with namespaced IDs,
- * registers a WorkflowEngine, forks the executor daemon and wires the
- * abort listener. Returns the new workflow id and node count.
+ * Thin adapter (tool path) for `bootstrapWorkflowFromConfig` (WP-D1 core).
+ *
+ * Destructures Tool.Context → extracts chatSessionId / promptOps / abortSignal,
+ * then delegates to the headless core function. Returns the new workflow id
+ * and node count.
+ *
+ * All substantive startup logic (validation, DB rows, engine assembly, daemon,
+ * abort listener) lives in core-start.ts (single source — architecture
+ * constraint 1). This adapter preserves the original startWorkflowFromConfig
+ * external signature for backward compatibility with existing callers
+ * (cases "start" and "template_start" in the DAGWorkerTool switch).
+ *
+ * **promptOps extraction** is adapter-only logic here (not in core) because
+ * `ctx.extra?.promptOps` is the turn-binding point the core function abstracts
+ * over. If absent, fails with the same error as before (backward compat).
  */
 export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromConfig")(function* (args: {
   workflowConfig: DAGConfig
@@ -187,63 +173,21 @@ export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromCon
 }) {
   const { workflowConfig, ctx, dagSessionService, agentService } = args
 
-  const validator = new RequiredNodesValidator()
-  const validationResult = validator.validate(workflowConfig)
-
-  if (!validationResult.valid) {
-    const errorsText = validationResult.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")
-    return yield* Effect.fail(new Error(`Invalid workflow configuration:\n${errorsText}`))
-  }
-
-  if (validationResult.warnings.length > 0) {
-    const warningsText = validationResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
-    console.warn(`Workflow configuration warnings:\n${warningsText}`)
-  }
-
-  yield* validateWorkerTypes(agentService, workflowConfig.nodes)
-
-  const workflow = yield* dagSessionService.createWorkflow({
-    chatSessionId: ctx.sessionID,
-    name: workflowConfig.name,
-    config: workflowConfig,
-  })
-
-  for (const cfg of workflowConfig.nodes) {
-    yield* dagSessionService.createNode({
-      workflowId: workflow.id,
-      nodeId: `${workflow.id}::${cfg.id}`,
-      name: cfg.name,
-      nodeName: cfg.name,
-      nodeType: cfg.worker_type,
-      config: cfg,
-      dependencyNodes: (cfg.dependencies ?? []).map((d: string) => `${workflow.id}::${d}`),
-      timeoutMs: cfg.timeout_ms,
-      retryCount: 0,
-      maxRetries: cfg.retry?.max_attempts ?? 0,
-    })
-  }
-
-  const promptOps = ctx.extra?.promptOps as PromptOps | undefined
+  const promptOps = ctx.extra?.promptOps as import("@/session/prompt-ops").PromptOps | undefined
   if (!promptOps) {
     return yield* Effect.fail(
       new Error("dagworker requires promptOps in ctx.extra — must be called inside a session prompt turn"),
     )
   }
 
-  const workflowEngine = yield* WorkflowEngine.make
-  workflowEngine.setPromptOps(promptOps)
-  const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, workflowConfig)
-
-  registerEngine(workflow.id, workflowEngine)
-  yield* workflowEngine.startWorkflow(workflow.id, workflowConfig)
-  yield* executor.start(workflow.id).pipe(Effect.forkDetach)
-
-  const onAbort = () => {
-    Effect.runPromise(workflowEngine.cancelWorkflow(workflow.id).pipe(Effect.ignore))
-  }
-  ctx.abort.addEventListener("abort", onAbort, { once: true })
-
-  return { workflowId: workflow.id, nodeCount: workflowConfig.nodes.length }
+  return yield* bootstrapWorkflowFromConfig({
+    dagConfig: workflowConfig,
+    chatSessionId: ctx.sessionID,
+    promptOps,
+    abortSignal: ctx.abort,
+    dagSessionService,
+    agentService,
+  })
 })
 
 export const DAGWorkerTool = Tool.define(
