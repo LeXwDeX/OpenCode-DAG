@@ -398,6 +398,7 @@ export interface DAGNodeMetrics {
  * - max_nodes_exceeded / max_concurrency_exceeded / timeout_exceeded: capacity / time limits
  * - execution_failed: runtime failures during node spawn or execution
  * - subdag_depth_exceeded: WP-D2 — sub-DAG nesting exceeds MAX_SUB_DAG_DEPTH (3)
+ * - subdag_timeout: WP-D3 — sub-DAG node never converged within timeout (§7 WP-D3)
  */
 export const DAG_VIOLATION_TYPES = [
   "required_node_skipped",
@@ -409,6 +410,8 @@ export const DAG_VIOLATION_TYPES = [
   "process_orphan",
   "condition_skipped",
   "subdag_depth_exceeded",
+  /** WP-D3: sub-DAG lifecycle bridge timeout fallback (§3.3 + §7 WP-D3). */
+  "subdag_timeout",
 ] as const
 
 export type DAGViolationType = (typeof DAG_VIOLATION_TYPES)[number]

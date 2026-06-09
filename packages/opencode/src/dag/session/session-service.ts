@@ -44,6 +44,17 @@ export function setEventBus(bus: IEventBus | undefined): void {
 }
 
 /**
+ * Retrieve the currently-injected IEventBus (WP-D3: event-bridge subscription).
+ * Returns `undefined` when no EventBus has been set via `setEventBus()`.
+ *
+ * Consumers: WP-D3 sub-DAG lifecycle bridge (workflow-engine.ts) needs to
+ * subscribe to workflow terminal events to drive the parent-node completion path.
+ */
+export function getEventBus(): IEventBus | undefined {
+  return _eventBus
+}
+
+/**
  * Session-layer valid next workflow statuses (Iron Law #1/#2).
  * Terminal states: completed, failed, cancelled — no outgoing transitions.
  */

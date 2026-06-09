@@ -29,6 +29,22 @@ import { DAG_CONDITION_OPS } from "./types"
 export const MAX_SUB_DAG_DEPTH = 3
 
 /**
+ * Default timeout for a sub-DAG lifecycle bridge (WP-D3, §7 WP-D3).
+ *
+ * If a sub-DAG node (worker_type="dag") does not produce a terminal workflow event
+ * (`workflow.completed` / `workflow.failed` / `workflow.cancelled`) within this
+ * duration, the parent bridge fires a timeout violation ("subdag_timeout") and
+ * marks the parent node failed.
+ *
+ * Default: 30 minutes (1_800_000 ms). Callers can override by reading
+ * `subDagConfig.timeout_ms` first, falling back to this constant.
+ *
+ * Single source of truth for the bridge timeout. spawnReadyNode dispatch
+ * (workflow-engine.ts) sources its timeout from here.
+ */
+export const DEFAULT_SUB_DAG_TIMEOUT_MS = 1_800_000
+
+/**
  * Single source of truth for the workflow config caps:
  *   - node count ≤ 20
  *   - max_concurrency ∈ [1, 10]

@@ -99,28 +99,11 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 ---
 
-### 特性 D — sub-DAG（工作量：中偏大）
+### 特性 D — sub-DAG ✅ 特性整体已完成（commit `87a4d5d56`）
 
-**目标**：节点可声明 `worker_type="dag"` + 子 DAGConfig，spawn 时递归启动子工作流，父节点完成当且仅当子工作流终态收敛。
+节点可声明 `worker_type="dag"` + 子 DAGConfig，spawn 时递归启动子工作流，父节点完成当且仅当子工作流终态收敛。WP-D1（`bootstrapWorkflowFromConfig` headless core 函数模块 core-start.ts 172 行，0 Tool.Context / 0 Core path / 0 DB schema 变更；参数化 dagConfig/dagSessionService/agentRegistry/chatSessionId/promptOps/abortSignal/parentWorkflowId?/parentNodeIdId?/depth?；7 步启动序列完整封装；tool/dagworker.ts 重构为 22 行 thin adapter；单一来源 grep 验证 0 matches）+ WP-D2（`worker_type="dag"` 保留字运行时校验 + `validateWorkerTypes` 三重校验 + spawnReadyNode L530-629 dispatch 段 agent resolve 之前短路 + bootstrapWorkflowFromConfig 签名扩展 parentWorkflowId?/parentNodeId?/depth? 三可选参数 + `MAX_SUB_DAG_DEPTH = 3` 深度 schema 强制（dispatch + Step 0 双重守卫）+ depth DB 持久化路径（core-start.ts Step 3 createWorkflow 调用 `metadata: { depth }`）+ `SubDagWorkerConfig` interface + `DAG_VIOLATION_TYPES` 扩展 "subdag_depth_exceeded" + i18n 双语 label）+ WP-D3（父子生命周期桥事件桥机制：子工作流终态（completed/failed/cancelled）→ 父节点完成（复用 `handleNodeCompletion`/`handleNodeFailure`，不另建路径）；父节点取消 → 子工作流级联取消（DB-driven 经 node.metadata.chat_session_id + listWorkflowsByChatSession + 递归 cancelWorkflow）；子工作流永不收敛 → 超时兜底（`DEFAULT_SUB_DAG_TIMEOUT_MS = 1_800_000` 30 min 单一来源 + violation "subdag_timeout" + 取消子工作流 + fail 节点）；fiber 不泄漏（4 退订路径 completed/failed/cancelled/timeout + 3 防御路径 handleNodeCompletion 顶部/handleNodeFailure 顶部/cancelWorkflow 级联 + settle() 闭包幂等守卫防竞态）；`installSubdagLifecycleBridge` 新 export + `cleanupSubscriptions` helper + `getEventBus` session-service 新 export + i18n 双语 label）。§3.3 决策已锁定（事件桥 + 深度 ≤ 3）。所有 4 种退订路径 + 3 种防御路径经 settle() 幂等守卫彻底消除 event-vs-timeout 竞态。复用 `IEventBus`（AGENTS.md §0.2）+ 状态变更全经 sessionService.updateNodeStatus（铁律 #1）+ 事件按 `workflow_id` 过滤（ARCHITECTURE.md §8.a）+ 不实例化 Core 类（ARCHITECTURE.md §11）。archgate 8 项约束全 honored（§0.2 / 四铁律 / §8.a / §11 / §3.3 事件桥 / §7 WP-D3 四要素）。scenario-27 5 DB 集成测试覆盖 4 路径（completed / failed / cancelled / timeout）+ 4 路径联合无泄漏 Test E；scenario-27a 5 DB 集成测试覆盖 spawn（含 Test E metadata.depth 端到端）；subdag-dispatch 8 unit tests 覆盖 validateWorkerTypes 全路径 + depth 限制。**P0 修复（review 阶段发现）**：第一次 WP-D2 实现因漏持久化 `metadata.depth` 导致 depth cap 运行时完全失效（spawnReadyNode 读取 parentDepth 始终 0，子 DAG 可无限嵌套）；修复在 core-start.ts Step 3 createWorkflow 加 `metadata: { depth }` + scenario-27a 添加 Test E 端到端验证。**第一次 WP-D2 实现回归 bug 教训**：implement agent 误删 338 行 workflow-engine.ts 内容（包括 setWorkflowConcurrency export + 所有核心闭包函数 spawnReadyNode/handleNodeCompletion/handleNodeFailure/getWorkflowStatus/scheduleReadyNodes/createWorkflowExecutor），导致 recovery.ts import SyntaxError；按"回滚纪律"完全回滚到 WP-D1 commit 45c177350 状态 + 删除损坏测试文件，第二次实现严格"仅 addition +103/-0 不删除任何现有行"纪律成功；**main 流程教训：implement 报告"未执行全测试 + typecheck timeout"时应立即让 verify agent 跑全验证，不让其继续推进；本次 main 跳过了这一环导致回归 bug 流入后续阶段**。验收：scenario-27 5/5 + scenario-27a 5/5 + subdag-dispatch 8/8 + core-start 4/4 + dagworker 3/3 + DAG session 391/391 + DAG core 53/53 + typecheck 0 errors。review INFO 11 项 P2-P5 不阻塞（chat_session_id 缺失时静默跳过 / installSubdagLifecycleBridge.args.sessionService 用 any 类型 / args 整体解构风格 / test 用 waitMs 异步不稳定 / test cleanup 不一致 / test 断言粒度 / subdagSubscriptions 同 parentNodeId 覆盖 / getEventBus 返回 undefined 缺 logWarning / DEFAULT_SUB_DAG_TIMEOUT_MS JSDoc ✓ / i18n 双语 ✓ / section 分隔符 ✓）。
 
-**核心约束**：
-- 子工作流同样受四铁律约束（节点≤20、并发≤10、required 不可跳过、状态机不可绕过）
-- 子工作流的节点≤20 上限独立计（嵌套不绕过单图上限）
-- 父子生命周期通过**显式桥**关联（子终态 → 父节点 `handleNodeCompletion/handleNodeFailure`），不得轮询泄漏 fiber 或静默挂起
-- `startWorkflowFromConfig` 去 `Tool.Context` 化后，工具路径与递归路径共用同一核心函数（消除重复，单一来源）
-- 递归深度需有上限（防无限嵌套），上限语义见 §3.3
-
-**WP 拆解**：
-
-| WP | 内容 | 工作量 | 关键约束 |
-|---|---|---|---|
-| D1 | `startWorkflowFromConfig` 去 `Tool.Context` 化（提取核心函数，参数化 promptOps/chatSessionId/abortSignal） | 中 | 工具路径回归测试不破；单一来源 |
-| D2 | `worker_type="dag"` 分发（`validateWorkerTypes` 跳过保留字 + `spawnReadyNode` 加递归分支） | 小 | "dag" 成保留字；分发不影响现有 agent 解析 |
-| D3 | 父子生命周期桥（子工作流终态 → 父节点完成回调/事件，**零基础，见 §3.3**） | 大 | 子终态必经事件/回调通知父；递归深度上限 |
-
-**依赖**：D1 → D2 → D3。建议最后（D3 是独立大头）。
-
-> **每个中/大型 WP（A2/A3、B1/B2/B3、C1/C2/C3、D1/D2/D3）的详细要求规格见 §7** —— 含输入/输出契约、验收标准、边界条件、测试覆盖要求、archgate 关注点、完成定义（DoD）。下发 implement/archgate 时以 §7 对应小节为准。
+---
 
 ---
 
@@ -306,15 +289,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/workflow-engine.ts`（spawnReadyNode dispatch 段 L530-629 + 2 imports；+103/-0 vs WP-D1 commit 45c177350）+ `packages/opencode/src/dag/session/core-start.ts`（bootstrapWorkflowFromConfig 签名扩展 + Step 0 depth check + validateWorkerTypes "dag" skip + Step 3 createWorkflow + metadata.depth 持久化）+ `packages/opencode/src/dag/session/types.ts`（SubDagWorkerConfig interface + DAG_VIOLATION_TYPES "subdag_depth_exceeded"）+ `packages/opencode/src/dag/session/limits.ts`（MAX_SUB_DAG_DEPTH = 3）+ `packages/opencode/src/cli/cmd/tui/feature-plugins/dag-workflow/i18n.ts`（"subdag_depth_exceeded" label）+ `packages/opencode/src/dag/session/__tests__/subdag-dispatch.test.ts`（8 tests）+ `packages/opencode/src/dag/session/__tests__/scenario-27a-subdag-spawn.test.ts`（5 tests 含 Test E）。
 
-#### WP-D3 — 父子生命周期桥（依赖 §3.3 决策）
+#### WP-D3 — 父子生命周期桥 ✅ 已完成
 
-- **前置/输入契约**：WP-D2 完成（子工作流可被 spawn）；**§3.3 父子桥机制决策已锁定**（轮询 vs 事件桥）。
-- **输出契约**：建立子工作流终态 → 父节点完成的桥。子工作流收敛（`maybeFinalizeWorkflow`）为 completed → 父节点 `handleNodeCompletion`；子工作流 failed → 父节点 `handleNodeFailure`。父节点完成当且仅当子工作流终态。
-- **验收标准**：子工作流成功收敛 → 父节点 completed → 父工作流继续推进；子工作流失败 → 父节点 failed → 失败级联正确；父节点不静默挂起。
-- **边界条件**：(a) 子工作流永不收敛（卡死）→ 父节点需有超时兜底（不无限挂起）；(b) 桥机制不得泄漏 fiber（事件桥需正确订阅/退订；轮询需有退出）；(c) 父节点取消 → 子工作流需级联取消；(d) 子工作流 cancelled → 父节点语义明确（failed 或 cancelled）。
-- **测试覆盖要求**：DB 级集成测试——子成功→父 completed→父推进；子失败→父 failed→级联；父取消→子级联取消；子卡死→父超时兜底；fiber 不泄漏（订阅退订/轮询退出）。
-- **archgate 关注点**：父子完成语义正确性（当且仅当）；fiber 生命周期（无泄漏）；超时兜底存在；取消级联；与现有 `handleNodeCompletion/Failure` 复用（不另起一套完成路径）。
-- **DoD**：通用 DoD + 父子完成语义正确 + 超时兜底 + 取消级联 + 无 fiber 泄漏 + 复用现有完成路径。
+父子生命周期桥事件桥机制（§3.3 决策）：子工作流终态（completed/failed/cancelled）→ 父节点完成（复用 `handleNodeCompletion`/`handleNodeFailure`，不另建一套完成路径；铁律 #1/#3 严格遵守 + 铁律 #2 终态不可逆 + ARCHITECTURE.md §11 不实例化 Core 类）；父节点取消 → 子工作流级联取消（DB-driven 经 `node.metadata.chat_session_id` + `listWorkflowsByChatSession` + 递归 cancelWorkflow，跨进程可恢复）；子工作流永不收敛 → 超时兜底（`DEFAULT_SUB_DAG_TIMEOUT_MS = 1_800_000` 30 min 单一来源 + createViolation(type: "subdag_timeout", severity: "error", message, details: {timeoutMs, elapsedMs}) + 取消子工作流 + fail 节点）；fiber 不泄漏（4 退订路径：completed/failed/cancelled 三种事件订阅回调 + timeout setTimeout 触发；3 防御路径：handleNodeCompletion/Failure 函数顶部兜底 cleanup + cancelWorkflow cascade 后 cleanup；settle() 闭包守卫彻底消除 event-vs-timeout 竞态）。新增：session-service.ts `getEventBus()` export（与 `setEventBus()` 对称，供 workflow-engine 订阅使用）；workflow-engine.ts `installSubdagLifecycleBridge({parentWorkflowId, parentNodeId, childWorkflowId, sessionService, ...})` export + `cleanupSubscriptions(parentNodeId)` export + `__internal_subdagSubscriptions` test-only export + `SubdagSubscriptionState` interface + 模块级 `subdagSubscriptions: Map<parentNodeId, SubdagSubscriptionState>`。spawnReadyNode "dag" dispatch 块（WP-D2 已建）+`updateNodeMetadata({chat_session_id: subChildSession.id})` 为取消级联发现 + `installSubdagLifecycleBridge()` 在 bootstrap 成功后同步安装（避免 missed-event 窗口；bootstrap 失败则 early return 不入桥路径）。订阅 filter 按 `event.workflow_id === childWorkflowId`（ARCHITECTURE.md §8.a EventBus 单例进程级全局，必须 filter 否则会收到其他工作流终态事件）。父子完成映射：`workflow.completed` → handleNodeCompletion(parentWorkflowId, parentNodeId, subWorkflowId)；`workflow.failed` → handleNodeFailure(parentWorkflowId, parentNodeId, new Error('sub-workflow failed'))；`workflow.cancelled` → handleNodeFailure(parentWorkflowId, parentNodeId, new Error('sub-workflow cancelled'))——全部复用现有路径。超时触发顺序严格：createViolation 先（保证 DB 记录）+ cancelChildWorkflow 中（保证子工作流最终状态正确）+ 父节点 handleNodeFailure 后（驱动父失败 + 级联）。AGENTS.md §0.2 事件广播统一（使用 getEventBus 共享 IEventBus，禁止自建通道）。dag-bus-bridge translator 层保持不变（按 workflow_id 区分 UI 显示子工作流 vs 父工作流）。5 DB 集成测试 scenario-27-subdag-lifecycle.test.ts：Test A 子完成 → 父 completed + cleanup；Test B 子失败 → 父 failed + violation + cleanup；Test C 父 cancel → 子级联 cancelled + 异步回调父 node failed + cleanup；Test D timeout（80ms 短超时）→ 父 failed + subdag_timeout violation + 子 cancelled + cleanup；Test E 4 路径联合无泄漏（顺序走 completed/failed/cancelled/timeout 验证 `__internal_subdagSubscriptions().size === 0`）。archgate 8 项约束全 honored。INFO 1-5 全处理。review INFO 11 项 P2-P5 不阻塞（chat_session_id 缺失时静默跳过；installSubdagLifecycleBridge.args.sessionService 用 any 类型；args 整体解构风格；test 用 waitMs 异步不稳定；test cleanup 不一致；test 断言粒度不够精确；subdagSubscriptions 同 parentNodeId 重复覆盖；getEventBus undefined 缺 logWarning）。验收：scenario-27 5/5 + scenario-27a 5/5 + subdag-dispatch 8/8 + scenario-22 7/7 + scenario-21 1/1 + scenario-23 3/3 + scenario-24 4/4 + scenario-25 6/6 + scenario-26 3/3 + dagworker 3/3 + core-start 4/4 + DAG session 391/391 + DAG core 53/53 + typecheck 0 errors（总 454 tests）。
+
+地基承载：`packages/opencode/src/dag/session/workflow-engine.ts`（installSubdagLifecycleBridge + cleanupSubscriptions + __internal_subdagSubscriptions + SubdagSubscriptionState + subdagSubscriptions Map + spawnReadyNode dispatch 集成 + handleNodeCompletion/Failure/cancelWorkflow cleanup 调用）+ `packages/opencode/src/dag/session/session-service.ts`（getEventBus export 与 setEventBus 对称）+ `packages/opencode/src/dag/session/types.ts`（DAG_VIOLATION_TYPES 追加 "subdag_timeout"）+ `packages/opencode/src/dag/session/limits.ts`（DEFAULT_SUB_DAG_TIMEOUT_MS = 1_800_000 ms 30 min）+ `packages/opencode/src/cli/cmd/tui/feature-plugins/dag-workflow/i18n.ts`（"subdag_timeout" 双语 label）+ `packages/opencode/src/dag/session/__tests__/scenario-27-subdag-lifecycle.test.ts`（5 tests）。
 
 ---
 

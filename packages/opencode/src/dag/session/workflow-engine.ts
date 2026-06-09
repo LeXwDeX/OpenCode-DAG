@@ -3,10 +3,11 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 import { Cause, Effect, Result } from "effect"
-import { DAGSessionService, emitWorkflowReplannedEvent } from "./session-service"
+import { DAGSessionService, emitWorkflowReplannedEvent, getEventBus } from "./session-service"
 import type {
   AppendNodeLogInput,
   CreateNodeInput,
+  CreateViolationInput,
   UpdateNodeConfigInput,
   UpdateNodeStatusInput,
 } from "./session-service"
@@ -35,7 +36,8 @@ import { WorktreeManagerTag } from "../layer"
 import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
 import { bootstrapWorkflowFromConfig } from "./core-start"
-import { MAX_SUB_DAG_DEPTH } from "./limits"
+import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
+import type { IEventBus } from "../state-machine/IStateMachine"
 
 /**
  * Dual-Path Architecture
@@ -112,6 +114,180 @@ const engineRegistry = new Map<string, WorkflowEngine>()
 const spawnedNodes = new Set<string>()
 const concurrencyRegistry = new Map<string, number>()
 const replanInFlight = new Set<string>()
+
+// ============================================================================
+// WP-D3: Sub-DAG Lifecycle Bridge — Parent↔Child event subscription registry
+// ============================================================================
+//
+// When `spawnReadyNode` dispatches a `worker_type="dag"` node, the child
+// workflow runs independently. The parent node stays in "running" until the
+// child converges to a terminal state. This bridge subscribes to EventBus
+// events (`workflow.completed` / `workflow.failed` / `workflow.cancelled`) and
+// translates them to `handleNodeCompletion` / `handleNodeFailure` on the
+// parent engine — reusing the existing completion path (no new state-mutation
+// channel, iron laws #3/#4).
+//
+// Each entry is keyed by `parentNodeId` (globally unique namespaced ID). The
+// value carries the unsubscribes, the setTimeout ID, and the child workflow ID
+// (for the cancel cascade discovery). A single `cleanupSubscriptions` call
+// removes everything for that node — covering the 4 terminal paths:
+// completed / failed / cancelled / timeout.
+// ============================================================================
+
+interface SubdagSubscriptionState {
+  unsubscribes: Array<() => void>
+  timeoutId: ReturnType<typeof setTimeout> | undefined
+  parentWorkflowId: string
+  childWorkflowId: string
+}
+
+const subdagSubscriptions = new Map<string, SubdagSubscriptionState>()
+
+/** @internal test-only — exposes module-private subdagSubscriptions map. */
+export const __internal_subdagSubscriptions = (): Map<string, SubdagSubscriptionState> =>
+  subdagSubscriptions
+
+/**
+ * Cancel all event subscriptions and the timeout timer for a parent node.
+ * Idempotent — safe to call multiple times (second call is a no-op).
+ *
+ * Called from 4 paths (WP-D3 §7, INFO-4):
+ *   1. `workflow.completed` handler (parent node completed)
+ *   2. `workflow.failed` handler (parent node failed)
+ *   3. `workflow.cancelled` handler (parent node failed-after-cancel)
+ *   4. setTimeout fire (timeout fallback)
+ */
+export function cleanupSubscriptions(parentNodeId: string): void {
+  const state = subdagSubscriptions.get(parentNodeId)
+  if (!state) return
+  if (state.timeoutId !== undefined) clearTimeout(state.timeoutId)
+  for (const unsub of state.unsubscribes) unsub()
+  subdagSubscriptions.delete(parentNodeId)
+}
+
+/**
+ * Install the event-bridge for a sub-DAG lifecycle (WP-D3, §3.3 + §7 WP-D3).
+ *
+ * After `spawnReadyNode` dispatches a "dag" node and `bootstrapWorkflowFromConfig`
+ * returns, this function subscribes to the child workflow's terminal events
+ * and starts a timeout fallback timer. When either the event arrives or the
+ * timer fires, the appropriate parent-node completion path is driven
+ * (`handleNodeCompletion` / `handleNodeFailure`).
+ *
+ * Dependencies are passed as callbacks rather than captured from closure so
+ * the bridge can be tested in isolation without going through `spawnReadyNode`.
+ *
+ * @param args.parentWorkflowId The parent workflow ID (consumer of the bridge).
+ * @param args.parentNodeId The parent "dag" node ID (namespaced, subscription key).
+ * @param args.childWorkflowId The child workflow ID (event-filter target).
+ * @param args.timeoutMs Timeout in ms before the bridge fires "subdag_timeout".
+ * @param args.eventBus The shared IEventBus instance (process-level singleton).
+ * @param args.sessionService The session service (for creating timeout violations).
+ * @param args.onChildCompleted Callback driven when the child reaches "completed".
+ * @param args.onChildFailed Callback driven when the child reaches "failed" / "cancelled".
+ * @param args.onCancelChild Callback driven on timeout to cancel the child workflow.
+ * @param args.onCreateViolation Callback to create a DAGViolation row.
+ */
+export function installSubdagLifecycleBridge(args: {
+  parentWorkflowId: string
+  parentNodeId: string
+  childWorkflowId: string
+  timeoutMs: number
+  eventBus: IEventBus
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  sessionService: any
+  onChildCompleted: (workflowId: string, nodeId: string, output: unknown) => Effect.Effect<unknown>
+  onChildFailed: (workflowId: string, nodeId: string, error: Error) => Effect.Effect<unknown>
+  onCancelChild: (childWorkflowId: string) => Effect.Effect<unknown>
+  onCreateViolation: (input: CreateViolationInput) => Effect.Effect<unknown>
+}): void {
+  const {
+    parentWorkflowId,
+    parentNodeId,
+    childWorkflowId,
+    timeoutMs,
+    eventBus,
+    sessionService,
+    onChildCompleted,
+    onChildFailed,
+    onCancelChild,
+    onCreateViolation,
+  } = args
+  const unsubscribes: Array<() => void> = []
+
+  // Idempotency guard: only act once per parent-node (prevents duplicate
+  // state-machine transitions if a child event races with the timeout).
+  let settled = false
+  const settle = () => {
+    if (settled) return false
+    settled = true
+    cleanupSubscriptions(parentNodeId)
+    return true
+  }
+
+  // Subscribe to "workflow.completed" — child converged successfully
+  unsubscribes.push(
+    eventBus.subscribe("workflow.completed", (event) => {
+      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
+      if (!settle()) return
+      Effect.runPromise(onChildCompleted(parentWorkflowId, parentNodeId, childWorkflowId).pipe(Effect.ignore))
+    }),
+  )
+
+  // Subscribe to "workflow.failed"
+  unsubscribes.push(
+    eventBus.subscribe("workflow.failed", (event) => {
+      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
+      if (!settle()) return
+      Effect.runPromise(
+        onChildFailed(parentWorkflowId, parentNodeId, new Error("sub-workflow failed")).pipe(Effect.ignore),
+      )
+    }),
+  )
+
+  // Subscribe to "workflow.cancelled" — treated as a failure from the parent's
+  // perspective (parent node marked failed, cascade skip downstream follows)
+  unsubscribes.push(
+    eventBus.subscribe("workflow.cancelled", (event) => {
+      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
+      if (!settle()) return
+      Effect.runPromise(
+        onChildFailed(parentWorkflowId, parentNodeId, new Error("sub-workflow cancelled")).pipe(Effect.ignore),
+      )
+    }),
+  )
+
+  // Timeout fallback: if no terminal event arrives within timeoutMs, fire the
+  // violation + cancel child + fail parent node.
+  const timeoutId = setTimeout(() => {
+    if (!settle()) return
+    Effect.runPromise(
+      Effect.gen(function* () {
+        yield* onCreateViolation({
+          workflowId: parentWorkflowId,
+          nodeId: parentNodeId,
+          type: "subdag_timeout",
+          severity: "error",
+          message: `sub-DAG did not converge within ${timeoutMs}ms`,
+          details: { timeoutMs, childWorkflowId },
+        }).pipe(Effect.catchCause(() => Effect.void))
+        yield* onCancelChild(childWorkflowId).pipe(Effect.catchCause(() => Effect.void))
+        yield* onChildFailed(
+          parentWorkflowId,
+          parentNodeId,
+          new Error(`sub-DAG timed out after ${timeoutMs}ms`),
+        ).pipe(Effect.catchCause(() => Effect.void))
+      }).pipe(Effect.ignore),
+    )
+  }, timeoutMs)
+
+  subdagSubscriptions.set(parentNodeId, {
+    unsubscribes,
+    timeoutId,
+    parentWorkflowId,
+    childWorkflowId,
+  })
+}
 
 // ============================================================================
 // Replan Pure Helpers (exported for unit testing — no Effect dependencies)
@@ -594,6 +770,19 @@ const make = Effect.gen(function* () {
           Effect.ignore,
         )
 
+        // WP-D3: Persist `chat_session_id` metadata on the "dag" node so that
+        // the `cancelWorkflow` cascade path can locate the child workflow by
+        // querying `listWorkflowsByChatSession(node.metadata.chat_session_id)`.
+        // This mirrors the regular-node pattern at line ~900.
+        if (sessionService.updateNodeMetadata) {
+          yield* sessionService.updateNodeMetadata(node.node_id, {
+            chat_session_id: subChildSession.id,
+          }).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] dag-node metadata update failed: ${err}`)),
+            Effect.ignore,
+          )
+        }
+
         // Agent service required by validateWorkerTypes in the sub-workflow bootstrap
         const subAgentService = yield* Agent.Service
 
@@ -622,9 +811,35 @@ const make = Effect.gen(function* () {
             Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
             Effect.ignore,
           )
+          return
         }
         // WP-D2: sub-DAG node stays in "running" state after bootstrap success.
-        // WP-D3 will handle the completion bridge.
+
+        // WP-D3: Install the parent↔child lifecycle bridge. This subscribes to
+        // the child workflow's terminal events and starts a timeout fallback.
+        // If no EventBus is available (e.g. no SharedEventBus wired for this
+        // process), the bridge is not installed — the parent node remains
+        // running until process death (acceptable graceful degradation).
+        const eventBus = getEventBus()
+        if (eventBus) {
+          // bootstrapResult is known-success here (failure path returned above)
+          const childWorkflowId = (Result.getSuccess(bootstrapResult) as unknown as { workflowId: string }).workflowId
+          // subDagConfig.timeout_ms takes precedence over global DEFAULT_SUB_DAG_TIMEOUT_MS (§7 WP-D3)
+          const bridgeTimeoutMs = subDagConfig.timeout_ms ?? DEFAULT_SUB_DAG_TIMEOUT_MS
+          installSubdagLifecycleBridge({
+            parentWorkflowId: workflowId,
+            parentNodeId: node.node_id,
+            childWorkflowId,
+            timeoutMs: bridgeTimeoutMs,
+            eventBus,
+            sessionService,
+            onChildCompleted: (w, n, o) => handleNodeCompletion(w, n, o),
+            onChildFailed: (w, n, e) => handleNodeFailure(w, n, e),
+            onCancelChild: (id) => cancelWorkflow(id),
+            onCreateViolation: (input) => sessionService.createViolation(input),
+          })
+        }
+
         return
       }
 
@@ -1157,6 +1372,11 @@ const make = Effect.gen(function* () {
    */
   const handleNodeCompletion: WorkflowEngine['handleNodeCompletion'] = (workflowId, nodeId, output) =>
     Effect.gen(function* () {
+      // WP-D3: If this node is a sub-DAG bridge node, drop its event
+      // subscriptions before any state change (cleanup covers the direct-call
+      // path — the bridge callback path has its own `settle()` guard).
+      cleanupSubscriptions(nodeId)
+
       // 1. 更新节点状态
       yield* sessionService.updateNodeStatus({
         sessionId: nodeId,
@@ -1191,6 +1411,10 @@ const make = Effect.gen(function* () {
    */
   const handleNodeFailure: WorkflowEngine['handleNodeFailure'] = (workflowId, nodeId, error) =>
     Effect.gen(function* () {
+      // WP-D3: If this node is a sub-DAG bridge node, drop its event
+      // subscriptions before any state change (same pattern as handleNodeCompletion).
+      cleanupSubscriptions(nodeId)
+
       // 1. Mark node failed
       yield* sessionService.updateNodeStatus({
         sessionId: nodeId,
@@ -1241,10 +1465,46 @@ const make = Effect.gen(function* () {
 
   /**
    * 取消工作流
+   *
+   * WP-D3: cancels the workflow AND cascades cancellation to any running
+   * sub-DAG child workflows. The cascade locates sub-workflows via
+   * `node.metadata.chat_session_id` (persisted by spawnReadyNode's "dag"
+   * dispatch, §WP-D3) and calls `cancelWorkflow(subWf.id)` recursively.
+   * This keeps the cancel path purely DB-driven (works across process
+   * restarts, since `chat_session_id` is persisted).
    */
   const cancelWorkflow: WorkflowEngine['cancelWorkflow'] = (workflowId) =>
     Effect.gen(function* () {
+      const TERMINAL: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
+
       yield* sessionService.updateWorkflowStatus(workflowId, 'cancelled')
+
+      // WP-D3: cascade to any running "dag" sub-workflows. Read node metadata
+      // which was persisted in spawnReadyNode's "dag" dispatch path.
+      const nodes = yield* sessionService.listNodes(workflowId).pipe(
+        Effect.catchCause(() => Effect.succeed([] as DAGNodeSession[])),
+      )
+      for (const n of nodes) {
+        if (
+          n.status === "running" &&
+          n.config.worker_type === "dag" &&
+          (n.metadata as Record<string, unknown> | undefined)?.chat_session_id
+        ) {
+          const childChatSessionId = (n.metadata as Record<string, unknown>).chat_session_id as string
+          const childWorkflows = yield* sessionService
+            .listWorkflowsByChatSession(childChatSessionId)
+            .pipe(Effect.catchCause(() => Effect.succeed([])))
+          for (const cw of childWorkflows) {
+            if (!TERMINAL.includes(cw.status)) {
+              yield* cancelWorkflow(cw.id).pipe(Effect.catchCause(() => Effect.void))
+            }
+          }
+          // Cleanup the bridge subscriptions for this node (idempotent — the
+          // subscription callback may have already fired on the 'workflow.cancelled' event).
+          cleanupSubscriptions(n.node_id)
+        }
+      }
+
       return { success: true }
     }) as Effect.Effect<{ success: boolean }, never>
 
