@@ -9,6 +9,7 @@ import { recoverOrphanedWorkflows } from "./session/recovery"
 import { EventBus } from "./state-machine/EventBus"
 import type { IWorktreeManager } from "./worktree-manager/IWorktreeManager"
 import { WorktreeManager } from "./worktree-manager/WorktreeManager"
+import { SessionPrompt } from "@/session/prompt"
 
 // ── Service Tags ──
 
@@ -45,6 +46,11 @@ export const worktreeManagerLayer = Layer.effect(
 )
 
 // DAGQuery backed by DAGSessionService. Depends on SharedEventBusTag.
+//
+// WP-A1 (009-dag-capability-expansion.md §7): also yields SessionPrompt.Service
+// so the recovery assembly context can hand headless `promptOps` to resumed
+// orphan-workflow engines (WP-A2). The capability reference is obtained here
+// but never invoked eagerly — only passed downstream by WP-A2.
 const dagQueryLayer = Layer.effect(
   DAGQueryTag,
   Effect.gen(function* () {
@@ -52,6 +58,10 @@ const dagQueryLayer = Layer.effect(
     // Ensure event bus is mounted (idempotent: same bus if layer re-runs via memo)
     setEventBus(bus)
     const sessionService = yield* DAGSessionService.make
+    // WP-A1: acquire headless promptOps capability for recovery continuation.
+    // The reference is held but NOT invoked (WP-A1 boundary: no eager prompt).
+    // WP-A2 will thread this into the resumed WorkflowEngine constructor.
+    const _promptSvc = yield* SessionPrompt.Service
     // B3 crash recovery: scan for orphaned running workflows (no in-memory engine)
     // and mark them failed with audit violations before the query layer becomes available.
     yield* recoverOrphanedWorkflows(sessionService).pipe(
@@ -77,6 +87,14 @@ const dagQueryLayer = Layer.effect(
  *    because DAG is HTTP-server-scoped while CoreLayer is process-wide.
  *    See B3 commit message for rationale.
  *
+ * WP-A1 requirement (009-dag-capability-expansion.md §7): `dagQueryLayer`
+ * additionally yields `SessionPrompt.Service` so recovery can hand headless
+ * `promptOps` to resumed orphan-workflow engines (WP-A2). This adds a heavy
+ * transitive requirement graph (~20 services via `SessionPrompt.defaultLayer`);
+ * memoization within the top-level Layer build guarantees the same instances
+ * shared with other consumers (server.ts flat-array provides the same
+ * `SessionPrompt.defaultLayer` by reference).
+ *
  * The HTTP server provides this `defaultLayer` in
  * `server/routes/instance/httpapi/server.ts:245`. CLI modes that do not start
  * the HTTP server (e.g., `opencode run`) obtain `DAGSessionService` directly
@@ -86,7 +104,16 @@ const dagQueryLayer = Layer.effect(
 // and re-exposes it, so the result outputs BOTH tags with zero residual
 // requirement. `Layer.mergeAll` does not cross-wire siblings, which previously
 // left SharedEventBusTag unsatisfied at runtime ("Service not found").
+//
+// WP-A1 (INFO 2 resolution): SessionPrompt.Service is satisfied explicitly via
+// `Layer.provide(SessionPrompt.defaultLayer)` below — NOT via the flat array
+// in server.ts, which does not cross-wire siblings. Effect memoization ensures
+// the same `SessionPrompt.defaultLayer` instance is shared across the build.
 export const defaultLayer = dagQueryLayer.pipe(
   Layer.provideMerge(sharedEventBusLayer),
   Layer.provideMerge(worktreeManagerLayer),
+  // WP-A1: explicitly satisfy SessionPrompt.Service requirement. Must be
+  // `Layer.provide` (consumes the requirement) so defaultLayer remains
+  // self-contained with zero residual requirement.
+  Layer.provide(SessionPrompt.defaultLayer),
 )

@@ -259,15 +259,11 @@ archgate（架构校验，触治理面强制）
 
 ### 特性 A — 引擎持久化 / 自动续跑
 
-#### WP-A1 — dag/layer 注入 SessionPrompt.Service
+#### WP-A1 — dag/layer 注入 SessionPrompt.Service ✅ 已完成
 
-- **前置/输入契约**：无前置 WP。依赖 `SessionPrompt.Service`（`session/prompt.ts`）已是进程级 layer Service。
-- **输出契约**：`dag/layer` 的 recovery 装配上下文可 `yield* SessionPrompt.Service` 取得，进而 `.ops()` 得到 headless promptOps。不改变 `dag/layer` 对外暴露的 Tag 形状。
-- **验收标准**：recovery 上下文能拿到一个可调用 `prompt({sessionID,...})` 的 promptOps 实例；现有 `dag/layer` 初始化路径（含 `recoverOrphanedWorkflows` 触发）行为不变。
-- **边界条件**：(a) CLI-only 模式（无 HTTP server）不得因此变更而崩溃——recovery 仅 HTTP-server-scoped 触发的语义保持；(b) 注入不得在 layer 构建期 eager 调用 prompt（仅取得能力，不执行）。
-- **测试覆盖要求**：layer 装配 smoke（recovery 上下文可解析 SessionPrompt.Service）；现有 recovery.test.ts 不回归。
-- **archgate 关注点**：依赖方向（dag → session 是否合理、是否成环）；layer 边界注入是否符合既有 layer 组织（不在 request handler 内 provide）。
-- **DoD**：通用 DoD + recovery 上下文可取 headless promptOps，现有 recovery 行为不变。
+`dagQueryLayer` Effect.gen 中 `yield* SessionPrompt.Service` 取得 headless promptOps 能力引用（无 eager 调用）；`defaultLayer` pipe 末显式 `Layer.provide(SessionPrompt.defaultLayer)` 解析 sibling（非扁平数组，因 server.ts 扁平数组不 cross-wire 兄弟）。依赖方向 dag→session 无循环（prompt.ts 对 dag 模块 0 import）；对外 Tag 形状（DAGQueryTag / SharedEventBusTag / WorktreeManagerTag）不变；现有 `recoverOrphanedWorkflows` 签名未动。验收：装配 smoke 2/2 PASS + recovery.test.ts 4/4 PASS + 全量 DAG session 227/227 PASS + typecheck 0 errors。
+
+地基承载：`packages/opencode/src/dag/layer.ts`（dagQueryLayer + defaultLayer 注释注明 ~20 transitive deps 的 memo 语义与 cross-wire）+ `packages/opencode/src/dag/__tests__/layer-session-prompt.test.ts`（2 smoke，含 die-on-call mock 防 eager 调用）。
 
 #### WP-A2 — recovery 续跑装配
 
