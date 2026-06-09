@@ -442,7 +442,7 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
     const validTransitions = {
       'pending': ['queued', 'running', 'skipped'],
       'queued': ['running', 'skipped'],
-      'running': ['completed', 'failed'],
+      'running': ['completed', 'failed', 'pending'],
       'completed': [], // terminal
       'failed': [], // terminal
       'skipped': [], // terminal
@@ -456,8 +456,8 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
       expect(validTransitions['pending']).toContain('skipped');
     });
 
-    it('running can only transition to completed or failed', () => {
-      expect(validTransitions['running']).toEqual(['completed', 'failed']);
+    it('running can transition to completed, failed, or pending (recovery reset)', () => {
+      expect(validTransitions['running']).toEqual(['completed', 'failed', 'pending']);
     });
 
     it('terminal node states have no outgoing transitions', () => {
@@ -721,10 +721,11 @@ describe('Iron Law #1/#2: getValidNextSessionNodeStatuses', () => {
     expect(valid).toContain('skipped')
   })
 
-  it('running can transition to completed, failed', () => {
+  it('running can transition to completed, failed, pending', () => {
     const valid = getValidNextSessionNodeStatuses('running')
     expect(valid).toContain('completed')
     expect(valid).toContain('failed')
+    expect(valid).toContain('pending')
   })
 
   it('completed is terminal (Iron Law #2)', () => {

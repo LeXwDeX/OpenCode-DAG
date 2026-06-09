@@ -40,6 +40,7 @@ export type DAGWorkflowStatus =
  * pending → queued → running → completed (执行成功)
  *                            → failed (执行失败)
  *                            → skipped (required node 被跳过 = 违规)
+ *                            → pending (recovery reset — orphaned running node, WP-A3)
  *
  * queued: 已满足依赖关系，等待执行槽位
  */

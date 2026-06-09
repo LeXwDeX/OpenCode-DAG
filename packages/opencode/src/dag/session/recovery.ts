@@ -165,6 +165,11 @@ function resumeOrphanWorkflow(
     // 4. Register engine in module-level registry
     registerEngine(wf.id, engine)
 
+    // 4.5. WP-A3: Reset running nodes to pending (recovery reset).
+    //      Must happen BEFORE scheduleReadyNodes (step 5) so the scheduler
+    //      picks them up for re-spawn. Legal transition per session-service.ts:81-82.
+    yield* resetRunningNodes(service, wf)
+
     // 5. Schedule pending/ready nodes (NOT startWorkflow — avoids running→running transition)
     yield* engine.scheduleReadyNodes(wf.id)
 
@@ -181,4 +186,44 @@ function resumeOrphanWorkflow(
     // Collapse Effect.fail into a boolean result for the caller
     Effect.catchCause(() => Effect.succeed(false)),
   )
+}
+
+/**
+ * WP-A3: Reset all running nodes in an orphaned workflow to pending.
+ * Called between registerEngine (step 4) and scheduleReadyNodes (step 5)
+ * so the scheduler picks them up for re-spawn.
+ *
+ * Per INFO 5: appends a recovery_reset log entry per reset node.
+ * Original running logs are preserved (audit integrity).
+ */
+function resetRunningNodes(
+  service: IDAGSessionService,
+  wf: DAGWorkflowSession,
+): Effect.Effect<void> {
+  return Effect.gen(function* () {
+    const nodes = yield* service.listNodes(wf.id)
+    for (const node of nodes) {
+      if (node.status !== 'running') continue
+
+      yield* service.updateNodeStatus({
+        sessionId: node.node_id,
+        status: 'pending',
+      } satisfies UpdateNodeStatusInput).pipe(
+        Effect.tapError(err => Effect.logWarning(`[DAG recovery] failed to reset ${node.node_id} running→pending: ${err}`)),
+        Effect.ignore,
+      )
+
+      yield* service.appendNodeLog({
+        nodeId: node.node_id,
+        workflowId: wf.id,
+        chatSessionId: wf.chat_session_id,
+        logLevel: 'info',
+        logMessage: `Recovery reset: running node reset to pending for re-spawn (WP-A3)`,
+        executionPhase: 'recovery_reset',
+      }).pipe(
+        Effect.tapError(err => Effect.logWarning(`[DAG recovery] failed to append recovery_reset log for ${node.node_id}: ${err}`)),
+        Effect.ignore,
+      )
+    }
+  })
 }

@@ -79,7 +79,7 @@ export function getValidNextSessionNodeStatuses(
     case "queued":
       return ["running", "skipped"]
     case "running":
-      return ["completed", "failed"]
+      return ["completed", "failed", "pending"]
     case "completed":
     case "failed":
     case "skipped":

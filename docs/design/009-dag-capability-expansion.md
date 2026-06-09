@@ -67,24 +67,13 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 每个特性触架构治理面（types schema + 调度逻辑 + 状态机），**所有 WP 启动前必经 archgate**。工作量口径：小 = 加字段/装配；中 = 新增调度逻辑；大 = 零基础机制。
 
-### 特性 A — 引擎持久化 / 自动续跑（工作量：中）
+### 特性 A — 引擎持久化 / 自动续跑 ✅ 特性整体已完成（commit `d30b53a0d`）
 
-**目标**：进程重启后，DB 中处于 running 的工作流能恢复执行，而非一律标记 failed。
+进程重启后，DB 中处于 running 的工作流能恢复执行。WP-A1（dag/layer 注入 SessionPrompt.Service）+ WP-A2（recovery 续跑装配 engine 重建 + daemon 重启 + 幂等守卫 + 装配失败回退到标 failed）+ WP-A3（running 节点经状态机合法转移到 pending，由现有 scheduleReadyNodes/spawnReadyNode 重新 spawn；子 session 孤儿 DB 记录遗弃，"至少一次"语义可接受）。
 
-**核心约束**：
-- 写路径必须穿透状态机（铁律 #1）；续跑不得绕过 `updateWorkflowStatus`/`updateNodeStatus`
-- promptOps 经 headless 注入（`dag/layer` 引入 `SessionPrompt.Service` 依赖），不复制 turn 注入逻辑
-- 恢复在 HTTP-server-scoped 触发（`dag/layer.ts:57`），CLI-only 模式不续跑（维持现状语义）
+**已锁定决策**：§3.1 running 节点续跑语义 = 首版重跑（resume 作为后续优化）。转移表扩展 running→pending 在 `getValidNextSessionNodeStatuses` 内（不绕过 updateNodeStatus，铁律 #1 守恒）；running/pending 均非终态（isNodeTerminalStatus 未修改）。scenario-23/24 DB 级集成测试覆盖三态续跑 + running 归位全链路，全量 DAG 回归 234/234 + 53/53 + session-service 95/95 + typecheck 0 errors。
 
-**WP 拆解**：
-
-| WP | 内容 | 工作量 | 关键约束 |
-|---|---|---|---|
-| A1 | `dag/layer` 注入 `SessionPrompt.Service`（前置依赖） | 小 | 不引入循环依赖；layer 边界注入 |
-| A2 | recovery 续跑装配：engine 重建（`WorkflowEngine.make`）+ promptOps 重注入 + daemon 重启（`forkDetach`）+ concurrencyRegistry 重填 | 小 | 全为进程级依赖重建，机械 |
-| A3 | running 节点续跑语义（**需设计决策，见 §3.1**） | 中 | 节点状态归位必须经状态机；不得丢失审计 |
-
-**依赖**：A1 → A2 → A3。A3 阻塞于 §3.1 决策。
+**INFO 已知限制（后续 WP 评估）**：buildSessionNodeEvent 对 pending 不发射 `node.reset` 事件（archgate INFO 3）；子 session 孤儿 DB 记录遗弃无清理（archgate INFO 4）。
 
 ---
 
@@ -159,16 +148,16 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 ## 3. 关键设计决策（开发前需锁定）
 
-### 3.1 [特性 A] running 节点续跑语义 — **待决策**
+### 3.1 [特性 A] running 节点续跑语义 — **已决策：首版重跑**（用户 2026-06-08 确认）
 
 进程重启时，处于 running 的节点其子 session 对话中断在半途。续跑有两种路径：
 
 | 方案 | 含义 | 代价 | 复杂度 |
 |---|---|---|---|
-| **重跑** | 节点状态归位 pending，重新 spawn（丢弃半截对话） | 浪费已完成的部分算力 | 简单 |
-| **resume 子 session** | `ops.loop({sessionID: childSessionId})` 接续子 session loop | 省算力 | 需判断子 session 能否仍产出 `node_complete` |
+| **重跑（已选）** | 节点状态经状态机归位 pending，重新 spawn（丢弃半截对话） | 浪费已完成的部分算力 | 简单 |
+| **resume 子 session（保留为后续优化）** | `ops.loop({sessionID: childSessionId})` 接续子 session loop | 省算力 | 需判断子 session 能否仍产出 `node_complete` |
 
-**决策建议**：首版用**重跑**（简单、确定性强、不依赖子 session 可恢复性）；resume 作为后续优化。最终决策在 WP-A3 启动前由用户确认。
+**决策**：首版用**重跑**——节点状态经状态机归位到 pending/queued（合法转移），由现有 scheduleReadyNodes/ spawnReadyNode 重新 spawn。子 session 半截对话丢弃，不做 resume。resume 语义作为后续优化项，不阻塞 WP-A3。
 
 ### 3.2 [特性 B] required 节点 + 条件不满足 — **待决策**
 
@@ -271,15 +260,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/recovery.ts`（resumeOrphanWorkflow + failOrphanWorkflow + RecoverResult.resumed + promptOps optional 参数）+ `packages/opencode/src/dag/session/workflow-engine.ts`（setWorkflowConcurrency export）+ `packages/opencode/src/dag/layer.ts`（PromptOps adapter line 66-70）+ `packages/opencode/src/dag/session/__tests__/scenario-23-recovery-resume.test.ts`（3 tests）。
 
-#### WP-A3 — running 节点续跑语义（依赖 §3.1 决策）
+#### WP-A3 — running 节点续跑语义 ✅ 已完成
 
-- **前置/输入契约**：WP-A2 完成；**§3.1 决策已锁定**（重跑 vs resume）。输入 = 孤儿工作流中 `status='running'` 的节点（子 session 中断在半途）。
-- **输出契约**：按 §3.1 决策处理 running 节点。若决策=重跑：节点状态经状态机归位到可重新调度态（running→pending 的合法转移，或等价路径），随后被 WP-A2 的调度恢复重新 spawn。若决策=resume：接续子 session loop。
-- **验收标准**：重启后 running 节点不永久卡死；按决策语义被重跑或接续；最终能产出 `node_complete` 推进工作流。
-- **边界条件**：(a) running→pending 若非状态机合法转移，需明确转移路径（可能需经中间态或新增合法转移，此处触状态机治理面，archgate 重点）；(b) 重跑不得丢失审计（原 running 记录/violation 保留）；(c) 节点已实际完成但状态未及持久化的竞态（重启窗口）——避免重复执行副作用，或明确"至少一次"语义。
-- **测试覆盖要求**：DB 级集成测试——running 节点经重启后按决策语义恢复 + 最终完成。状态机转移合法性测试（running 节点归位路径）。竞态边界测试（已完成未持久化）。
-- **archgate 关注点**：running→可调度态的状态机转移是否合法/是否需扩展转移表（治理面）；重跑的"至少一次"副作用语义是否可接受；审计完整性。
-- **DoD**：通用 DoD + running 节点按 §3.1 语义恢复 + 状态机转移合法 + 审计保留。
+节点转移表扩展 `case "running"` 返回值添加 `"pending"`（`getValidNextSessionNodeStatuses` 内，不绕过 updateNodeStatus；铁律 #1 守恒；isNodeTerminalStatus 未修改；running/pending 均非终态；types.ts:43 注释标注 recovery reset 出处）。recovery.ts 新增 `resetRunningNodes` 内部函数，在 resumeOrphanWorkflow 装配时序的 step 4（registerEngine）之后、step 5（scheduleReadyNodes）之前调用——归位后节点立即被 scheduleReadyNodes 重新选中 spawn（INFO 2 处理，不依赖 daemon 兜底）。每个 running 节点调用 `service.updateNodeStatus` 经状态机验证 + `appendNodeLog` 追加 `executionPhase: 'recovery_reset'` 标记（INFO 5 处理，便于排查"为什么跑了两次"）。装配失败路径 failOrphanWorkflow 不含 resetRunningNodes 调用（失败隔离）。scenario-24 4 测试：running 归位 + 重新 spawn + 转移合法性 + 混合状态隔离；session-service.test.ts 既有 3 处断言同步更新（running→pending 从"非法"改为合法，不删除测试）。验收：scenario-24 4/4 + scenario-23 3/3 + recovery 4/4 + session-service 95/95 + 全量 DAG session 234/234 + DAG 53/53 + typecheck 0 errors。INFO 3（NodeEvent node.reset 事件发射）未实现——buildSessionNodeEvent 对 pending 返回 null（现状一致），archgate 标注为可选项；后续 WP 评估。INFO 4（子 session 孤儿 DB 记录）文档标注，"至少一次"语义可接受。
+
+地基承载：`packages/opencode/src/dag/session/session-service.ts`（节点转移表 L81 case "running" 扩展）+ `packages/opencode/src/dag/session/recovery.ts`（resetRunningNodes 函数 + 装配时序 step 4.5）+ `packages/opencode/src/dag/session/types.ts`（节点状态转换注释追加 recovery reset）+ `packages/opencode/src/dag/session/__tests__/scenario-24-running-node-resume.test.ts`（4 测试）+ `packages/opencode/src/dag/session/__tests__/session-service.test.ts`（既有断言调整 3 处）。
 
 ---
 
