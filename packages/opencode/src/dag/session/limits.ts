@@ -16,6 +16,19 @@ import type { DAGInputMapping, DAGInputMappingEntry, DAGNodeConfig } from "./typ
 import { DAG_CONDITION_OPS } from "./types"
 
 /**
+ * Maximum sub-DAG nesting depth (WP-D2, §3.3 decision: depth ≤ 3).
+ *
+ * Root workflow = depth 0. First-level sub-DAG = depth 1. Grandchild = depth 2.
+ * A node at depth 2 may spawn a sub-DAG (depth 3). A node at depth 3 may NOT
+ * spawn further — bootstrapWorkflowFromConfig rejects depth > MAX_SUB_DAG_DEPTH.
+ *
+ * This constant is the single source of truth for the depth cap. Both
+ * bootstrapWorkflowFromConfig (core-start.ts) and any future replay/recovery
+ * paths source their depth check from here.
+ */
+export const MAX_SUB_DAG_DEPTH = 3
+
+/**
  * Single source of truth for the workflow config caps:
  *   - node count ≤ 20
  *   - max_concurrency ∈ [1, 10]

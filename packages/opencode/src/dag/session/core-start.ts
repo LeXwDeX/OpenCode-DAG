@@ -3,11 +3,12 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
- * Headless workflow bootstrap — Tool.Context-free core startup function (WP-D1).
+ * Headless workflow bootstrap — Tool.Context-free core startup function (WP-D1 core, WP-D2 sub-DAG).
  *
- * Single source for the 7-step workflow bootstrap sequence:
+ * Single source for the workflow bootstrap sequence:
+ *   0. Recursion depth check (WP-D2: depth > MAX_SUB_DAG_DEPTH → fail, INFO-3)
  *   1. RequiredNodesValidator validation (+ warnings via console.warn, INFO-5)
- *   2. validateWorkerTypes (agent registry resolution)
+ *   2. validateWorkerTypes (agent registry resolution; "dag" skipped for WP-D2)
  *   3. DB createWorkflow row
  *   4. DB createNode rows (with namespaced IDs: `${workflowId}::${nodeId}`)
  *   5. WorkflowEngine.make + setPromptOps
@@ -16,7 +17,7 @@
  *
  * Called by:
  * - dagworker.ts (tool path) — thin adapter that destructures Tool.Context
- * - future sub-DAG spawn path (WP-D2) — headless invocation
+ * - WP-D2 sub-DAG spawn — spawnReadyNode dispatches "dag" nodes via this
  *
  * The abort listener MUST be registered AFTER forkDetach (architecture constraint 3).
  * The RequiredNodesValidator call migrates here (single source, INFO-3).
@@ -29,6 +30,8 @@
  *   `WorkflowEngine.startWorkflow` (INFO-4), which only flips status + schedules;
  *   this function is the full create+start bootstrap.
  * - Object literal parameter shape matches existing codebase conventions.
+ * - WP-D2 adds parentWorkflowId/parentNodeId/depth optional params (additive,
+ *   backward-compatible with dagworker.ts which does not pass them).
  */
 
 import { Effect } from "effect"
@@ -40,6 +43,7 @@ import type { WorkflowExecutor } from "./workflow-executor"
 import { createWorkflowExecutor } from "./workflow-executor"
 import type { DAGConfig, DAGNodeConfig } from "./types"
 import { RequiredNodesValidator } from "./required-nodes-validator"
+import { MAX_SUB_DAG_DEPTH } from "./limits"
 
 /**
  * Registry interface used to validate worker_type values against the active
@@ -59,6 +63,13 @@ export type WorkerTypeAgentRegistry = {
  * fails with an actionable error listing registered agents + the config location
  * for custom agents (`opencode.json agent.*`).
  *
+ * WP-D2 sub-DAG dispatch:
+ * - `worker_type === "dag"` is a **reserved word** — agent registry resolution
+ *   is skipped (no Agent.Info lookup). Instead, each "dag" node must carry
+ *   `worker_config.subDagConfig` (a valid DAGConfig). Missing → reject.
+ * - **Reserved-word conflict**: if the agent registry contains an agent named
+ *   "dag", validation fails. "dag" MUST NOT be a registered agent name.
+ *
  * Defined here (single source) so that both the tool path (dagworker.ts) and
  * the recursive sub-DAG spawn path (WP-D2) share the same validation entry
  * point. Re-exported from dagworker.ts for backward compat with existing tests.
@@ -69,8 +80,40 @@ export const validateWorkerTypes = (
 ) =>
   Effect.gen(function* () {
     const unique = [...new Set(nodes.map((n) => n.worker_type))]
+
+    // WP-D2: reserved-word conflict — "dag" MUST NOT be registered as agent name.
+    if (unique.includes("dag")) {
+      const registered = yield* agentService.list().pipe(
+        Effect.catchCause(() => Effect.succeed([] as Agent.Info[])),
+      )
+      if (registered.some((a) => a.name === "dag")) {
+        return yield* Effect.fail(
+          new Error(
+            "Reserved worker_type conflict: 'dag' is reserved for sub-DAG dispatch and must not be registered as an agent name in opencode.json agent.*.",
+          ),
+        )
+      }
+    }
+
     const missing: string[] = []
     for (const workerType of unique) {
+      // WP-D2: "dag" is a reserved word — skip agent registry resolution.
+      // Validate subDagConfig presence instead (schema-level check).
+      if (workerType === "dag") {
+        const dagNodes = nodes.filter((n) => n.worker_type === "dag")
+        for (const dn of dagNodes) {
+          const subDag = (dn.worker_config as Record<string, unknown> | undefined)?.subDagConfig
+          if (!subDag || typeof subDag !== "object") {
+            return yield* Effect.fail(
+              new Error(
+                `worker_type="dag" requires worker_config.subDagConfig (DAGConfig) on node '${dn.id}'. Got: ${subDag === undefined ? "undefined" : typeof subDag}.`,
+              ),
+            )
+          }
+        }
+        continue
+      }
+
       const found = yield* agentService.get(workerType).pipe(
         Effect.catchCause(() => Effect.succeed(undefined)),
       )
@@ -97,19 +140,30 @@ export type BootstrapWorkflowResult = {
 }
 
 /**
- * Tool.Context-free workflow bootstrap (WP-D1 core).
+ * Tool.Context-free workflow bootstrap (WP-D1 core, WP-D2 sub-DAG entry).
  *
- * Single source for the full 7-step workflow startup sequence (validate →
- * DB rows → engine assembly → daemon → abort listener). The tool path
- * (dagworker.ts) and future sub-DAG spawn (WP-D2) both call into this.
+ * Single source for the full workflow startup sequence:
+ *   Step 0 — recursion depth check (WP-D2, §3.3: depth > MAX_SUB_DAG_DEPTH = 3 → fail)
+ *   Step 1 — RequiredNodesValidator
+ *   Step 2 — validateWorkerTypes (WP-D2: "dag" skipped, subDagConfig validated)
+ *   Step 3 — DB createWorkflow row
+ *   Step 4 — DB createNode rows
+ *   Step 5 — WorkflowEngine.make + setPromptOps
+ *   Step 6 — registerEngine + startWorkflow
+ *   Step 7a — forkDetach daemon; 7b — abortSignal listener (AFTER forkDetach, constraint 3)
  *
- * @param dagConfig          The DAG workflow configuration (name, nodes, max_concurrency, ...).
- * @param chatSessionId      The chat session under which the workflow is scoped (was ctx.sessionID).
- * @param promptOps          Prompt operations reference (was ctx.extra.promptOps).
- * @param abortSignal        AbortSignal for cooperative cancellation (was ctx.abort).
- *                           Listener is registered AFTER forkDetach daemon (constraint 3).
- * @param dagSessionService  DB session service (state persistence — iron law #4).
- * @param agentService       Agent registry for worker_type validation.
+ * @param dagConfig         The DAG workflow configuration.
+ * @param chatSessionId     The chat session under which the workflow is scoped.
+ *                          For sub-DAG (WP-D2, INFO-5): the child session ID
+ *                          created by spawnReadyNode via sessions.create().
+ * @param promptOps         Prompt operations reference.
+ * @param abortSignal       AbortSignal for cooperative cancellation.
+ * @param dagSessionService DB session service (state persistence — iron law #4).
+ * @param agentService      Agent registry for worker_type validation.
+ * @param parentWorkflowId  Optional (WP-D2): parent workflow ID for sub-DAG context.
+ * @param parentNodeId      Optional (WP-D2): parent node ID for sub-DAG context.
+ * @param depth             Optional (WP-D2, INFO-3): current nesting depth (default 0).
+ *                          Root workflow = 0. Sub-DAG at level 1 = 1. Limit = MAX_SUB_DAG_DEPTH (3).
  */
 export const bootstrapWorkflowFromConfig = (args: {
   dagConfig: DAGConfig
@@ -118,9 +172,32 @@ export const bootstrapWorkflowFromConfig = (args: {
   abortSignal: AbortSignal
   dagSessionService: IDAGSessionService
   agentService: WorkerTypeAgentRegistry
+  parentWorkflowId?: string
+  parentNodeId?: string
+  depth?: number
 }) =>
   Effect.gen(function* () {
-    const { dagConfig, chatSessionId, promptOps, abortSignal, dagSessionService, agentService } = args
+    const {
+      dagConfig,
+      chatSessionId,
+      promptOps,
+      abortSignal,
+      dagSessionService,
+      agentService,
+      parentWorkflowId,
+      parentNodeId,
+      depth = 0,
+    } = args
+
+    // Step 0: WP-D2 recursion depth check (§3.3: depth > MAX_SUB_DAG_DEPTH → fail).
+    // Single source of truth for the depth cap (MAX_SUB_DAG_DEPTH from limits.ts).
+    if (depth > MAX_SUB_DAG_DEPTH) {
+      return yield* Effect.fail(
+        new Error(
+          `Sub-DAG recursion depth ${depth} exceeds maximum ${MAX_SUB_DAG_DEPTH} (§3.3). Refactor workflow to use fewer nesting levels.`,
+        ),
+      )
+    }
 
     // Step 1: RequiredNodesValidator (+ console.warn for warnings, INFO-5 compliant).
     // INFO-3: this validator call migrates with the core function (single source).
@@ -145,6 +222,7 @@ export const bootstrapWorkflowFromConfig = (args: {
       chatSessionId,
       name: dagConfig.name,
       config: dagConfig,
+      metadata: depth !== undefined ? { depth } : undefined, // WP-D2: sub-DAG depth propagation (§3.3)
     })
 
     // Step 4: DB createNode rows with namespaced IDs `${workflowId}::${cfg.id}`.

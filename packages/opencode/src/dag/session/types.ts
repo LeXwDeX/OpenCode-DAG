@@ -160,7 +160,15 @@ export type DAGInputMapping = Record<string, DAGInputMappingEntry>
  *
  * - `worker_config: Record<string, unknown>` — opaque bag passed to workers.
  *   Known recognized keys: `prompt` (string), `agent` (agent name override),
- *   `use_worktree: true` (opt-in worktree isolation per B4-WP1).
+ *   `use_worktree: true` (opt-in worktree isolation per B4-WP1),
+ *   `subDagConfig` (WP-D2: nested DAGConfig when `worker_type === "dag"`).
+ *
+ * - `worker_type === "dag"` — **reserved word** (WP-D2). Triggers sub-DAG
+ *   dispatch: spawnReadyNode short-circuits before agent resolution (workflow-
+ *   engine.ts L528), extracts `worker_config.subDagConfig`, and recursively
+ *   calls `bootstrapWorkflowFromConfig` to start the sub-workflow. Recursion
+ *   depth capped at 3 (MAX_SUB_DAG_DEPTH, §3.3). "dag" MUST NOT be registered
+ *   as an agent name — doing so causes reserved-word conflict.
  *
  * - `condition?: DAGNodeCondition` — (WP-B1) 声明式条件表达式。条件不满足时节点跳过（WP-B2/B3）。
  *   **required 节点禁止声明 condition**（§3.2 方案 1，schema 校验拒绝）。
@@ -214,6 +222,31 @@ export interface DAGNodeConfig {
    * 运行时数据收集由 WP-C2 实现（纯读 DB，无写）。
    */
   input_mapping?: DAGInputMapping;
+}
+
+/**
+ * WP-D2: Typed shape for `worker_config` when `worker_type === "dag"`.
+ *
+ * `DAGNodeConfig.worker_config` is `Record<string, unknown>` (opaque bag).
+ * When the node is a sub-DAG dispatcher, it must carry `subDagConfig: DAGConfig`
+ * — the full configuration of the child workflow. Other keys are ignored.
+ *
+ * The parent node (`worker_type="dag"`) remains in `running` state until the
+ * sub-workflow converges (WP-D3: parent-child lifecycle bridge decides
+ * completion semantics). WP-D2 only starts the sub-workflow; it does not
+ * await completion.
+ *
+ * Validation chain for "dag" nodes:
+ * - `validateWorkerTypes` (core-start.ts): skips agent registry resolution,
+ *   checks that `subDagConfig` is present.
+ * - `validateWorkflowConfigLimits` (limits.ts): applied to `subDagConfig`
+ *   independently at `createWorkflow` time (nodes ≤20, concurrency ∈ [1,10]).
+ * - `bootstrapWorkflowFromConfig` (core-start.ts): rejects depth > 3
+ *   (`MAX_SUB_DAG_DEPTH`) before any DB writes.
+ */
+export interface SubDagWorkerConfig {
+  /** Full configuration of the sub-DAG workflow (required for worker_type="dag") */
+  subDagConfig: DAGConfig;
 }
 
 /**
@@ -364,6 +397,7 @@ export interface DAGNodeMetrics {
  * - required_node_skipped / required_node_failed: required-node lifecycle
  * - max_nodes_exceeded / max_concurrency_exceeded / timeout_exceeded: capacity / time limits
  * - execution_failed: runtime failures during node spawn or execution
+ * - subdag_depth_exceeded: WP-D2 — sub-DAG nesting exceeds MAX_SUB_DAG_DEPTH (3)
  */
 export const DAG_VIOLATION_TYPES = [
   "required_node_skipped",
@@ -374,6 +408,7 @@ export const DAG_VIOLATION_TYPES = [
   "execution_failed",
   "process_orphan",
   "condition_skipped",
+  "subdag_depth_exceeded",
 ] as const
 
 export type DAGViolationType = (typeof DAG_VIOLATION_TYPES)[number]

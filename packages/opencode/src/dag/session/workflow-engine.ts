@@ -34,6 +34,8 @@ import { MessageID, SessionID } from "@/session/schema"
 import { WorktreeManagerTag } from "../layer"
 import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
+import { bootstrapWorkflowFromConfig } from "./core-start"
+import { MAX_SUB_DAG_DEPTH } from "./limits"
 
 /**
  * Dual-Path Architecture
@@ -522,6 +524,107 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
           Effect.ignore
         )
+        return
+      }
+
+      // 1.5 WP-D2: Sub-DAG dispatch — short-circuit before agent resolution.
+      // "dag" is a reserved worker_type (009-dag-capability-expansion.md §7 WP-D2).
+      // Dispatch chain: extract subDagConfig → depth check → child session →
+      // mark running → recursive bootstrapWorkflowFromConfig. On bootstrap failure,
+      // mark node failed. On success, node stays running (WP-D3 lifecycle bridge).
+      if (node.config.worker_type === "dag") {
+        const subDagConfig = (node.config.worker_config as Record<string, unknown> | undefined)
+          ?.subDagConfig as DAGConfig | undefined
+        if (!subDagConfig || typeof subDagConfig !== "object" || !Array.isArray(subDagConfig.nodes)) {
+          yield* sessionService.updateNodeStatus({
+            sessionId: node.node_id,
+            status: "failed",
+            error: `worker_type="dag" requires valid worker_config.subDagConfig (DAGConfig)`,
+          } satisfies UpdateNodeStatusInput).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+            Effect.ignore,
+          )
+          return
+        }
+
+        // Verify depth limit (§3.3: MAX_SUB_DAG_DEPTH = 3)
+        const parentWf = yield* sessionService.getWorkflow(workflowId)
+        if (!parentWf) {
+          yield* Effect.logDebug(`spawnReadyNode: workflow ${workflowId} gone, aborting sub-DAG spawn`)
+          return
+        }
+        const parentDepth = ((parentWf.metadata as { depth?: number } | undefined)?.depth) ?? 0
+        const childDepth = parentDepth + 1
+        if (childDepth > MAX_SUB_DAG_DEPTH) {
+          yield* sessionService.updateNodeStatus({
+            sessionId: node.node_id,
+            status: "failed",
+            error: `recursion depth exceeded: depth ${childDepth} > max ${MAX_SUB_DAG_DEPTH}`,
+          } satisfies UpdateNodeStatusInput).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+            Effect.ignore,
+          )
+          yield* sessionService.createViolation({
+            workflowId,
+            nodeId: node.node_id,
+            type: "subdag_depth_exceeded",
+            severity: "error",
+            message: `recursion depth exceeded: ${childDepth} > ${MAX_SUB_DAG_DEPTH}`,
+            details: { depth: childDepth, max: MAX_SUB_DAG_DEPTH },
+          }).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] violation create failed: ${err}`)),
+            Effect.ignore,
+          )
+          return
+        }
+
+        // Child session (INFO-5: same pattern as agent-type nodes)
+        const subSessions = yield* Session.Service
+        const subChildSession = yield* subSessions.create({
+          parentID: parentWf.chat_session_id as SessionID,
+          title: node.config.name + " (sub-DAG)",
+        })
+
+        // Mark running (WP-D2: stays running until WP-D3 event bridge signals)
+        yield* sessionService.updateNodeStatus({
+          sessionId: node.node_id,
+          status: "running",
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+          Effect.ignore,
+        )
+
+        // Agent service required by validateWorkerTypes in the sub-workflow bootstrap
+        const subAgentService = yield* Agent.Service
+
+        // Recursive bootstrap — wrapped in Effect.result for graceful failure handling
+        const bootstrapEffect = bootstrapWorkflowFromConfig({
+          dagConfig: subDagConfig,
+          chatSessionId: subChildSession.id,
+          promptOps: _promptOps!,
+          abortSignal: new AbortController().signal,
+          dagSessionService: sessionService,
+          agentService: subAgentService,
+          parentWorkflowId: workflowId,
+          parentNodeId: node.node_id,
+          depth: childDepth,
+        }).pipe(Effect.result)
+        const bootstrapResult = yield* bootstrapEffect
+
+        if (Result.isFailure(bootstrapResult)) {
+          const bootstrapFailure = Result.getFailure(bootstrapResult)
+          const errMsg = bootstrapFailure._tag === 'Some' ? String(bootstrapFailure.value) : 'unknown error'
+          yield* sessionService.updateNodeStatus({
+            sessionId: node.node_id,
+            status: "failed",
+            error: errMsg,
+          } satisfies UpdateNodeStatusInput).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
+            Effect.ignore,
+          )
+        }
+        // WP-D2: sub-DAG node stays in "running" state after bootstrap success.
+        // WP-D3 will handle the completion bridge.
         return
       }
 
