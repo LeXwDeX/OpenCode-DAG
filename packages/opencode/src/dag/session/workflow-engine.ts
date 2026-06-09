@@ -6,9 +6,7 @@ import { Cause, Effect, Result } from "effect"
 import { DAGSessionService, emitWorkflowReplannedEvent, getEventBus } from "./session-service"
 import type {
   AppendNodeLogInput,
-  CreateNodeInput,
   CreateViolationInput,
-  UpdateNodeConfigInput,
   UpdateNodeStatusInput,
 } from "./session-service"
 import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
@@ -21,7 +19,6 @@ import type {
   DAGConfig,
   DAGNodeConfig,
   DAGNodeSession,
-  DAGNodeStatus,
   DAGViolation,
   DAGViolationType,
   DAGWorkflowStatus,
@@ -38,6 +35,43 @@ import type { WorktreeInfo } from "../worktree-manager/types"
 import { bootstrapWorkflowFromConfig } from "./core-start"
 import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
 import type { IEventBus } from "../state-machine/IStateMachine"
+import {
+  areDependenciesSatisfied,
+  getReadyNodes,
+  computeFinalWorkflowStatus,
+  computeSpawnBudget,
+  detectCycle,
+  findPendingDescendants,
+  validateReplanPreconditions,
+  classifyReplanNodes,
+  validateFrozenAndExistence,
+  applyReplanPatchToConfig,
+  buildReplanDbInputs,
+} from "./execution-core"
+import type {
+  ReplanValidateResult,
+} from "./execution-core"
+
+// Re-export execution-core symbols for backward compatibility.
+// All existing `from "./workflow-engine"` imports of these symbols continue to work.
+export {
+  areDependenciesSatisfied,
+  getReadyNodes,
+  computeFinalWorkflowStatus,
+  computeSpawnBudget,
+  detectCycle,
+  findPendingDescendants,
+  validateReplanPreconditions,
+  classifyReplanNodes,
+  validateFrozenAndExistence,
+  applyReplanPatchToConfig,
+  buildReplanDbInputs,
+} from "./execution-core"
+export type {
+  ReplanValidateResult,
+  ApplyReplanResult,
+  ReplanDbInputs,
+} from "./execution-core"
 
 /**
  * Dual-Path Architecture
@@ -51,8 +85,12 @@ import type { IEventBus } from "../state-machine/IStateMachine"
  *
  * The **Core path** (`state-machine/`, `scheduler/`, `group-manager/`) is
  * deliberately isolated from this file. It is NOT dead code; it serves as a
- * capability reservoir for future integration (shadow execution, tool path,
- * dry-run, richer transitions like FAILED→RUNNING retry).
+ * capability reservoir for future integration (tool path, richer transitions
+ * like FAILED→RUNNING retry).
+ *
+ * NOTE: dry-run / shadow-execution was previously listed as a reservoir use
+ * case but has been dropped — no concrete application scenario was found, so
+ * it will NOT be built (decision 2026-06-09). Do not reintroduce it.
  *
  * Integration between the two paths is intentionally avoided to preserve
  * testability of each independently (see ARCHITECTURE.md:281-282, decision D-PLAN).
@@ -290,127 +328,9 @@ export function installSubdagLifecycleBridge(args: {
 }
 
 // ============================================================================
-// Replan Pure Helpers (exported for unit testing — no Effect dependencies)
+// Replan Pure Helpers — canonical implementations in ./execution-core.ts.
+// Re-exported above for backward compatibility.
 // ============================================================================
-
-export type ReplanValidateResult =
-  | { ok: true }
-  | { ok: false; reason: string; detail?: unknown }
-
-export type ApplyReplanResult =
-  | { ok: true; newConfigNodes: DAGNodeConfig[] }
-  | { ok: false; reason: string; detail?: unknown }
-
-export type ReplanDbInputs = {
-  removeNodeIds: string[]
-  updates: UpdateNodeConfigInput[]
-  newNodes: CreateNodeInput[]
-  newMaxConcurrency: number
-}
-
-/**
- * Validates that a replan can proceed: rejects terminal workflows and empty patches.
- */
-export function validateReplanPreconditions(
-  workflow: { status: DAGWorkflowStatus },
-  patch: ReplanPatch,
-): ReplanValidateResult {
-  const terminalStatuses: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
-  if (terminalStatuses.includes(workflow.status)) {
-    return { ok: false, reason: `Cannot replan a terminal workflow (${workflow.status})` }
-  }
-  const isEmpty =
-    !(patch.add_nodes?.length) &&
-    !(patch.remove_nodes?.length) &&
-    !(patch.update_nodes?.length) &&
-    patch.new_max_concurrency === undefined
-  if (isEmpty) {
-    return { ok: false, reason: `Empty patch: nothing to do` }
-  }
-  return { ok: true }
-}
-
-/**
- * Partitions current nodes into frozen (queued/running/completed/failed/skipped) and
- * mutable (pending) sets. Frozen nodes cannot be removed or updated by a replan patch.
- */
-export function classifyReplanNodes(currentNodes: DAGNodeSession[]): {
-  frozen: DAGNodeSession[]
-  mutable: DAGNodeSession[]
-  frozenIds: Set<string>
-} {
-  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
-  const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
-  const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
-  const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
-  const frozenIds = new Set(frozen.map((n: DAGNodeSession) => n.node_id))
-  return { frozen, mutable, frozenIds }
-}
-
-/**
- * Rejects patch ops that touch frozen nodes or reference non-existent node IDs.
- */
-export function validateFrozenAndExistence(
-  patch: ReplanPatch,
-  frozenIds: Set<string>,
-  currentNodeIds: Set<string>,
-): ReplanValidateResult {
-  const touchFrozenRemove = (patch.remove_nodes ?? []).filter(id => frozenIds.has(id))
-  if (touchFrozenRemove.length > 0) {
-    return { ok: false, reason: `Cannot remove frozen nodes: ${touchFrozenRemove.join(', ')}` }
-  }
-  const touchFrozenUpdate = (patch.update_nodes ?? []).filter(u => frozenIds.has(u.node_id))
-  if (touchFrozenUpdate.length > 0) {
-    return { ok: false, reason: `Cannot update frozen nodes: ${touchFrozenUpdate.map(u => u.node_id).join(', ')}` }
-  }
-  const unknownRemoves = (patch.remove_nodes ?? []).filter(id => !currentNodeIds.has(id))
-  if (unknownRemoves.length > 0) {
-    return { ok: false, reason: `remove_nodes references unknown ids: ${unknownRemoves.join(', ')}` }
-  }
-  const unknownUpdates = (patch.update_nodes ?? []).filter(u => !currentNodeIds.has(u.node_id))
-  if (unknownUpdates.length > 0) {
-    return { ok: false, reason: `update_nodes references unknown ids: ${unknownUpdates.map(u => u.node_id).join(', ')}` }
-  }
-  return { ok: true }
-}
-
-/**
- * Builds the proposed new config node list from the patch (in-memory, before any DB writes).
- * - Strips removed nodes by configId (reverse namespace lookup).
- * - Applies update patches (new_config shallow merge, new_dependencies override).
- * - Appends added nodes.
- */
-export function applyReplanPatchToConfig(
-  workflowId: string,
-  currentConfigNodes: DAGNodeConfig[],
-  patch: ReplanPatch,
-): ApplyReplanResult {
-  let newConfigNodes: DAGNodeConfig[] = currentConfigNodes.map(n => ({ ...n }))
-  // remove: strip by configId (reverse namespace lookup)
-  const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
-  newConfigNodes = newConfigNodes.filter(n => !removeCfgIds.has(n.id))
-  // update: apply patches
-  for (const upd of patch.update_nodes ?? []) {
-    const cfgId = upd.node_id.split('::').slice(1).join('::')
-    const idx = newConfigNodes.findIndex(n => n.id === cfgId)
-    if (idx < 0) {
-      return { ok: false, reason: `update_nodes references unknown node: ${upd.node_id}` }
-    }
-    if (upd.new_config) {
-      newConfigNodes[idx] = {
-        ...newConfigNodes[idx],
-        ...upd.new_config,
-        id: cfgId,
-        dependencies: upd.new_dependencies ?? newConfigNodes[idx].dependencies,
-      }
-    } else if (upd.new_dependencies) {
-      newConfigNodes[idx] = { ...newConfigNodes[idx], dependencies: upd.new_dependencies }
-    }
-  }
-  // add: append new nodes (cfg.id stays un-namespaced in config)
-  for (const added of patch.add_nodes ?? []) newConfigNodes.push(added)
-  return { ok: true, newConfigNodes }
-}
 
 // Re-export for backward compatibility: all existing `from "./workflow-engine"` imports
 // of validateWorkflowConfigLimits (including test files) continue to work unchanged.
@@ -420,6 +340,9 @@ export { validateWorkflowConfigLimits } from "./limits"
 /**
  * Validates the post-patch config: node cap (20), concurrency range (1..10),
  * dependency resolution, required-node integrity, and cycle absence.
+ *
+ * NOTE: Stays in workflow-engine.ts (Advisory A1 方案 b) because it depends on
+ * RequiredNodesValidator which has Effect import — not eligible for execution-core.
  */
 export function validateReplanPostConfig(
   newConfigNodes: DAGNodeConfig[],
@@ -466,121 +389,11 @@ export function validateReplanPostConfig(
   if (removedRequireds.length > 0) {
     return { ok: false, reason: `Cannot remove required nodes: ${removedRequireds.join(', ')}` }
   }
-  // Cycle check
+  // Cycle check — uses execution-core detectCycle
   if (detectCycle(newConfigNodes)) {
     return { ok: false, reason: `patch introduces a cycle` }
   }
   return { ok: true }
-}
-
-/**
- * Builds DB-ready inputs from the validated patch. Namespaces all dependency references
- * and produces the UpdateNodeConfigInput[] and CreateNodeInput[] arrays consumed by
- * sessionService.atomicReplan.
- *
- * `currentMaxConcurrency` is required because `newMaxConcurrency = patch.new_max_concurrency ?? currentMaxConcurrency`.
- */
-export function buildReplanDbInputs(
-  workflowId: string,
-  patch: ReplanPatch,
-  newConfigNodes: DAGNodeConfig[],
-  currentNodes: DAGNodeSession[],
-  currentMaxConcurrency: number,
-): ReplanDbInputs {
-  const wfNs = (cfgId: string) => `${workflowId}::${cfgId}`
-  const updates: UpdateNodeConfigInput[] = (patch.update_nodes ?? []).map(u => {
-    const cfgId = u.node_id.split('::').slice(1).join('::')
-    const updatedCfg = newConfigNodes.find(n => n.id === cfgId)!
-    // Namespace new_dependencies if provided; fall back to the node's
-    // EXISTING stored (already-namespaced) dependencies when absent.
-    const existing = currentNodes.find(n => n.node_id === u.node_id)
-    const depsToWrite = u.new_dependencies
-      ? u.new_dependencies.map(d => wfNs(d))
-      : existing?.dependencies ?? []
-    return { nodeId: u.node_id, newConfig: updatedCfg, newDependencies: depsToWrite }
-  })
-  const newNodes: CreateNodeInput[] = (patch.add_nodes ?? []).map(a => ({
-    workflowId,
-    nodeId: wfNs(a.id),
-    name: a.name,
-    nodeName: a.name,
-    nodeType: a.worker_type,
-    config: a,
-    dependencyNodes: a.dependencies.map(d => wfNs(d)),
-    timeoutMs: a.timeout_ms,
-    maxRetries: a.retry?.max_attempts ?? 0,
-  }))
-  const newMaxConcurrency = patch.new_max_concurrency ?? currentMaxConcurrency
-  return {
-    removeNodeIds: patch.remove_nodes ?? [],
-    updates,
-    newNodes,
-    newMaxConcurrency,
-  }
-}
-
-/**
- * Inline cycle detector over a list of node configs (DFS-based).
- * Returns true when ANY cycle exists in the `dependencies[]` graph.
- *
- * @internal test-only — exported for unit tests to exercise validateReplanPostConfig's
- * cycle-detection path directly. Production callers should use WorkflowEngine.replanWorkflow.
- */
-export function detectCycle(nodes: DAGNodeConfig[]): boolean {
-  const graph = new Map<string, string[]>()
-  for (const n of nodes) graph.set(n.id, n.dependencies)
-  const visited = new Set<string>()
-  const inStack = new Set<string>()
-  const dfs = (id: string): boolean => {
-    if (inStack.has(id)) return true
-    if (visited.has(id)) return false
-    visited.add(id)
-    inStack.add(id)
-    for (const dep of graph.get(id) ?? []) if (dfs(dep)) return true
-    inStack.delete(id)
-    return false
-  }
-  for (const id of graph.keys()) if (dfs(id)) return true
-  return false
-}
-
-/**
- * 纯函数：从 failedNodeId 出发，沿 dependencies 反向图 BFS，收集所有 status === 'pending'
- * 的可达下游节点（被失败阻塞的节点）。用于 handleNodeFailure 中级联 skip。
- */
-export function findPendingDescendants(
-  allNodes: DAGNodeSession[],
-  failedNodeId: string,
-): DAGNodeSession[] {
-  const reverseGraph = new Map<string, string[]>()
-  for (const n of allNodes) {
-    for (const dep of n.dependencies ?? []) {
-      const existing = reverseGraph.get(dep)
-      if (existing) existing.push(n.node_id)
-      else reverseGraph.set(dep, [n.node_id])
-    }
-  }
-  const pendingMap = new Map<string, DAGNodeSession>()
-  for (const n of allNodes) {
-    if (n.status === 'pending') pendingMap.set(n.node_id, n)
-  }
-  const result: DAGNodeSession[] = []
-  const seen = new Set<string>([failedNodeId])
-  const queue: string[] = [failedNodeId]
-  while (queue.length > 0) {
-    const cur = queue.shift()!
-    const downstream = reverseGraph.get(cur) ?? []
-    for (const dId of downstream) {
-      if (seen.has(dId)) continue
-      seen.add(dId)
-      const pendingNode = pendingMap.get(dId)
-      if (pendingNode) {
-        result.push(pendingNode)
-        queue.push(dId)
-      }
-    }
-  }
-  return result
 }
 
 export function registerEngine(workflowId: string, engine: WorkflowEngine): void {
@@ -628,36 +441,9 @@ const make = Effect.gen(function* () {
   }
 
   // ============================================================================
-  // 辅助函数
+  // 辅助函数 — areDependenciesSatisfied / getReadyNodes / computeFinalWorkflowStatus
+  // are now imported from ./execution-core.ts (A layer, pure logic)
   // ============================================================================
-
-  /**
-   * 检查节点的所有依赖是否已完成
-   */
-  const areDependenciesSatisfied = (node: DAGNodeSession, completedNodeIds: Set<string>): boolean => {
-    if (!node.dependencies || node.dependencies.length === 0) {
-      return true
-    }
-    return node.dependencies.every((depId: string) => completedNodeIds.has(depId))
-  }
-
-  /**
-   * 获取所有就绪的节点（依赖已满足且尚未执行）
-   */
-  const getReadyNodes = (
-    nodes: DAGNodeSession[],
-    completedNodeIds: Set<string>,
-    failedNodeIds: Set<string>,
-    runningNodeIds: Set<string>
-  ): DAGNodeSession[] => {
-    return nodes.filter(node => {
-      const isNotRunning = !runningNodeIds.has(node.node_id)
-      const isNotCompleted = !completedNodeIds.has(node.node_id)
-      const isNotFailed = !failedNodeIds.has(node.node_id)
-      const depsSatisfied = areDependenciesSatisfied(node, completedNodeIds)
-      return isNotRunning && isNotCompleted && isNotFailed && depsSatisfied
-    })
-  }
 
   // ============================================================================
   // Node Spawn — Full daemon-flow for a single node (§10 compliant)
@@ -1205,7 +991,7 @@ const make = Effect.gen(function* () {
 
   /**
    * 检测所有节点是否已进入终态，若是则收敛 workflow.status。
-   * workflow 收敛决策：任一 required 节点 failed → 'failed'；否则 → 'completed'。
+   * workflow 收敛决策由 computeFinalWorkflowStatus (execution-core) 提供。
    * 幂等守卫：先读 workflow.status，若已终态则 no-op（铁律#2 + 并发 fork 竞态）。
    * Session 层隔离：使用 DAGWorkflowStatus 数组，不引用 Core 层 WorkflowStatus。
    */
@@ -1220,15 +1006,8 @@ const make = Effect.gen(function* () {
       if (SESSION_TERMINAL.includes(workflow.status)) return
 
       const allNodes = yield* sessionService.listNodes(workflowId)
-      const hasInProgress = allNodes.some((n: DAGNodeSession) =>
-        n.status === 'pending' || n.status === 'queued' || n.status === 'running'
-      )
-      if (hasInProgress) return
-
-      const hasRequiredFailed = allNodes.some((n: DAGNodeSession) =>
-        n.config.required === true && n.status === 'failed'
-      )
-      const targetStatus: DAGWorkflowStatus = hasRequiredFailed ? 'failed' : 'completed'
+      const targetStatus = computeFinalWorkflowStatus(allNodes)
+      if (!targetStatus) return
 
       yield* sessionService.updateWorkflowStatus(workflowId, targetStatus)
     }).pipe(Effect.catchCause(() => Effect.void))
@@ -1337,7 +1116,7 @@ const make = Effect.gen(function* () {
         .filter(id => !runningNodeIds.has(id) && !completedNodeIds.has(id) && !failedNodeIds.has(id) && !skippedNodeIds.has(id))
         .length
       const maxConcurrency = concurrencyRegistry.get(workflowId) ?? Number.POSITIVE_INFINITY
-      const budget = maxConcurrency - runningNodeIds.size - inFlightCount
+      const budget = computeSpawnBudget(maxConcurrency, runningNodeIds.size, inFlightCount)
       if (budget <= 0) {
         // No spawn budget, but if skips occurred, check for workflow convergence
         if (skipCandidates.length > 0) {

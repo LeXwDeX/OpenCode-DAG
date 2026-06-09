@@ -28,6 +28,17 @@ import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
 import { FallbackTrigger } from "../state-machine/types"
 import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import {
+  getValidNextSessionWorkflowStatuses,
+  getValidNextSessionNodeStatuses,
+} from "./execution-core"
+
+// Re-export execution-core state transition tables for backward compatibility.
+// All existing `from "./session-service"` imports of these symbols continue to work.
+export {
+  getValidNextSessionWorkflowStatuses,
+  getValidNextSessionNodeStatuses,
+} from "./execution-core"
 
 // ============================================================================
 // Iron Law Enforcement: Module-Level Event Bus & Validation Helpers
@@ -54,51 +65,9 @@ export function getEventBus(): IEventBus | undefined {
   return _eventBus
 }
 
-/**
- * Session-layer valid next workflow statuses (Iron Law #1/#2).
- * Terminal states: completed, failed, cancelled — no outgoing transitions.
- */
-export function getValidNextSessionWorkflowStatuses(
-  currentStatus: DAGWorkflowStatus
-): DAGWorkflowStatus[] {
-  switch (currentStatus) {
-    case "pending":
-      return ["running", "failed", "cancelled"]
-    case "running":
-      return ["completed", "failed", "cancelled", "paused"]
-    case "paused":
-      return ["running", "cancelled"]
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return []
-    default:
-      return []
-  }
-}
-
-/**
- * Session-layer valid next node statuses (Iron Law #1/#2).
- * Terminal states: completed, failed, skipped — no outgoing transitions.
- */
-export function getValidNextSessionNodeStatuses(
-  currentStatus: DAGNodeStatus
-): DAGNodeStatus[] {
-  switch (currentStatus) {
-    case "pending":
-      return ["queued", "running", "skipped"]
-    case "queued":
-      return ["running", "skipped"]
-    case "running":
-      return ["completed", "failed", "pending"]
-    case "completed":
-    case "failed":
-    case "skipped":
-      return []
-    default:
-      return []
-  }
-}
+// State transition tables (getValidNextSessionWorkflowStatuses, getValidNextSessionNodeStatuses)
+// are now in ./execution-core.ts (A layer, pure logic). Imported above for internal use,
+// re-exported above for backward compatibility.
 
 /**
  * Build a WorkflowEvent from a session-layer status transition (Iron Law #3).
