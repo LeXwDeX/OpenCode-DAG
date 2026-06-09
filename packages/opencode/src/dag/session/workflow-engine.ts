@@ -13,6 +13,7 @@ import type {
 import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import { buildOutputMap, splitByCondition } from "./condition-eval"
 import { collectInputMapping } from "./input-mapping-collector"
+import { injectCollectedDataToPrompt } from "./prompt-inject"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -654,13 +655,32 @@ const make = Effect.gen(function* () {
       })
 
       // 5.5 WP-C2: Collect upstream outputs for input_mapping (pure, read-only).
-      // Result is held locally for WP-C3 prompt injection (not yet wired).
       // `outputMap` is provided by scheduleReadyNodes via buildOutputMap(allNodes).
       const collectedInputData = collectInputMapping(
         node.config.input_mapping,
         outputMap ?? new Map(),
         node.config.dependencies,
       )
+
+      // 5.6 WP-C3: Inject collected upstream data into prompt block (pure, sync).
+      // The injection is additive: the block is inserted after DAG instructions
+      // and before `Your task:` — the original worker_config.prompt is never replaced.
+      const injectResult = injectCollectedDataToPrompt(collectedInputData)
+
+      if (injectResult.injected || injectResult.audit.length > 0) {
+        yield* safeAppendLog({
+          nodeId: node.node_id,
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Input injection: ${injectResult.audit.filter((a) => a.status === "injected").length}/${injectResult.audit.length} entries injected for node ${node.node_id}`,
+          executionPhase: 'input_injected',
+          logData: {
+            audit: injectResult.audit,
+            injectedCount: injectResult.audit.filter((a) => a.status === "injected").length,
+          },
+        })
+      }
 
       // 6. Prepend DAG node instructions + run prompt with timeout and retry
       const promptInstruction = [
@@ -669,6 +689,9 @@ const make = Effect.gen(function* () {
         `Use status='completed' and output for success. Use status='failed' and error for fatal errors.`,
         `If you do not call node_complete, the node will be marked failed.`,
         ``,
+        ...(injectResult.injected && injectResult.injectionBlock.length > 0
+          ? [...injectResult.injectionBlock, '']
+          : []),
         `Your task:`,
         (node.config.worker_config?.prompt ?? ''),
       ].join("\n")

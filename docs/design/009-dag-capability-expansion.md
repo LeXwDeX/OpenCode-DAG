@@ -89,25 +89,13 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 ---
 
-### 特性 C — 数据流（工作量：中偏大）
+### 特性 C — 数据流 ✅ 特性整体已完成（commit `3a8f533f6`）
 
-**目标**：节点可声明从上游节点 output 取值作为自身输入（注入 prompt 或结构化 input）。
+节点可声明从上游节点 output 取值作为自身输入（注入 prompt 或结构化 input）。WP-C1（`DAGNodeConfig.input_mapping` 字段 Record 形式 `Record<inputKey, DAGInputMappingEntry {ref_node, ref_path?}>` + schema 校验引用 ⊆ dependencies 强制 + 缺省向后兼容 + canonical 文档 API.md + USER_GUIDE.md 同步）+ WP-C2（独立纯函数模块 `input-mapping-collector.ts`，4 类运行期缺失去语义完整：`null_output` / `path_not_found` / `non_object_output` / `beyond_deps`；ref_path 缺省 = 整个 output；workflow-engine.ts 集成 step 5.5 collectedInputData 局部 const）+ WP-C3（独立纯函数模块 `prompt-inject.ts` + spawnReadyNode step 5.6 集成：叠加注入到 prompt 数组 `''` 后 `'Your task:'` 前；4 类 missing 全部 skip + distinct audit reason；体积保护 5000 per-entry + 20000 total cap；appendNodeLog executionPhase: 'input_injected'；scenario-26 DB 级集成测试 3 cases 端到端验证）。
 
-**核心约束**：
-- 数据引用声明式（存 config），引用语法可序列化、可校验（引用的上游节点必须是声明依赖）
-- output 收集按依赖图聚合 completed 节点，不得跨依赖边界取值（防止隐式依赖）
-- 注入点在 `spawnReadyNode` prompt 构造处，不破坏现有 `worker_config.prompt` 语义（叠加而非替换）
-- 数据流不引入新的 ready 阻塞（依赖已保证上游完成）
+**核心约束守恒**：引用 ⊆ dependencies schema + 运行期双重强制；输出收集按依赖图聚合 completed 节点；叠加注入（worker_config.prompt 原位不动）；数据流不引入新 ready 阻塞（纯同步）；注入可审计（executionPhase + audit details）；体积可控（5000/20000 cap）。scenario-26 DB 级集成测试 PASS；全量 DAG 回归 369/369 + DAG core 53/53 + typecheck 0 errors。
 
-**WP 拆解**：
-
-| WP | 内容 | 工作量 | 关键约束 |
-|---|---|---|---|
-| C1 | `DAGNodeConfig.input_mapping` 字段（output 引用语法）+ schema | 小 | 引用必须 ⊆ dependencies；声明式 |
-| C2 | 上游 output 收集（按依赖聚合 completed 节点 output） | 中 | 只读 DB；不跨依赖取值 |
-| C3 | prompt/input 注入（改 `spawnReadyNode` 构造，叠加上游数据） | 中 | 不替换现有 prompt；注入可审计 |
-
-**依赖**：C1 → C2 → C3。建议在 B 之后（复用 B 的声明式字段扩展模式）。
+**INFO 已知限制（review P2 级别，不阻塞）**：workflow-engine.ts 的 `injected && injectionBlock.length > 0` 双重判断冗余；prompt-inject.test.ts 2 个 single-use helper 可 inline；`injectResult.audit.filter(...).length` 重复计算 2 次。均为 P2 micro-optimization，可后续补强。
 
 ---
 
@@ -294,15 +282,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/input-mapping-collector.ts`（201 行，collectInputMapping + 内部 resolvePath pure + PATH_NOT_FOUND sentinel + OutputMissingReason + CollectedValue + CollectedInputMap + JSDoc 4 类缺失去语义表）+ `packages/opencode/src/dag/session/workflow-engine.ts`（spawnReadyNode outputMap? + step 5.5 collectedInputData）+ `packages/opencode/src/dag/session/__tests__/node-input-mapping-collect.test.ts`（21 tests）。
 
-#### WP-C3 — prompt/input 注入
+#### WP-C3 — prompt/input 注入 ✅ 已完成
 
-- **前置/输入契约**：WP-C2 完成（已能收集上游数据）。
-- **输出契约**：在 `spawnReadyNode` prompt 构造处，将收集到的上游数据**叠加**注入（不替换现有 `worker_config.prompt` 语义）。注入内容可审计（日志/snapshot 可见注入了什么）。
-- **验收标准**：声明了 input_mapping 的节点 spawn 时 prompt/input 含上游数据；未声明的节点 prompt 构造不变（向后兼容）；注入可在节点日志/snapshot 观测。
-- **边界条件**：(a) 注入数据为空（C2 返回缺省）→ 不破坏 prompt 构造；(b) 注入不得使 prompt 超出合理体积（大 output 需有截断或引用策略）；(c) 注入顺序/格式确定（可复现）。
-- **测试覆盖要求**：注入逻辑单元测试（有数据注入 / 空数据不破坏 / 现有 prompt 不变）；可审计性测试（注入内容可观测）；DB 级集成测试（端到端：上游完成→下游 spawn 含数据）。
-- **archgate 关注点**：是否叠加而非替换现有 prompt 语义；注入可审计；大 output 体积策略。
-- **DoD**：通用 DoD + 数据正确注入 + 现有 prompt 兼容 + 可审计 + 体积可控。
+独立纯函数模块 `prompt-inject.ts`（187 行，仅 `import type { CollectedInputMap } from "./input-mapping-collector"`，零 Effect/DB/Logger/mutable state 依赖）。`injectCollectedDataToPrompt(collectedInputData): InjectionResult`（返回 `{injectionBlock: readonly string[], audit: readonly InjectionAuditEntry[], injected: boolean}`）—— caller inserts block 模式（不合并 merged prompt）。4 类运行期缺失去语义完整 + JSDoc 文档化：null_output / non_object_output / path_not_found / beyond_deps → 全部 skip + distinct audit reason。注入格式：JSON 序列化 + delimiter 块（`=== Collected Input Data ===` / `=== End Collected Data ===`）+ 每行 `[inputKey]: <JSON-serialized-value>`。体积保护：`PER_ENTRY_CHAR_CAP = 5000`（超则截断 + `...[truncated N chars]` 后缀 + audit status 'truncated'）+ `TOTAL_PAYLOAD_CHAR_CAP = 20000`（超则剩余 entry 全 drop + audit status 'skipped' reason 'payload_overflow'）。向后兼容：无 input_mapping 节点 → collectedInputData 空 → 函数 early return `{injectionBlock: [], audit: [], injected: false}`（零开销）。workflow-engine.ts 集成点 L16 import + L665-697 step 5.6：调用 helper（L668）→ if (injected || audit.length > 0) appendNodeLog(executionPhase: 'input_injected', logData: {audit, injectedCount})（L677）→ prompt 数组 spread（L691-695 位置：`[DAG 指令, '', ...injectionBlock, 'Your task:', worker_config.prompt]`，INFO 3 处理 + 不替换 worker_config.prompt）。scenario-26 DB 级集成测试 3 cases 端到端：Test A 正常（上游 completed → 下游 prompt 含 `[upstreamResult]: <data-from-A>` + audit 记录 injected）+ Test B null_output（上游 output null → 下游 injectionBlock 空 + audit 记录 skipped reason 'null_output'）+ Test C 无 input_mapping（下游 collectedInputData 空 → prompt 完全不变向后兼容）。14 unit tests（prompt-inject.test.ts 未修改，覆盖 9 scenarios：正常 3 / 4 类 missing 4 / 体积截断 2 / 混合 1 / 空 2 / 纯度 2）+ 3 DB 集成测试 + 全量 DAG 回归 369/369 + DAG core 53/53 + typecheck 0 errors。archgate 6 项约束全 honored：叠加注入（prompt 数组 spread 不替换）/ 无 input_mapping 节点 prompt 完全不变 / 注入内容可审计（appendNodeLog 执行）/ 4 类 missing 不注入（helper 内处理）/ 不引入 ready 阻塞（纯同步）/ executionPhase snake_case 'input_injected'。纯度验证：prompt-inject.ts grep 0 forbidden keywords（Effect/DB/Logger/emit/console.log/TODO/StateMachine），仅 import type。INFO 1-4 全处理。review INFO 4 项均为 P2 级别冗余/可 inline，不阻塞。
+
+地基承载：`packages/opencode/src/dag/session/prompt-inject.ts`（187 行，4 类 missing policy table JSDoc + volume protection + injection format 自文档化 + injectCollectedDataToPrompt + InjectionStatus + InjectionAuditEntry + InjectionResult）+ `packages/opencode/src/dag/session/workflow-engine.ts`（spawnReadyNode step 5.6 集成）+ `packages/opencode/src/dag/session/__tests__/prompt-inject.test.ts`（14 tests）+ `packages/opencode/src/dag/session/__tests__/scenario-26-data-flow.test.ts`（3 DB 级集成测试）。
 
 ---
 
