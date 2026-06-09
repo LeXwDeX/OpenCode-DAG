@@ -112,6 +112,50 @@ DAG 工作流通过 JSON 配置文件定义：
 | `retry` | object | 否 | 重试策略 `{ max_attempts, delay_ms }` |
 | `worker_type` | string | 是 | Worker 类型（路由到具体 agent） |
 | `worker_config` | object | 是 | Worker 配置 `{ agent, prompt, ... }` |
+| `condition` | object | 否 | 声明式条件表达式（见下文）。缺省 = 无条件执行（向后兼容）。**required=true 节点禁止声明此字段。** |
+
+#### DAGNodeCondition（条件表达式，WP-B1）
+
+节点可声明执行条件；依赖满足后引擎求值条件（纯函数），为假则主动跳过。条件是**声明式结构化对象**，禁止闭包/函数/代码注入。
+
+```json
+{
+  "ref_node": "upstream-step",
+  "op": "eq",
+  "value": "done"
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `ref_node` | string | 是 | 引用的上游节点 ID（必须是本节点 `dependencies` 之一） |
+| `op` | string | 是 | 运算符：`eq` \| `ne` \| `gt` \| `lt` \| `gte` \| `lte` \| `exists` \| `not_exists` |
+| `value` | any | 否 | 比较基准值（`exists` / `not_exists` 运算符忽略） |
+
+**校验规则**（schema 阶段强制，违反即拒绝创建/replan）：
+
+- `required: true` 节点禁止声明 `condition`（reason: `required node cannot declare condition`）
+- `ref_node` 必须是当前节点 `dependencies` 的子集（reason: `condition refs must ⊆ dependencies`）
+- `condition` 必须是纯结构化对象（禁止函数/闭包/字符串 DSL）
+
+**与 `FallbackConfig.condition` 的区别**：
+
+- 本类型（`DAGNodeConfig.condition`）是**节点级**声明式条件（结构化对象），决定节点是否执行。
+- `FallbackConfig.condition`（`group-manager/types.ts`）是 **group 级**概念（string 形态），用于 shadow 节点 custom trigger，与本字段语义完全不同。
+
+示例：节点 B 仅在依赖节点 A 的上游 output 存在时执行：
+
+```json
+{
+  "id": "step-b",
+  "name": "Conditional Step",
+  "dependencies": ["step-a"],
+  "required": false,
+  "condition": { "ref_node": "step-a", "op": "exists" },
+  "worker_type": "implement",
+  "worker_config": { "prompt": "当 step-a 有 output 时执行" }
+}
+```
 
 ---
 

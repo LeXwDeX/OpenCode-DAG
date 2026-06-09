@@ -10,7 +10,7 @@ import type {
   UpdateNodeConfigInput,
   UpdateNodeStatusInput,
 } from "./session-service"
-import { validateWorkflowConfigLimits } from "./limits"
+import { validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -256,6 +256,14 @@ export function validateReplanPostConfig(
       if (!cfgIdSet.has(dep)) {
         return { ok: false, reason: `unresolved dependency: node '${n.id}' references '${dep}'` }
       }
+    }
+  }
+  // WP-B1 (INFO 2): per-node condition schema validation on post-replan config.
+  // Without this, replanned configs could bypass the required↔condition 互斥 check.
+  for (const n of newConfigNodes) {
+    const condResult = validateNodeCondition(n)
+    if (!condResult.ok) {
+      return { ok: false, reason: `node '${n.id}': ${condResult.reason}` }
     }
   }
   const requiredValidator = new RequiredNodesValidator()

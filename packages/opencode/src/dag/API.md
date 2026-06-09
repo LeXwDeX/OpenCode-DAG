@@ -29,6 +29,10 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 - [6. 查询 API](#6-查询-api)
   - [IDAGQuery](#idagquery)
 - [7. 事件系统](#7-事件系统)
+- [8. DAG 配置类型](#8-dag-配置类型)
+  - [DAGConfig](#dagconfig工作流配置)
+  - [DAGNodeConfig](#dagnodeconfig节点配置)
+  - [DAGNodeCondition](#dagnodecondition声明式条件表达式wp-b1)
 
 ---
 
@@ -613,3 +617,85 @@ eventBus.subscribe('*', (event) => {
 ```
 
 > 跨模块事件（group.* / worktree.*）通过 `as unknown as WorkflowEvent | NodeEvent` 类型桥接广播，参见 ARCHITECTURE.md §0.4。
+
+---
+
+## 8. DAG 配置类型
+
+> 路径: `src/dag/session/types.ts`
+
+> **Canonical source of truth**: 以下类型的 TypeScript 接口定义是该 DAG 配置形状的**唯一权威来源**。USER_GUIDE.md 中的示例、模板文件、工具文档必须与这些接口保持一致。
+
+### DAGConfig（工作流配置）
+
+```typescript
+interface DAGConfig {
+  name: string                // 工作流名称
+  description?: string        // 描述
+  nodes: DAGNodeConfig[]      // 节点定义列表（1-20 个）
+  max_concurrency: number     // 最大并发 worker 数（1-10）
+  timeout_ms?: number         // 工作流级别超时（毫秒）
+}
+```
+
+### DAGNodeConfig（节点配置）
+
+```typescript
+interface DAGNodeConfig {
+  id: string                                    // 节点唯一标识（bare cfg.id，无 namespace）
+  name: string                                  // 显示名称
+  description?: string                          // 描述
+  dependencies: string[]                        // 依赖的节点 ID 列表
+  required: boolean                             // 必需节点（跳过触发违规）
+  timeout_ms?: number                           // 节点超时（毫秒）
+  retry?: { max_attempts: number; delay_ms: number }
+  worker_type: string                           // Worker 类型（路由到具体 agent）
+  worker_config: Record<string, unknown>        // Worker 配置
+  condition?: DAGNodeCondition                  // 声明式条件表达式（WP-B1，见下）
+}
+```
+
+**字段语义说明**：
+
+- `dependencies`: bare `cfg.id` 值（**不包含** `workflowId::` 前缀）。Namespacing 由引擎在节点 materialization 阶段（`dagworker.ts`）完成。
+- `required`: 为 `false` 时，节点失败/跳过不会导致工作流级失败（由 `maybeFinalizeWorkflow` 处理）。
+- `worker_type`: 经 `Agent.Service.get(worker_type)` 路由；必须匹配已注册 agent。内置 agents: `build`, `plan`, `general`, `explore`, `scout`。用户可通过 `opencode.json` 的 `agents: Record<string, AgentInfo>` 注册自定义 agent。
+- `worker_config`: 透传给 worker 的不透明配置袋。已知 keys: `prompt`（string）、`agent`（agent 名覆盖）、`use_worktree: true`（触发 worktree 隔离）。
+
+### DAGNodeCondition（声明式条件表达式，WP-B1）
+
+```typescript
+type DAGConditionOp = 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'exists' | 'not_exists'
+
+interface DAGNodeCondition {
+  ref_node: string      // 引用的上游节点 ID（必须是 dependencies 子集）
+  op: DAGConditionOp    // 比较运算符
+  value?: unknown       // 比较基准值（exists/not_exists 忽略）
+}
+```
+
+**校验规则**（`createWorkflow` / `validateReplanPostConfig` schema 强制）：
+
+| 规则 | 违反时 reason |
+|------|--------------|
+| 声明 `condition` 的节点 `required` 必须为 `false` | `required node cannot declare condition` |
+| `ref_node` 必须在节点的 `dependencies` 列表中 | `condition refs must ⊆ dependencies: ref_node '<x>' not in dependencies [...]` |
+| `condition` 必须是结构化对象（禁止函数/闭包/数组/字符串） | `condition must be a structured object, got <type>` |
+| `ref_node` 必须为非空 string | `condition.ref_node must be a non-empty string, got <type>` |
+| `op` 必须是白名单运算符之一 | `condition.op must be one of eq|ne|...|not_exists, got <x>` |
+| 缺省（`condition` 未提供/undefined）——**向后兼容** | （不拒绝，节点无条件执行） |
+
+**运行时语义**（WP-B2/B3 实现）：
+- 当节点所有依赖满足后，求值 `condition`（纯函数，无副作用）。
+- `condition` 为真 → 节点进入就绪（queued → running）。
+- `condition` 为假 → 节点经状态机主动跳过（skipped），并级联下游。
+- 缺省 `condition` → 无条件执行（向后兼容）。
+
+**与 `group-manager/types.ts:FallbackConfig.condition?:string` 的区别**（INFO 4）：
+
+| 概念 | 类型 | 作用域 | 语义 |
+|------|------|--------|------|
+| `DAGNodeConfig.condition` | `DAGNodeCondition`（结构化对象） | **节点级** | 声明式条件，决定节点是否执行（skip vs ready）；schema 强制 required 互斥 + ref⊆deps |
+| `FallbackConfig.condition` | `string` | **group 级**（core 储备池） | shadow 节点 custom trigger 的表达式字符串，与节点执行条件无关 |
+
+两者语义完全不同，不可混淆；前者在 `session/types.ts`，后者在 `group-manager/types.ts`。

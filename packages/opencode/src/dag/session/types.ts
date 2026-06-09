@@ -57,6 +57,52 @@ export type DAGNodeStatus =
 // ============================================================================
 
 /**
+ * 条件表达式运算符（WP-B1 声明式条件语法）。
+ *
+ * - `eq` / `ne` — 值相等/不等
+ * - `gt` / `lt` / `gte` / `lte` — 数值/字典序比较
+ * - `exists` / `not_exists` — 检查上游 output 是否存在（忽略 value）
+ *
+ * 所有运算符作用于上游节点的 output（WP-B2 求值），value 为比较基准。
+ * 缺省/缺省 value 的语义由 WP-B2 定义（运行时），schema 阶段仅校验结构合法性。
+ */
+export type DAGConditionOp = 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'exists' | 'not_exists'
+
+/**
+ * 所有合法的 DAGConditionOp 值（schema 校验白名单）。
+ * 与 `DAGConditionOp` 类型同步维护；修改类型时必须同步更新此常量。
+ */
+export const DAG_CONDITION_OPS: readonly string[] = [
+  'eq', 'ne', 'gt', 'lt', 'gte', 'lte', 'exists', 'not_exists',
+] as const
+
+/**
+ * 声明式条件表达式（WP-B1）。
+ *
+ * 用于 `DAGNodeConfig.condition` 字段，决定节点是否执行（WP-B2 求值）。
+ * 必须是纯结构化对象，**禁止闭包/函数/代码注入**。
+ *
+ * 字段语义：
+ * - `ref_node: string` — 引用的上游节点 ID，**必须是当前节点 `dependencies` 的子集**（schema 强制）。
+ * - `op: DAGConditionOp` — 比较运算符。
+ * - `value?: unknown` — 比较基准值。`exists` / `not_exists` 运算符忽略此字段。
+ *
+ * **与 `group-manager/types.ts:FallbackConfig.condition?:string` 的区别**：
+ * - `DAGNodeCondition`（本类型）是**节点级**条件，结构化对象，声明式可序列化，
+ *   影响节点是否执行（skip vs ready）。
+ * - `FallbackConfig.condition` 是 **group 级**概念，string 形态，用于 shadow 节点
+ *   的 custom trigger，与节点执行条件无关。两者语义完全不同，不可混淆。
+ */
+export interface DAGNodeCondition {
+  /** 引用的上游节点 ID（必须是当前节点 dependencies 的子集） */
+  ref_node: string;
+  /** 比较运算符 */
+  op: DAGConditionOp;
+  /** 比较基准值（exists/not_exists 运算符忽略此字段） */
+  value?: unknown;
+}
+
+/**
  * DAG 节点定义
  *
  * **Architectural note** — `DAGNodeConfig` and `DAGConfig` (below) are the single
@@ -83,6 +129,10 @@ export type DAGNodeStatus =
  * - `worker_config: Record<string, unknown>` — opaque bag passed to workers.
  *   Known recognized keys: `prompt` (string), `agent` (agent name override),
  *   `use_worktree: true` (opt-in worktree isolation per B4-WP1).
+ *
+ * - `condition?: DAGNodeCondition` — (WP-B1) 声明式条件表达式。条件不满足时节点跳过（WP-B2/B3）。
+ *   **required 节点禁止声明 condition**（§3.2 方案 1，schema 校验拒绝）。
+ *   缺省 = 无条件执行（向后兼容，现有配置不受影响）。
  */
 export interface DAGNodeConfig {
   /** 节点唯一标识 */
@@ -106,6 +156,15 @@ export interface DAGNodeConfig {
   worker_type: string;
   /** Worker 特定配置 */
   worker_config: Record<string, unknown>;
+  /**
+   * 声明式条件表达式（WP-B1）。
+   *
+   * - 缺省（undefined）= 节点无条件执行（向后兼容）。
+   * - required 节点禁止声明此字段（schema 校验拒绝）。
+   * - `ref_node` 必须是当前节点 `dependencies` 的子集（schema 校验拒绝越界引用）。
+   * - 运行时求值由 WP-B2 实现（纯函数，无副作用）。
+   */
+  condition?: DAGNodeCondition;
 }
 
 /**

@@ -159,15 +159,15 @@ core 储备池（`state-machine/` `group-manager/` `scheduler/` `worktree-manage
 
 **决策**：首版用**重跑**——节点状态经状态机归位到 pending/queued（合法转移），由现有 scheduleReadyNodes/ spawnReadyNode 重新 spawn。子 session 半截对话丢弃，不做 resume。resume 语义作为后续优化项，不阻塞 WP-A3。
 
-### 3.2 [特性 B] required 节点 + 条件不满足 — **待决策**
+### 3.2 [特性 B] required 节点 + 条件不满足 — **已决策：方案 1，required 禁止 condition**（用户 2026-06-08 确认）
 
 "required 不可跳过"是四铁律之一。但若 required 节点声明了条件且条件不满足，存在语义冲突：
 
-- **方案 1**：required 节点禁止声明 condition（schema 校验拒绝）——铁律优先，最清晰
-- **方案 2**：required + 条件不满足 → 工作流失败（required 必达，条件不满足即视为不可达）
-- **方案 3**：条件跳过的 required 节点不计入"必达"集（弱化 required 语义）——**不推荐**（破坏铁律）
+- **方案 1（已选）**：required 节点禁止声明 condition（schema 校验拒绝）——铁律优先，最清晰
+- ~~**方案 2**：required + 条件不满足 → 工作流失败（required 必达，条件不满足即视为不可达）~~
+- ~~**方案 3**：条件跳过的 required 节点不计入"必达"集（弱化 required 语义）~~——**不推荐**（破坏铁律）
 
-**决策建议**：方案 1（required 与 condition 互斥，schema 层拒绝）。最终决策在 WP-B1 启动前确认。
+**决策**：方案 1——schema 校验在 createWorkflow / validateWorkflowConfigLimits（`limits.ts`）阶段拒绝 `required && condition` 同时存在的节点配置；非法配置直接返回 clear error 不进入 DB。用户写错了会得清晰错误消息（reason = "required node cannot declare condition" 或等价）。条件节点默认 non-required，required 节点默认无条件执行。
 
 ### 3.3 [特性 D] sub-DAG 递归深度上限 + 父子桥机制 — **待决策**
 
@@ -270,15 +270,11 @@ archgate（架构校验，触治理面强制）
 
 ### 特性 B — 条件分支
 
-#### WP-B1 — DAGNodeConfig.condition 字段 + schema
+#### WP-B1 — DAGNodeConfig.condition 字段 + schema ✅ 已完成
 
-- **前置/输入契约**：无前置 WP；**§3.2 决策已锁定**（required 与 condition 是否互斥）。
-- **输出契约**：`DAGNodeConfig` 新增 `condition?` 字段，承载**声明式、可序列化**的条件表达（禁代码注入/闭包）。条件引用的上游节点必须 ⊆ `dependencies`。canonical schema 文档同步更新。
-- **验收标准**：合法 condition 通过 schema 校验；非法（引用非依赖节点 / 非声明式 / required 节点带 condition 若 §3.2=方案1）被拒绝并给清晰 reason。
-- **边界条件**：(a) condition 引用了不在 dependencies 的节点 → schema 拒绝；(b) condition 语法非法 → 拒绝；(c) §3.2=方案1 时 required+condition → 拒绝；(d) 空/缺省 condition → 节点无条件执行（向后兼容，现有 config 不受影响）。
-- **测试覆盖要求**：schema 校验单元测试（合法 / 引用越界 / 非声明式 / required 冲突 / 缺省兼容）。canonical 文档示例与 schema 一致性。
-- **archgate 关注点**：condition 语法是否真声明式（不可图灵完备/不可注入）；引用 ⊆ dependencies 的约束是否 schema 强制；required 铁律与 condition 的边界（§3.2）。
-- **DoD**：通用 DoD + condition 字段 schema 完整 + 非法形态全拒绝 + 缺省向后兼容。
+`DAGNodeConfig` 新增可选 `condition?: DAGNodeCondition` 字段（结构化对象：`{ref_node: string, op: DAGConditionOp, value?: unknown}`，含白名单 8 ops union；INFO 1 设计决策）；新增 `DAGNodeCondition` interface + `DAGConditionOp` type + `DAG_CONDITION_OPS` readonly const（INFO 3 处理：用 `readonly string[]` + `as const`）。`limits.ts` 新增 `validateNodeCondition` helper 返回形态与 `validateWorkflowConfigLimits` 一致（`{ok:true} | {ok:false, reason}`）；覆盖缺省/null 兼容 + required↔condition 互斥（§3.2 方案 1 强制执行，reason = "required node cannot declare condition"）+ 非声明式拒绝（`typeof cond !== 'object' || Array.isArray(cond)`）+ ref⊆dependencies 强制（schema 层拒绝越界引用，不在运行期逃逸）+ op 白名单校验。`session-service.ts` createWorkflow 入口循环 per-node 调用；`workflow-engine.ts` validateReplanPostConfig 校验链添加同样验证步骤（INFO 2 处理，replanned config 不绕过互斥检查）。canonical 文档同步更新：`API.md` §8 DAG 配置类型（含 FallbackConfig.condition vs DAGNodeConfig.condition 语义差异表）+ `USER_GUIDE.md` DAGNodeCondition 小节 + 字段示例；`types.ts` DAGNodeCondition JSDoc 顶部注明差异（INFO 4 处理）。schema unit tests 18 cases：4 正向（eq/ne/exists/not_exists op 白名单命中）+ 2 ref 越界 + 2 required 互斥 + 7 非声明式/非法结构 + 3 缺省兼容。验收：18 schema tests + 252 全量 DAG session + 53 全量 DAG + 233 受影响回归 + typecheck 0 errors。INFO 1/2/3/4 全部处理。P4 INFO（review 建议）：null 显式测试 + gt/lt/gte/lte op 正向测试可后续补充（schema 白名单路径已被 eq 覆盖）。
+
+地基承载：`packages/opencode/src/dag/session/types.ts`（DAGNodeCondition interface + DAG_CONDITION_OPS const + DAGNodeConfig.condition optional 字段，INFO 4 JSDoc 注明区别）+ `packages/opencode/src/dag/session/limits.ts`（validateNodeCondition helper）+ `packages/opencode/src/dag/session/session-service.ts`（createWorkflow 校验循环）+ `packages/opencode/src/dag/session/workflow-engine.ts`（validateReplanPostConfig 校验链扩展）+ `packages/opencode/src/dag/API.md`（§8 DAG 配置类型）+ `packages/opencode/src/dag/USER_GUIDE.md`（DAGNodeCondition 小节）+ `packages/opencode/src/dag/session/__tests__/node-condition-schema.test.ts`（18 tests，INFO 3 命名避开 scenario-25）。
 
 #### WP-B2 — 条件求值挂到就绪判定
 
