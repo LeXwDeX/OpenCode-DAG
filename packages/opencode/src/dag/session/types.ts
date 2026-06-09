@@ -324,6 +324,7 @@ export const DAG_VIOLATION_TYPES = [
   "timeout_exceeded",
   "execution_failed",
   "process_orphan",
+  "condition_skipped",
 ] as const
 
 export type DAGViolationType = (typeof DAG_VIOLATION_TYPES)[number]

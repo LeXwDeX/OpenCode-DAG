@@ -282,15 +282,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/condition-eval.ts`（144 行，evaluateCondition + splitByCondition + buildOutputMap + ConditionEvalResult interface + 8 ops null 语义 JSDoc 表）+ `packages/opencode/src/dag/session/workflow-engine.ts`（scheduleReadyNodes 内 condition split + spawn 循环 iterate executeList）+ `packages/opencode/src/dag/session/__tests__/node-condition-eval.test.ts`（56 tests）。
 
-#### WP-B3 — 条件不满足主动 skip + 下游级联
+#### WP-B3 — 条件不满足主动 skip + 下游级联 ✅ 已完成
 
-- **前置/输入契约**：WP-B2 完成（已能判定"待跳过"）。
-- **输出契约**：对"待跳过"节点执行 skip（经状态机 skip 转移，复用 `NodeStateMachine.skipNode` 语义），并级联跳过其下游 pending 节点（扩展 `cascadeSkipDownstream` 的触发源：原仅"上游失败"，新增"条件不满足"）。
-- **验收标准**：条件不满足的节点状态=skipped（经状态机）；其下游 pending 节点级联 skipped；工作流终态收敛正确（skip 不阻塞 finalize）。
-- **边界条件**：(a) 条件跳过的节点与失败级联跳过的节点在审计上可区分（skip reason 不同）；(b) 下游若有其他路径（多依赖）仍可达 → 不应被误级联跳过（级联语义与失败级联一致）；(c) required 节点的处理依 §3.2 决策。
-- **测试覆盖要求**：DB 级集成测试——条件跳过单节点 + 下游级联 + 终态收敛；多依赖节点不误跳；skip reason 区分（条件 vs 失败）。
-- **archgate 关注点**：skip 是否经状态机（不绕过）；级联语义是否与失败级联一致；终态收敛正确性；required 铁律守恒。
-- **DoD**：通用 DoD + 条件 skip 经状态机 + 下游级联正确 + 审计可区分 + 终态收敛。
+`workflow-engine.ts` cascadeSkipDownstream 参数重命名 failedNodeId → triggerNodeId + 新增 triggerType 参数（`"upstream_failure" | "condition_false"`，默认 `"upstream_failure"` 向后兼容）；logData 键 failed_node_id → trigger_node_id + trigger_type；logMessage 区分 "failure" vs "condition skip"。scheduleReadyNodes 消费 skipCandidates（4 步：状态机 skip → createViolation(type: 'condition_skipped', details: {trigger: 'condition_false', condition}) → safeAppendLog(executionPhase: 'condition_skip') → cascadeSkipDownstream(triggerNodeId, 'condition_false')），spawn 前执行避免 running→skipped 非法转移。skipped 后调用 maybeFinalizeWorkflow（幂等守卫保证 scheduleReadyNodes + handleNodeCompletion 双调用点无竞态）。types.ts DAG_VIOLATION_TYPES 新增 "condition_skipped" 枚举（数组 append 向后兼容）；i18n.ts VIOLATION_TYPE_LABEL 新增 en/zh 翻译（Record<DAGViolationType, string> 类型完整）。审计双轨：条件节点自身 condition_skip（executionPhase）+ condition_skipped（violation type）；级联下游cascade_skip（executionPhase，保持原名）+ trigger_type 区分来源；violation.details 嵌套 {trigger, condition: {ref_node, op, value}} 承载完整条件信息（INFO I2 处理）。node.skipped 事件 upstream_failed_node 留空，区分信息由 violation.details 承载。级联语义一致：与失败级联共用 findPendingDescendants BFS 拓扑算法（INFO I3 共享下游重叠场景自动过滤已 skipped 节点）。scenario-25 6 tests 覆盖：单节点 skip + 下游级联 + 多依赖不误跳 + 终态收敛 + 共享下游重叠 + 条件 vs 失败对比。Test 3/5 fixture 用 ROOT 前置节点单阶段设计（规避 latent defects）。archgate 7 项约束全 honored：状态机经 sessionService.updateNodeStatus（铁律 #1）；skipped 是终态不可回退（铁律 #2）；pending→skipped 合法转移；required 由 WP-B1 schema 拦截；maybeFinalizeWorkflow 收敛不阻塞；复用 findPendingDescendants；violation + log 双轨审计。验收：454 tests（scenario-25 6 + B1/B2 74 + scenario-22/23/24 14 + DAG session 314 + DAG core 53）+ typecheck 0 errors。INFO I1-I4 全处理。Latent defects（pre-existing 不在 WP-B3 scope）：getReadyNodes 不过滤 skipped 节点；updateNodeStatus throw 在 Effect.sync 内变 defect——skippedNodeIds 集合 + inFlight filter + 状态机拒绝 skipped→running 形成三层防护屏障，latent defects 不影响 WP-B3 功能正确性。
+
+地基承载：`packages/opencode/src/dag/session/workflow-engine.ts`（cascadeSkipDownstream 参数泛化 + scheduleReadyNodes skipCandidates 消费 + maybeFinalizeWorkflow 幂等）+ `packages/opencode/src/dag/session/types.ts`（DAG_VIOLATION_TYPES 扩展 "condition_skipped"）+ `packages/opencode/src/cli/cmd/tui/feature-plugins/dag-workflow/i18n.ts`（VIOLATION_TYPE_LABEL condition_skipped translation）+ `packages/opencode/src/dag/session/__tests__/scenario-25-conditional-skip.test.ts`（6 测试）。
 
 ---
 

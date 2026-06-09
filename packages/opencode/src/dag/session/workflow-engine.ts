@@ -800,18 +800,25 @@ const make = Effect.gen(function* () {
   // ============================================================================
 
   /**
-   * 级联 skip：将 failedNodeId 所有下游 pending 节点标记为 skipped。
+   * 级联 skip：将 triggerNodeId 所有下游 pending 节点标记为 skipped。
    * pending→skipped 是合法转移（session-service.ts:70）。
    * buildSessionNodeEvent 含 node.skipped case（铁律#3）。
+   *
+   * triggerType 区分触发源：
+   * - "upstream_failure" — 上游节点执行失败（handleNodeFailure 调用）
+   * - "condition_false" — 上游节点条件求值为假（WP-B3 scheduleReadyNodes 调用）
+   * 差异化体现在 logMessage 和 logData.trigger_type（审计区分）。
    */
   const cascadeSkipDownstream = (
     workflowId: string,
-    failedNodeId: string,
+    triggerNodeId: string,
+    triggerType: "upstream_failure" | "condition_false" = "upstream_failure",
   ): Effect.Effect<void, never, never> =>
     Effect.gen(function* () {
       const wfForLog = yield* sessionService.getWorkflow(workflowId)
       const allNodes = yield* sessionService.listNodes(workflowId)
-      const descendants = findPendingDescendants(allNodes, failedNodeId)
+      const descendants = findPendingDescendants(allNodes, triggerNodeId)
+      const triggerLabel = triggerType === "condition_false" ? "condition skip" : "failure"
       for (const d of descendants) {
         yield* sessionService.updateNodeStatus({
           sessionId: d.node_id,
@@ -827,13 +834,13 @@ const make = Effect.gen(function* () {
             workflowId,
             chatSessionId: wfForLog.chat_session_id,
             logLevel: 'warn',
-            logMessage: `Cascade skip: ${d.node_id} skipped due to failure of ${failedNodeId}`,
+            logMessage: `Cascade skip: ${d.node_id} skipped due to ${triggerLabel} of ${triggerNodeId}`,
             executionPhase: 'cascade_skip',
-            logData: { failed_node_id: failedNodeId },
+            logData: { trigger_node_id: triggerNodeId, trigger_type: triggerType },
           })
         }
       }
-    }).pipe(Effect.catchCause((cause) => Effect.logWarning(`[DAG] cascadeSkipDownstream(${workflowId}, ${failedNodeId}) failed: ${Cause.squash(cause)}`)))
+    }).pipe(Effect.catchCause((cause) => Effect.logWarning(`[DAG] cascadeSkipDownstream(${workflowId}, ${triggerNodeId}, ${triggerType}) failed: ${Cause.squash(cause)}`)))
 
   /**
    * 检测所有节点是否已进入终态，若是则收敛 workflow.status。
@@ -909,11 +916,59 @@ const make = Effect.gen(function* () {
       const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
 
       // WP-B2: Condition evaluation split — pure function, no side effects.
-      // Nodes whose conditions are false go to skipCandidates (deferred to WP-B3).
+      // Nodes whose conditions are false go to skipCandidates.
       // Nodes without conditions (undefined/null) remain in executeList (backward compatible).
       const outputMap = buildOutputMap(allNodes)
       const { executeList, skipCandidates } = splitByCondition(readyNodes, outputMap)
-      void skipCandidates // WP-B3 will consume this for actual skip + cascade
+
+      // WP-B3: Consume skipCandidates — condition-false nodes and their downstream.
+      // Must run BEFORE spawn loop to prevent pending→running→skipped race
+      // (running→skipped is not a valid transition in the state machine).
+      const wfForSkipLog = skipCandidates.length > 0
+        ? yield* sessionService.getWorkflow(workflowId)
+        : undefined
+      for (const skipNode of skipCandidates) {
+        // 1. State machine: pending → skipped (iron law #1, not bypassed)
+        yield* sessionService.updateNodeStatus({
+          sessionId: skipNode.node_id,
+          status: 'skipped',
+        } satisfies UpdateNodeStatusInput).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] condition-skip status update failed for ${skipNode.node_id}: ${err}`)),
+          Effect.ignore
+        )
+
+        // 2. Audit: violation record with condition_skipped type + condition details
+        yield* sessionService.createViolation({
+          workflowId,
+          nodeId: skipNode.node_id,
+          type: 'condition_skipped' as DAGViolationType,
+          severity: 'warning',
+          message: `Condition evaluated to false: ${skipNode.node_id} skipped`,
+          details: {
+            trigger: 'condition_false',
+            condition: skipNode.config.condition,
+          },
+        }).pipe(
+          Effect.tapError((err) => Effect.logWarning(`[DAG] condition-skip violation failed for ${skipNode.node_id}: ${err}`)),
+          Effect.ignore
+        )
+
+        // 3. Audit: node log with condition_skip executionPhase
+        if (wfForSkipLog?.chat_session_id) {
+          yield* safeAppendLog({
+            nodeId: skipNode.node_id,
+            workflowId,
+            chatSessionId: wfForSkipLog.chat_session_id,
+            logLevel: 'warn',
+            logMessage: `Condition false: ${skipNode.node_id} skipped (ref=${skipNode.config.condition?.ref_node}, op=${skipNode.config.condition?.op})`,
+            executionPhase: 'condition_skip',
+            logData: { condition: skipNode.config.condition },
+          })
+        }
+
+        // 4. Cascade: skip downstream pending nodes (reuses findPendingDescendants BFS, iron law #6)
+        yield* cascadeSkipDownstream(workflowId, skipNode.node_id, "condition_false")
+      }
 
       // T3: Enforce concurrency cap — account for in-flight spawned nodes (spawned but not yet settled)
       const inFlightCount = [...spawnedNodes]
@@ -922,7 +977,13 @@ const make = Effect.gen(function* () {
         .length
       const maxConcurrency = concurrencyRegistry.get(workflowId) ?? Number.POSITIVE_INFINITY
       const budget = maxConcurrency - runningNodeIds.size - inFlightCount
-      if (budget <= 0) return { scheduled: 0 }
+      if (budget <= 0) {
+        // No spawn budget, but if skips occurred, check for workflow convergence
+        if (skipCandidates.length > 0) {
+          yield* maybeFinalizeWorkflow(workflowId)
+        }
+        return { scheduled: 0 }
+      }
 
       const limit = Math.min(executeList.length, budget)
       let scheduled = 0
@@ -933,6 +994,13 @@ const make = Effect.gen(function* () {
           yield* spawnReadyNode(workflowId, node).pipe(Effect.forkDetach)
           scheduled++
         }
+      }
+
+      // WP-B3: After skip + spawn, check workflow convergence.
+      // If all ready nodes were condition-skipped (executeList empty) and downstream
+      // nodes are in terminal states, the workflow should converge immediately.
+      if (skipCandidates.length > 0) {
+        yield* maybeFinalizeWorkflow(workflowId)
       }
 
       return { scheduled }
