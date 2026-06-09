@@ -288,15 +288,11 @@ archgate（架构校验，触治理面强制）
 
 地基承载：`packages/opencode/src/dag/session/types.ts`（DAGInputMappingEntry interface + DAGInputMapping type alias + DAGNodeConfig.input_mapping optional 字段 + JSDoc 选型理由）+ `packages/opencode/src/dag/session/limits.ts`（validateInputMapping helper）+ `packages/opencode/src/dag/session/session-service.ts`（createWorkflow 校验循环）+ `packages/opencode/src/dag/session/workflow-engine.ts`（validateReplanPostConfig 校验链扩展）+ `packages/opencode/src/dag/API.md`（DAGInputMapping 新章节）+ `packages/opencode/src/dag/USER_GUIDE.md`（数据映射新章节）+ `packages/opencode/src/dag/session/__tests__/node-input-mapping-schema.test.ts`（17 tests）。
 
-#### WP-C2 — 上游 output 收集
+#### WP-C2 — 上游 output 收集 ✅ 已完成
 
-- **前置/输入契约**：WP-C1 完成。输入 = 一个声明了 input_mapping 的就绪节点 + 其依赖（均已 completed，output 已持久化）。
-- **输出契约**：按 input_mapping 从依赖节点的持久化 output 收集对应值，组装为本节点的输入数据结构。纯读 DB，无写、无副作用。
-- **验收标准**：能正确按映射取到上游 output 值；只从声明依赖取值（不跨依赖边界）。
-- **边界条件**：(a) 上游 output 为空/路径不存在 → 确定语义（默认值/缺省标记，不抛异常中断 spawn，可审计）；(b) output 类型与预期不符 → 确定处理（不崩溃）；(c) 收集不得引入额外 ready 阻塞（依赖已保证完成）。
-- **测试覆盖要求**：收集逻辑单元测试（正常取值 / 路径缺失 / 类型不符 / 不跨依赖）；只读性验证（无 DB 写）。
-- **archgate 关注点**：是否只从 dependencies 取值（防隐式依赖）；只读性；运行期缺失的确定语义。
-- **DoD**：通用 DoD + 按映射正确收集 + 不跨依赖 + 缺失有确定语义 + 只读。
+独立纯函数模块 `input-mapping-collector.ts`（201 行，仅 `import type { DAGInputMapping } from "./types"`，零 Effect/DB/Logger/emit 依赖）。`collectInputMapping(inputMapping, outputMap, nodeDeps): CollectedInputMap`（INFO 1(c) 方案：caller 提供 outputMap，复用 `buildOutputMap(allNodes)` 的产物，收集器自身不调用 DB/listNodes）。`Record<inputKey, CollectedValue {value, __missing?}>` 数据结构，WP-C3 读取 __missing 决策注入策略。4 类运行期缺失去语义完整：(a) `output == null → __missing: 'null_output'`；(b) `ref_path` 不存在 → `'path_not_found'`（resolvePath 纯函数 + unique symbol sentinel PATH_NOT_FOUND 避免 false-positive）；(c) `output` 非 object + ref_path 存在 → `'non_object_output'`（string/number/boolean/array 全覆盖防御性处理不 crash）；(d) `ref_node ∉ dependencies` → `'beyond_deps'`（运行期 defense-in-depth，与 WP-C1 schema 静态拦截双重防线）。ref_path 缺省 = 取整个 output（string/number/array 原样返回，INFO 2 处理）。JSDoc 完整标注 4 类缺失去语义表格（line 26-33 + line 49-61）。workflow-engine.ts 集成极轻量（line 15 import；line 489 spawnReadyNode 加 outputMap? 可选参数；line 659 step 5.5 collectedInputData 局部 const；line 1003 scheduleReadyNodes 传 outputMap 给 spawnReadyNode）—— collectedInputData 当前未消费（由 WP-C3 prompt 注入点消费），不修改 prompt 构造（line 651-660 留给 WP-C3）。21 tests 9 场景全覆盖：正常路径 / ref_path 缺省 / output null / ref_path 不存在 / 非 object output / beyond_deps / 混合 / input_mapping undefined 兼容 / 纯度验证（不 mutate outputMap + 幂等 + 引用隔离）。archgate 7 项约束全 honored：纯函数零副作用（purity grep 0 forbidden）；ref_node ∈ deps 运行期强制；ref_path 缺省取整个 output；4 类缺失去语义明确 + JSDoc 文档化；不引入 ready 阻塞；不写 DB/emit/log；数据结构与 WP-C3 兼容。INFO 1/2/3 全处理。review INFO 1（collectedInputData 不消耗 by design INFO 不阻塞）。验收：21 + 352 DAG session + 62 workflow-engine + 53 DAG core + typecheck 0 errors。
+
+地基承载：`packages/opencode/src/dag/session/input-mapping-collector.ts`（201 行，collectInputMapping + 内部 resolvePath pure + PATH_NOT_FOUND sentinel + OutputMissingReason + CollectedValue + CollectedInputMap + JSDoc 4 类缺失去语义表）+ `packages/opencode/src/dag/session/workflow-engine.ts`（spawnReadyNode outputMap? + step 5.5 collectedInputData）+ `packages/opencode/src/dag/session/__tests__/node-input-mapping-collect.test.ts`（21 tests）。
 
 #### WP-C3 — prompt/input 注入
 

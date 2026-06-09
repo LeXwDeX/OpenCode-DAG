@@ -12,6 +12,7 @@ import type {
 } from "./session-service"
 import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import { buildOutputMap, splitByCondition } from "./condition-eval"
+import { collectInputMapping } from "./input-mapping-collector"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import type {
@@ -483,7 +484,11 @@ const make = Effect.gen(function* () {
   // Node Spawn — Full daemon-flow for a single node (§10 compliant)
   // ============================================================================
 
-  const spawnReadyNode = (workflowId: string, node: DAGNodeSession): Effect.Effect<void, never, never> => {
+  const spawnReadyNode = (
+    workflowId: string,
+    node: DAGNodeSession,
+    outputMap?: Map<string, unknown>,
+  ): Effect.Effect<void, never, never> => {
     let worktreeCleanup: (() => Promise<void>) | undefined
 
     const body = Effect.gen(function* () {
@@ -647,6 +652,15 @@ const make = Effect.gen(function* () {
         logMessage: `Node status set to running: ${node.node_id}`,
         executionPhase: 'running',
       })
+
+      // 5.5 WP-C2: Collect upstream outputs for input_mapping (pure, read-only).
+      // Result is held locally for WP-C3 prompt injection (not yet wired).
+      // `outputMap` is provided by scheduleReadyNodes via buildOutputMap(allNodes).
+      const collectedInputData = collectInputMapping(
+        node.config.input_mapping,
+        outputMap ?? new Map(),
+        node.config.dependencies,
+      )
 
       // 6. Prepend DAG node instructions + run prompt with timeout and retry
       const promptInstruction = [
@@ -997,7 +1011,7 @@ const make = Effect.gen(function* () {
         const node = executeList[i]
         if (!spawnedNodes.has(node.node_id)) {
           spawnedNodes.add(node.node_id)
-          yield* spawnReadyNode(workflowId, node).pipe(Effect.forkDetach)
+          yield* spawnReadyNode(workflowId, node, outputMap).pipe(Effect.forkDetach)
           scheduled++
         }
       }
