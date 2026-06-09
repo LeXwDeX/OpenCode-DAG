@@ -103,6 +103,38 @@ export interface DAGNodeCondition {
 }
 
 /**
+ * 单条输入映射记录（WP-C1 数据流声明语法）。
+ *
+ * 描述"从哪里获取数据"：
+ * - `ref_node: string` — 数据来源的上游节点 ID，**必须是当前节点 `dependencies` 的子集**（schema 强制）。
+ * - `ref_path?: string` — 可选的 JSON 路径，指向 ref_node output 的子字段。
+ *   缺省语义 = 取整个 output 对象（运行时语义由 WP-C2 实现，C1 仅做静态结构校验）。
+ *
+ * 出处：`docs/design/009-dag-capability-expansion.md` §7 WP-C1。
+ */
+export interface DAGInputMappingEntry {
+  /** 数据来源的上游节点 ID（必须是当前节点 dependencies 的子集） */
+  ref_node: string;
+  /** 可选路径，指向 ref_node output 的子字段（缺省 = 整个 output 对象） */
+  ref_path?: string;
+}
+
+/**
+ * 节点输入映射表（WP-C1）。
+ *
+ * **Record 形式**（非数组），INFO 1 选型理由：
+ * - Record key（inputKey）天然唯一，无需额外重复校验。
+ * - 查找 O(1)（下游 WP-C2/C3 按 inputKey 取值）。
+ * - Schema 迭代简洁（Object.entries）。
+ *
+ * 与数组形式 `[{inputKey, ref_node, ref_path?}]` 相比，Record 避免了 inputKey
+ * 重复声明和线性查找开销，同时保持完全可序列化/可校验。
+ *
+ * 出处：`docs/design/009-dag-capability-expansion.md` §7 WP-C1 INFO 1。
+ */
+export type DAGInputMapping = Record<string, DAGInputMappingEntry>
+
+/**
  * DAG 节点定义
  *
  * **Architectural note** — `DAGNodeConfig` and `DAGConfig` (below) are the single
@@ -133,6 +165,11 @@ export interface DAGNodeCondition {
  * - `condition?: DAGNodeCondition` — (WP-B1) 声明式条件表达式。条件不满足时节点跳过（WP-B2/B3）。
  *   **required 节点禁止声明 condition**（§3.2 方案 1，schema 校验拒绝）。
  *   缺省 = 无条件执行（向后兼容，现有配置不受影响）。
+ *
+ * - `input_mapping?: DAGInputMapping` — (WP-C1) 声明式数据映射。控制"执行时注入什么上游数据"。
+ *   ref_node ⊆ dependencies（schema 强制）。缺省 = 无数据注入（向后兼容）。
+ *   与 `condition` 正交：condition 控制"是否执行"（skip vs ready），input_mapping 控制"执行时注入什么"。
+ *   运行时数据收集由 WP-C2 实现（纯读 DB，无写）。
  */
 export interface DAGNodeConfig {
   /** 节点唯一标识 */
@@ -165,6 +202,18 @@ export interface DAGNodeConfig {
    * - 运行时求值由 WP-B2 实现（纯函数，无副作用）。
    */
   condition?: DAGNodeCondition;
+  /**
+   * 声明式数据映射（WP-C1）。
+   *
+   * - 缺省（undefined）= 节点无数据注入（向后兼容）。
+   * - Record 形式：每个 key 为注入目标键，value 描述数据来源。
+   * - `ref_node` 必须是当前节点 `dependencies` 的子集（schema 校验拒绝越界引用）。
+   * - `ref_path` 可选，缺省 = 取整个 output 对象（运行时语义在 WP-C2）。
+   * - 与 `condition` 正交：condition 控制"是否执行"，input_mapping 控制"执行时注入什么"。
+   *
+   * 运行时数据收集由 WP-C2 实现（纯读 DB，无写）。
+   */
+  input_mapping?: DAGInputMapping;
 }
 
 /**

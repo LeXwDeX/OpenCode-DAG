@@ -10,7 +10,7 @@ import type {
   UpdateNodeConfigInput,
   UpdateNodeStatusInput,
 } from "./session-service"
-import { validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import { buildOutputMap, splitByCondition } from "./condition-eval"
 import { ViolationQueryAPI } from "./violation-query"
 import { RequiredNodesValidator } from "./required-nodes-validator"
@@ -261,10 +261,16 @@ export function validateReplanPostConfig(
   }
   // WP-B1 (INFO 2): per-node condition schema validation on post-replan config.
   // Without this, replanned configs could bypass the required↔condition 互斥 check.
+  // WP-C1 (约束 4): per-node input_mapping schema validation on post-replan config.
+  // Without this, replanned configs could bypass the ref ⊆ dependencies check.
   for (const n of newConfigNodes) {
     const condResult = validateNodeCondition(n)
     if (!condResult.ok) {
       return { ok: false, reason: `node '${n.id}': ${condResult.reason}` }
+    }
+    const mapResult = validateInputMapping(n)
+    if (!mapResult.ok) {
+      return { ok: false, reason: `node '${n.id}': ${mapResult.reason}` }
     }
   }
   const requiredValidator = new RequiredNodesValidator()

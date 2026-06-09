@@ -27,7 +27,7 @@ import type {
 import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
 import { FallbackTrigger } from "../state-machine/types"
-import { validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 
 // ============================================================================
 // Iron Law Enforcement: Module-Level Event Bus & Validation Helpers
@@ -329,11 +329,18 @@ const make = Effect.gen(function* () {
         return yield* Effect.fail(new WorkflowConfigValidationError(limits.reason))
       }
       // WP-B1: per-node condition schema validation (required↔condition 互斥, ref ⊆ deps, structural)
+      // WP-C1: per-node input_mapping schema validation (ref ⊆ deps, serializable)
       for (const node of (input.config?.nodes ?? []) as DAGNodeConfig[]) {
         const condResult = validateNodeCondition(node)
         if (!condResult.ok) {
           return yield* Effect.fail(
             new WorkflowConfigValidationError(`node '${node.id}': ${condResult.reason}`),
+          )
+        }
+        const mapResult = validateInputMapping(node)
+        if (!mapResult.ok) {
+          return yield* Effect.fail(
+            new WorkflowConfigValidationError(`node '${node.id}': ${mapResult.reason}`),
           )
         }
       }

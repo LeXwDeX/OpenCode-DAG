@@ -282,15 +282,11 @@ archgate（架构校验，触治理面强制）
 
 ### 特性 C — 数据流
 
-#### WP-C1 — DAGNodeConfig.input_mapping 字段 + schema
+#### WP-C1 — DAGNodeConfig.input_mapping 字段 + schema ✅ 已完成
 
-- **前置/输入契约**：无前置 WP（建议 B 之后，复用声明式字段扩展模式）。
-- **输出契约**：`DAGNodeConfig` 新增 `input_mapping?` 字段，声明"从哪个上游节点的 output 的哪个路径取值，绑定到本节点的哪个输入键"。引用的上游节点必须 ⊆ `dependencies`。可序列化、可校验。
-- **验收标准**：合法 input_mapping 通过校验；引用非依赖节点 / 语法非法 → 拒绝并给 reason；缺省 input_mapping → 节点无数据注入（向后兼容）。
-- **边界条件**：(a) 引用越界（非 dependencies）→ 拒绝；(b) 引用 output 的路径在运行期可能不存在 → C2/C3 处理运行期缺失，C1 仅做静态结构校验；(c) 循环引用不可能（引用 ⊆ dependencies，依赖图无环已保证）。
-- **测试覆盖要求**：schema 校验单元测试（合法 / 越界 / 非法语法 / 缺省兼容）；canonical 文档一致性。
-- **archgate 关注点**：引用 ⊆ dependencies 是否 schema 强制（防隐式依赖）；映射语法是否声明式可序列化。
-- **DoD**：通用 DoD + input_mapping schema 完整 + 越界拒绝 + 缺省兼容。
+`DAGNodeConfig` 新增可选 `input_mapping?: DAGInputMapping` 字段（Record 形式：`Record<inputKey, DAGInputMappingEntry>`；每条 entry 含 `{ref_node: string, ref_path?: string}`；INFO 1 选型理由 JSDoc 标注：避免 inputKey 重复 + O(1) 查找 + schema 迭代简洁；INFO 3 命名惯例 DAGInputMappingEntry + DAGInputMapping 与 DAGNodeCondition 一致）。`limits.ts` 新增 `validateInputMapping` helper 与 `validateNodeCondition` 同构（`{ok:true} | {ok:false, reason}` 形态）：缺省/null 兼容（返回 `{ok: true}`）+ 整体 Record + 每个 entry 校验为纯对象（结构性检查拒绝闭包/函数/数组/string/number）+ ref⊆dependencies 强制（reason = "input_mapping refs must ⊆ dependencies: ref_node '<x>' not in dependencies [...]"）+ ref_path 类型合法（string | undefined，运行期缺失语义 deferred to WP-C2，INFO 2 处理）。`session-service.ts` createWorkflow 入口循环调用；`workflow-engine.ts` validateReplanPostConfig 校验链添加步骤（archgate 约束 4）。canonical 文档同步：`API.md` 新增 §DAGInputMapping 章节（技术参考 + 校验规则表 + 运行期语义注释）；`USER_GUIDE.md` 新增"数据映射"章节（字段表 + JSON 示例 + 配置示例 + 与 condition 关系说明），章节结构与 WP-B1 同构。ReplanNodePatch 通过 `Partial<Omit<DAGNodeConfig, 'id'|'dependencies'>>` 类型自动支持 input_mapping，类型层面零代码开销。schema unit tests 17 cases：4 合法 + 3 越界 + 7 非法语法（闭包/函数/数组/string/number/ref_path 非 string）+ 3 缺省兼容。验收：17 schema + 331 DAG session + 53 DAG core + 618 受影响测试 + typecheck 0 errors。INFO 1/2/3 全处理。review INFO 1（limits.ts:15 unused import type）P2 不阻塞——`import type` 仅在 JSDoc 引用，符合 AGENTS.md 文档用途允许。
+
+地基承载：`packages/opencode/src/dag/session/types.ts`（DAGInputMappingEntry interface + DAGInputMapping type alias + DAGNodeConfig.input_mapping optional 字段 + JSDoc 选型理由）+ `packages/opencode/src/dag/session/limits.ts`（validateInputMapping helper）+ `packages/opencode/src/dag/session/session-service.ts`（createWorkflow 校验循环）+ `packages/opencode/src/dag/session/workflow-engine.ts`（validateReplanPostConfig 校验链扩展）+ `packages/opencode/src/dag/API.md`（DAGInputMapping 新章节）+ `packages/opencode/src/dag/USER_GUIDE.md`（数据映射新章节）+ `packages/opencode/src/dag/session/__tests__/node-input-mapping-schema.test.ts`（17 tests）。
 
 #### WP-C2 — 上游 output 收集
 

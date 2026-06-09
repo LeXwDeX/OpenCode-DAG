@@ -113,6 +113,7 @@ DAG 工作流通过 JSON 配置文件定义：
 | `worker_type` | string | 是 | Worker 类型（路由到具体 agent） |
 | `worker_config` | object | 是 | Worker 配置 `{ agent, prompt, ... }` |
 | `condition` | object | 否 | 声明式条件表达式（见下文）。缺省 = 无条件执行（向后兼容）。**required=true 节点禁止声明此字段。** |
+| `input_mapping` | object | 否 | 声明式数据映射（见下文）。缺省 = 无数据注入（向后兼容）。可与 `condition` 同时声明。 |
 
 #### DAGNodeCondition（条件表达式，WP-B1）
 
@@ -154,6 +155,49 @@ DAG 工作流通过 JSON 配置文件定义：
   "condition": { "ref_node": "step-a", "op": "exists" },
   "worker_type": "implement",
   "worker_config": { "prompt": "当 step-a 有 output 时执行" }
+}
+```
+
+#### DAGInputMapping（数据映射，WP-C1）
+
+节点可声明输入映射，描述"执行时从哪个上游节点的 output 的哪个路径取值，绑定到本节点的哪个输入键"。映射是**声明式 Record 对象**，禁止闭包/函数/代码注入。运行时数据收集由 WP-C2 实现（C1 仅做 schema 校验）。
+
+```json
+{
+  "upstream": { "ref_node": "step-a" },
+  "config": { "ref_node": "step-b", "ref_path": "result.value" }
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+|------|------|------|------|
+| `<inputKey>` | object | — | Record key 为注入目标键（inputKey），天然唯一，避免重复 |
+| `<inputKey>.ref_node` | string | 是 | 数据来源的上游节点 ID（必须是本节点 `dependencies` 之一） |
+| `<inputKey>.ref_path` | string | 否 | 指向 ref_node output 的子字段路径（缺省 = 整个 output 对象） |
+
+**校验规则**（schema 阶段强制，违反即拒绝创建/replan）：
+
+- `ref_node` 必须是当前节点 `dependencies` 的子集（reason: `input_mapping refs must ⊆ dependencies`）
+- `input_mapping` 必须是纯结构化对象（禁止函数/闭包/数组/字符串 DSL）
+- 每个 entry 的 `ref_node` 必须为非空 string
+- 缺省 `input_mapping`（未提供）= 节点无数据注入（向后兼容）
+
+**与 `condition` 的关系**：`condition` 控制"是否执行"（skip vs ready），`input_mapping` 控制"执行时注入什么上游数据"。两者正交，可同时声明。
+
+示例：节点 C 声明从 A 取 entire output，从 B 取 `result.value` 子路径：
+
+```json
+{
+  "id": "step-c",
+  "name": "Data-Driven Step",
+  "dependencies": ["step-a", "step-b"],
+  "required": true,
+  "input_mapping": {
+    "from_a": { "ref_node": "step-a" },
+    "from_b_config": { "ref_node": "step-b", "ref_path": "result.value" }
+  },
+  "worker_type": "implement",
+  "worker_config": { "prompt": "处理上游数据" }
 }
 ```
 

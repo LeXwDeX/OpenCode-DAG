@@ -12,7 +12,7 @@
  * WP-B1: 新增 `validateNodeCondition` — 声明式条件 schema 校验（无运行时求值）。
  */
 
-import type { DAGNodeConfig } from "./types"
+import type { DAGInputMapping, DAGInputMappingEntry, DAGNodeConfig } from "./types"
 import { DAG_CONDITION_OPS } from "./types"
 
 /**
@@ -111,6 +111,85 @@ export function validateNodeCondition(
     return {
       ok: false,
       reason: `condition refs must ⊆ dependencies: ref_node '${c.ref_node}' not in dependencies [${node.dependencies.join(", ")}]`,
+    }
+  }
+
+  return { ok: true }
+}
+
+/**
+ * WP-C1: 声明式输入映射 schema 校验（无运行时求值）。
+ *
+ * 校验内容：
+ * 1. **缺省向后兼容**：`input_mapping` 为 undefined / null / 未提供 → OK（节点无数据注入）。
+ * 2. **结构化对象**：`input_mapping` 必须是纯对象（非函数/闭包/非可序列化/非数组）。
+ *    - 每个 key（inputKey）为非空 string
+ *    - 每个 value 为 DAGInputMappingEntry（含 `ref_node: string` + 可选 `ref_path?: string`）
+ * 3. **引用 ⊆ dependencies**：每个 entry 的 `ref_node` 必须在 `node.dependencies` 中。
+ *    reason = `"input_mapping refs must ⊆ dependencies"` 且列出越界的 ref_node。
+ * 4. **可序列化**：entry 值必须是纯结构化对象（禁止闭包/函数/数组）。
+ *
+ * ref_path 缺省语义（取整个 output 对象）由 WP-C2 运行期处理；C1 仅做静态结构校验。
+ *
+ * 调用方：
+ * - `createWorkflow`（session-service.ts）
+ * - `validateReplanPostConfig`（workflow-engine.ts, 约束 4）
+ *
+ * Reason strings 稳定共享，两个入口报告相同消息。
+ *
+ * 出处：`docs/design/009-dag-capability-expansion.md` §7 WP-C1。
+ */
+export function validateInputMapping(
+  node: DAGNodeConfig,
+): { ok: true } | { ok: false; reason: string } {
+  const mapping = node.input_mapping as unknown
+  // 缺省向后兼容（undefined / null / 未提供）
+  if (mapping === undefined || mapping === null) return { ok: true }
+
+  // 结构化对象校验：必须是普通对象，非函数/闭包/原始类型/数组
+  if (typeof mapping !== "object" || Array.isArray(mapping)) {
+    return {
+      ok: false,
+      reason: `input_mapping must be a serializable object (no closure/function/array), got ${Array.isArray(mapping) ? "array" : typeof mapping}`,
+    }
+  }
+
+  const m = mapping as Record<string, unknown>
+
+  for (const [inputKey, entry] of Object.entries(m)) {
+    // entry 必须是纯对象（非函数/闭包/数组/原始类型/null）
+    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+      return {
+        ok: false,
+        reason: `input_mapping.${inputKey} must be a structured object, got ${
+          Array.isArray(entry) ? "array" : entry === null ? "null" : typeof entry
+        }`,
+      }
+    }
+    const e = entry as Record<string, unknown>
+
+    // ref_node: 必须是非空 string
+    if (typeof e.ref_node !== "string" || e.ref_node.length === 0) {
+      return {
+        ok: false,
+        reason: `input_mapping.${inputKey}.ref_node must be a non-empty string, got ${typeof e.ref_node}`,
+      }
+    }
+
+    // ref_path: 可选，若提供必须是 string（运行时语义由 WP-C2 定义）
+    if (e.ref_path !== undefined && typeof e.ref_path !== "string") {
+      return {
+        ok: false,
+        reason: `input_mapping.${inputKey}.ref_path must be string | undefined, got ${typeof e.ref_path}`,
+      }
+    }
+
+    // ref_node ⊆ dependencies
+    if (!node.dependencies.includes(e.ref_node as string)) {
+      return {
+        ok: false,
+        reason: `input_mapping refs must ⊆ dependencies: ref_node '${e.ref_node}' not in dependencies [${node.dependencies.join(", ")}]`,
+      }
     }
   }
 

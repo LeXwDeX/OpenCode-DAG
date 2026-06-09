@@ -652,6 +652,7 @@ interface DAGNodeConfig {
   worker_type: string                           // Worker 类型（路由到具体 agent）
   worker_config: Record<string, unknown>        // Worker 配置
   condition?: DAGNodeCondition                  // 声明式条件表达式（WP-B1，见下）
+  input_mapping?: DAGInputMapping               // 声明式数据映射（WP-C1，见下）
 }
 ```
 
@@ -699,3 +700,38 @@ interface DAGNodeCondition {
 | `FallbackConfig.condition` | `string` | **group 级**（core 储备池） | shadow 节点 custom trigger 的表达式字符串，与节点执行条件无关 |
 
 两者语义完全不同，不可混淆；前者在 `session/types.ts`，后者在 `group-manager/types.ts`。
+
+### DAGInputMapping（声明式数据映射，WP-C1）
+
+```typescript
+interface DAGInputMappingEntry {
+  ref_node: string         // 数据来源的上游节点 ID（必须是 dependencies 子集）
+  ref_path?: string        // 可选：指向 ref_node output 的子字段（缺省 = 整个 output 对象）
+}
+
+type DAGInputMapping = Record<string, DAGInputMappingEntry>
+```
+
+**字段语义说明**：
+
+- `input_mapping` 是 Record 形式（非数组），key 为注入目标键（inputKey），value 为 `DAGInputMappingEntry`。Record 形式避免 inputKey 重复，查找 O(1)，schema 迭代简洁（INFO 1）。
+- `ref_node` 必须是声明的上游依赖节点 ID（schema 强制 ⊆ `dependencies`）。
+- `ref_path` 可选，缺省表示取整个 output 对象；运行时语义由 WP-C2 实现，C1 仅做静态结构校验（INFO 2）。
+- 与 `condition` 正交：`condition` 控制"是否执行"（skip vs ready），`input_mapping` 控制"执行时注入什么上游数据"。两者可同时声明。
+
+**校验规则**（`createWorkflow` / `validateReplanPostConfig` schema 强制）：
+
+| 规则 | 违反时 reason |
+|------|--------------|
+| `input_mapping` 必须是纯对象（禁止函数/闭包/数组/字符串/数字） | `input_mapping must be a serializable object (no closure/function/array), got <type>` |
+| 每个 entry 必须是结构化对象（禁止闭包/函数/数组/null） | `input_mapping.<key> must be a structured object, got <type>` |
+| 每个 entry 的 `ref_node` 必须是非空 string | `input_mapping.<key>.ref_node must be a non-empty string, got <type>` |
+| 每个 entry 的 `ref_path`（若提供）必须是 string | `input_mapping.<key>.ref_path must be string \| undefined, got <type>` |
+| 每个 entry 的 `ref_node` 必须在节点的 `dependencies` 列表中 | `input_mapping refs must ⊆ dependencies: ref_node '<x>' not in dependencies [...]` |
+| 缺省（`input_mapping` 未提供/undefined）——**向后兼容** | （不拒绝，节点无数据注入） |
+
+**运行时语义**（WP-C2/C3 实现，C1 不含运行期行为）：
+
+- 节点就绪（所有 dependencies 已 completed）后，按 `input_mapping` 从依赖节点的持久化 output 收集对应值。
+- `ref_path` 缺省 → 取整个 output 对象；提供时按路径取值（缺失时确定语义，不抛异常，WP-C2 定义）。
+- 未声明 `input_mapping` 的节点 → 无数据注入（向后兼容，prompt 构造不变）。
