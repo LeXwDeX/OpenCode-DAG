@@ -10,6 +10,7 @@
  * - Start workflows
  * - Check workflow status
  * - Cancel workflows
+ * - Pause and resume workflows
  * - List all workflows
  */
 
@@ -84,6 +85,8 @@ export const Parameters = Schema.Struct({
     Schema.Literal("node_detail"),
     Schema.Literal("history"),
     Schema.Literal("logs"),
+    Schema.Literal("pause"),
+    Schema.Literal("resume"),
   ])).annotate({
     description: "Action to perform. Defaults to 'start' if not specified.",
   }),
@@ -627,6 +630,80 @@ export const DAGWorkerTool = Tool.define(
               nodeId: params.node_id,
               action: "logs",
               count: formatted.length,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+        
+        case "pause": {
+          if (!params.workflow) {
+            return yield* Effect.fail(
+              new Error("'pause' action requires 'workflow' parameter with workflow ID")
+            )
+          }
+          const workflowId = params.workflow
+          const engine = WorkflowEngine.get(workflowId)
+          if (!engine) {
+            const workflow = yield* dagSessionService.getWorkflow(workflowId)
+            return {
+              title: `Pause failed: ${workflowId}`,
+              output: formatOutput(
+                `Cannot pause workflow ${workflowId}: no active engine found. Current DB status: ${workflow?.status ?? "unknown"}`
+              ),
+              metadata: {
+                workflowId,
+                action: "pause",
+                error: "engine_not_found",
+                currentStatus: workflow?.status ?? "unknown",
+              } as Record<string, unknown>,
+              attachments: [],
+            }
+          }
+          const pauseStatus = yield* engine.pauseWorkflow(workflowId)
+          return {
+            title: `Workflow Paused: ${workflowId}`,
+            output: formatOutput(`Workflow ${workflowId} has been paused. Status: ${pauseStatus}`),
+            metadata: {
+              workflowId,
+              action: "pause",
+              status: pauseStatus as string,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "resume": {
+          if (!params.workflow) {
+            return yield* Effect.fail(
+              new Error("'resume' action requires 'workflow' parameter with workflow ID")
+            )
+          }
+          const workflowId = params.workflow
+          const engine = WorkflowEngine.get(workflowId)
+          if (!engine) {
+            const workflow = yield* dagSessionService.getWorkflow(workflowId)
+            return {
+              title: `Resume failed: ${workflowId}`,
+              output: formatOutput(
+                `Cannot resume workflow ${workflowId}: no active engine found. Current DB status: ${workflow?.status ?? "unknown"}`
+              ),
+              metadata: {
+                workflowId,
+                action: "resume",
+                error: "engine_not_found",
+                currentStatus: workflow?.status ?? "unknown",
+              } as Record<string, unknown>,
+              attachments: [],
+            }
+          }
+          const resumeStatus = yield* engine.resumeWorkflow(workflowId)
+          return {
+            title: `Workflow Resumed: ${workflowId}`,
+            output: formatOutput(`Workflow ${workflowId} has been resumed. Status: ${resumeStatus}`),
+            metadata: {
+              workflowId,
+              action: "resume",
+              status: resumeStatus as string,
             } as Record<string, unknown>,
             attachments: [],
           }
