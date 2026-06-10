@@ -18,8 +18,6 @@ export class DAGQueryTag extends Context.Service<DAGQueryTag, DAGQuery>()("@open
 
 export class SharedEventBusTag extends Context.Service<SharedEventBusTag, EventBus>()("@opencode/SharedDAGEventBus") {}
 
-export { WorktreeManagerTag }
-
 // ── Layer: idempotent via Effect Layer memo map ──
 
 // Shared EventBus singleton. Exposed as its own layer so bridge-layer can

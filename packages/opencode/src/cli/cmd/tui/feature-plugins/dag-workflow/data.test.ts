@@ -22,6 +22,7 @@ import {
   pauseWorkflow,
   resumeWorkflow,
   cancelWorkflow,
+  stepWorkflow,
   replanWorkflow,
   createWorkflow,
   useWorkflowList,
@@ -461,6 +462,20 @@ describe("WP1.1 data.ts — mutation wrappers", () => {
 
     await cancelWorkflow(client, "wf-1")
 
+    expect(calls).toEqual([{ workflowId: "wf-1" }])
+  })
+
+  it("stepWorkflow calls client.dagMutation.step with workflowId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dagMutation: {
+        step: async (input: unknown) => {
+          calls.push(input)
+          return { data: { ok: true } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+    await stepWorkflow(client, "wf-1")
     expect(calls).toEqual([{ workflowId: "wf-1" }])
   })
 

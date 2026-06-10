@@ -154,6 +154,7 @@ DAG 工作流配置形状的**唯一权威定义** = `session/types.ts` 的 `DAG
 
 - **测试**：按铁律组织（`describe('铁律 #N: ...')`），命名清晰；运行 `cd packages/opencode && bun test src/dag`。新增模块需独立测试锚点。
 - **类型**：无 `any`、无硬编码依赖、无循环依赖；`bun typecheck` 须 0 error。
+- **循环依赖斩断变通**：当一个 Effect Service tag 引发跨模块循环（如 `worktree-manager/tags.ts:WorktreeManagerTag`），可提取到无运行时依赖的叶子文件，由装配层（`layer.ts`）import + use。优先尝试 `Layer.suspend` 延迟求值（`provider.ts:1852` 先例）；仅当延迟无效（tag 在装配时点被急切访问）才提取叶文件。
 - **代码风格**：遵循仓库根 `AGENTS.md`（snake_case schema 字段、Bun API、early return、避免单用 helper）。
 - **提交**：conventional commits（`feat(dag): ...` / `fix(dag): ...` / `refactor(dag): ...`）。
 - **文档纪律**：本文件是唯一稳态文档；新功能完成（verify+review PASS）后退化对应条款至此表，禁止重新膨胀字段级细节（实现归地基代码）。
