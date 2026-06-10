@@ -29,7 +29,7 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 | 模块 | 职责 | 对 TUI 的价值 |
 |------|------|--------------|
-| `state-machine` | Workflow/Node/ShadowNode 状态生命周期，四铁律承载层 | 状态枚举与合法转移的唯一真相源 |
+| `state-machine` | Workflow/Node 状态生命周期，四铁律承载层 | 状态枚举与合法转移的唯一真相源 |
 | `scheduler` | 节点调度、执行槽位、错误恢复 | 「当前并发数 / queued 节点」数据来源 |
 | `group-manager` | Group→SubGroup→Branch 层级 + 依赖图（拓扑+环检测） | 节点地图的**层级/分组**渲染依据 |
 | `worktree-manager` | Git worktree 文件隔离 | 节点详情页「隔离环境/冲突」展示 |

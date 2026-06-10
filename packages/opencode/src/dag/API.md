@@ -6,6 +6,12 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 # DAG 工作流引擎 — API 参考手册
 
+> ⚠️ **§1-§4（状态机 / 调度器 / Worktree 管理 / 分组管理）描述的是 Core 路径接口**，这些实现类已批准退役（D-PLAN-RETIRE, ARCHITECTURE.md §8.e, 2026-06-09），**生产路径零引用**。
+> 
+> **生产实际使用的接口**从 **§5 Session 服务**开始。开发新功能请从 §5 起读；§1-§4 仅作历史参考。
+> 
+> 退/留边界详见 `AGENTS.md` 退/留判定表。
+
 本文档定义了 DAG 引擎所有模块的公共接口、类型和事件。
 
 ## 目录
@@ -64,6 +70,7 @@ enum NodeStatus {
 }
 
 enum ShadowNodeStatus {
+  // ⚠️ Core 内部状态机子状态，生产路径不可见、不可被编排为节点类型。仅供 Capability reservoir 场景。
   PENDING   = 'pending'     // 等待触发
   RUNNING   = 'running'     // shadow session 正在执行
   COMPLETED = 'completed'   // 返回 decision
@@ -200,6 +207,8 @@ interface IWorkflowStateMachine {
 
 ### INodeStateMachine
 
+> ⚠️ **Core reservoir 接口，未装配生产路径。** 签名中的 `ShadowNodeStatus` / `isShadow` 是 Core 内部 Shadow 子状态机概念，生产编排不可用。
+
 ```typescript
 interface NodeTransitionParams {
   workflowId: string
@@ -277,7 +286,7 @@ interface IScheduler {
 
 ### IWorktreeManager
 
-每个 Group/节点在独立 Git worktree 中执行，提供并发文件隔离。
+节点配置 `worker_config.use_worktree: true` 时在独立 Git worktree 中执行，提供并发文件隔离（opt-in，默认关闭；见 §节点配置 `worker_config`）。
 
 ```typescript
 interface IWorktreeManager {

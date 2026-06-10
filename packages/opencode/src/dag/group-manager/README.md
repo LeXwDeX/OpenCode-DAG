@@ -4,18 +4,16 @@ Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 Licensed under GNU AGPL v3; modifications must be open-sourced.
 -->
 
-# group-manager/ — Capability Reservoir
+# group-manager/ — 待退役（D-PLAN-RETIRE）
 
-**Status**: Capability reservoir. Not wired to production.
+**Status**: 实现类批准退役（D-PLAN-RETIRE, ARCHITECTURE.md §8.e, 2026-06-09）。
 
-`GroupManager` 实现类当前无生产调用方。生产路径使用扁平节点列表（`session-service`），不维护层级结构。
+`GroupManager` / `DependencyGraph` / `IGroupManager` / `IDependencyGraph` / `errors.ts` 当前无生产调用方。
 
-本模块被保留用于未来场景（Group 级并发、层级依赖管理）。详见 [`../../ARCHITECTURE.md` §2 与 §11](../ARCHITECTURE.md)。
+**⚠️ 必留资产**：`group-manager/types.ts` 中的 `GroupEvent` 被 `state-machine/EventBus.ts:22` + `IStateMachine.ts:32` 传递引用，是 `IEventBus.emit()` 签名 union 的一部分（API.md §7 锚定），**不可删除**。
 
-**装配判定**:
-- 类型（`IGroupManager`、`IDependencyGraph`、`GroupEvent`、`GroupConfig`）→ 可被引用 ✅
-- 实例化（`new GroupManager(...)`）→ 禁止 ❌（除非经 archgate 审批）
+详见 [`../../ARCHITECTURE.md` §2 与 §12](../ARCHITECTURE.md)。退/留判定详见 `../../AGENTS.md` 退/留判定表。
 
 ---
 
-*最后更新: 2026-06-07*
+*最后更新: 2026-06-09（D-PLAN-RETIRE）*

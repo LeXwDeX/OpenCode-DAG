@@ -16,10 +16,10 @@ DAG 工作流引擎是 opencode 的核心扩展模块，将任务编排建模为
 
 - **多分支并行执行** — 无依赖关系的节点自动并发
 - **依赖管理** — 拓扑排序保证正确执行顺序
-- **断点恢复** — 工作流中断后从断点继续
-- **Fallback 机制** — 节点失败时自动触发备用方案（push + fallback chain）
-- **Worktree 隔离** — 每个工作流在独立 Git worktree 中执行
-- **状态持久化** — Core 层 state.json + Session 层 SQLite 双层持久化
+- **断点恢复** — 崩溃后自动扫描孤儿工作流并恢复或标记失败（`recovery.ts`）
+- **错误降级** — 非 required 节点失败不阻塞工作流终态收敛；级联 skip 下游
+- **Worktree 隔离（可选）** — 节点配置 `use_worktree: true` 时在独立 Git worktree 中执行（opt-in，默认关闭）
+- **状态持久化** — SQLite 持久化（Session 路径，`dag_workflow` / `dag_node` / `dag_workflow_history` 表）
 - **四条铁律** — 状态机不可绕过、终态不可逆、事件必须广播、持久化优先
 
 ## 模块结构

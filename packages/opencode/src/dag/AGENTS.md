@@ -95,25 +95,33 @@ DAG 引擎所有状态变更模块必须遵守：
 
 ## Core 路径定位（Capability Reservoir Doctrine）
 
-`state-machine/`、`group-manager/`、`scheduler/`、`worktree-manager/` 中的实现类**不是死代码**。它们是 **Capability reservoir**（能力储备池），当前未装配到生产路径，但为未来场景（影子执行、工具路径、dry-run、丰富状态转移）保留。
+> ⚠️ **退役方向已批准（D-PLAN-RETIRE, ARCHITECTURE.md §8.e, 2026-06-09）**：三实现类将退出 reservoir，Session 路径提纯为三层架构（A 执行核 / B Session 运行时 / C 观察控制面）。详见 `.task_state/task_plan_dag_integration.md`。**退役尚未执行前，下列约束仍有效**。退役边界见下方"退/留判定表"。
+
+`state-machine/`、`group-manager/`、`scheduler/` 中的**实现类**当前未装配到生产路径。
+
+`worktree-manager/` 是**例外**：它已通过 `worktreeManagerLayer`（`layer.ts:41`）装配进 `defaultLayer`（`layer.ts:125`），由 `spawnReadyNode`（`workflow-engine.ts`）按 `worker_config.use_worktree === true` opt-in 调用（默认关闭，commit `c80861d32` 引入）。它已接入生产，不再属于 reservoir。
 
 **生产路径**: `session/workflow-engine.ts` + `session/session-service.ts`（Session 路径，§5）
 
-**Core 路径模块清单**:
+**退/留判定表（2026-06-09 双路交叉验证确认，12 条生产 import 边闭环）**:
 
-| 模块 | 实现类 | 当前状态 | 详情 |
-|------|--------|----------|------|
-| `state-machine/` | `NodeStateMachine` / `WorkflowStateMachine` | 实现未装配；类型/errors 被 Session 引用 | ARCHITECTURE.md §1 §11 |
-| `group-manager/` | `GroupManager` | 实现未装配；类型被引用 | ARCHITECTURE.md §2 §11 |
-| `scheduler/` | `Scheduler` | 无生产调用方 | ARCHITECTURE.md §4 §11 |
-| `worktree-manager/` | `WorktreeManager` | 实现未装配；接口可选注入 Session | ARCHITECTURE.md §3 §11 |
+| 文件 | 判定 | 生产引用证据 |
+|------|------|---|
+| `state-machine/EventBus.ts` | **必留** | layer.ts:9 `new EventBus()` |
+| `state-machine/IStateMachine.ts` | **必留** | session-service.ts:27, workflow-engine.ts:40, bridge:19 |
+| `state-machine/types.ts` | **必留** | session-service.ts:28-29, bridge:20, EventBus/IStateMachine 内部 |
+| `group-manager/types.ts` | **传递必留** | EventBus.ts:22 + IStateMachine.ts:32 (GroupEvent union) |
+| `worktree-manager/*` | **必留** | layer.ts:10-11, workflow-engine.ts:36-37 (已装配生产) |
+| `state-machine/{NodeStateMachine,WorkflowStateMachine,errors,index}.ts` | **可退** | 零生产引用 |
+| `scheduler/*` | **可退** | 整目录零生产引用 |
+| `group-manager/{GroupManager,DependencyGraph,IDependencyGraph,IGroupManager,errors}.ts` | **可退** | 零生产引用 |
 
-**判定规则**:
-- ✅ 引用 Core 路径的**类型/接口/枚举**（`WorkflowStatus`、`IEventBus`、`IGroupManager` 接口等）
+**判定规则**（退役前仍有效）:
+- ✅ 引用 Core 路径的**类型/接口/枚举**（`WorkflowStatus`、`IEventBus`、`GroupEvent` 等）
 - ❌ 从 Session 路径 `new NodeStateMachine(...)` 或调用 Core 实现类方法
-- ❌ 删除 Core 路径实现类（它们是有意的 Capability reservoir）
+- ❌ 删除**必留/传递必留**资产（它们是生产装配链的一部分）
 
-完整判定流程见 `ARCHITECTURE.md` §11。
+完整判定流程见 `ARCHITECTURE.md` §12。退役执行计划见 `.task_state/task_plan_dag_integration.md`。
 
 ### 铁律执行覆盖验证
 

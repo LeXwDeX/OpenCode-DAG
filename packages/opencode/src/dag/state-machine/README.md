@@ -4,34 +4,26 @@ Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 Licensed under GNU AGPL v3; modifications must be open-sourced.
 -->
 
-# state-machine/ — Capability Reservoir (实现类) + Shared Types
+# state-machine/ — 实现类待退役（D-PLAN-RETIRE）+ 共享类型
 
-**Status**: 实现类为 Capability reservoir，types/errors/EventBus 被多模块共享。
+**Status**: 实现类批准退役（D-PLAN-RETIRE, ARCHITECTURE.md §8.e, 2026-06-09）；types/EventBus/IStateMachine 为生产强依赖、**不可退**。
 
 本模块分两部分：
 
-## 共享类型与基础设施（被生产路径引用）
+## 必留：共享类型与基础设施（生产路径值级/类型级依赖）
 
 - `types.ts` — `WorkflowStatus`、`NodeStatus`、`ShadowNodeStatus` 枚举，`WorkflowEvent`、`NodeEvent` 事件类型
-- `errors.ts` — 状态转换合法性函数（`getValidNextWorkflowStatuses()` / `getValidNextNodeStatuses()`）
-- `EventBus.ts` — `IEventBus` 共享事件总线
-- `IStateMachine.ts` — 接口契约
+- `EventBus.ts` — `IEventBus` 实现（layer.ts:9 `new EventBus()` 生产装配）
+- `IStateMachine.ts` — `IEventBus` 接口（session-service.ts:27, workflow-engine.ts:40, bridge:19 引用）
 
-这些被 Session 路径（`session-service`、`workflow-engine`）和 Core 路径实现类共同引用。
+## 可退：实现类 + errors.ts（零生产引用）
 
-## Capability Reservoir 实现类（未装配到生产）
+- `NodeStateMachine.ts` / `WorkflowStateMachine.ts` — 实现类，零生产引用，仅测试
+- `errors.ts` — 状态转换函数 + 错误类，整文件零生产引用（session-service 有独立的 getValidNextSession* 实现）
+- `index.ts` — 全仓零引用的桶文件
 
-- `NodeStateMachine` — 节点级状态管理实现
-- `WorkflowStateMachine` — 工作流级状态管理实现
-
-当前无生产调用方。生产路径使用 `session-service` 独立维护简化状态转移（`getValidNextSessionWorkflowStatuses()` / `getValidNextSessionNodeStatuses()`）。
-
-详见 [`../../ARCHITECTURE.md` §1 与 §11](../ARCHITECTURE.md)。
-
-**装配判定**:
-- 类型/枚举/接口（`WorkflowStatus`、`IEventBus`、`IStateMachine`）→ 可被引用 ✅
-- 实例化（`new NodeStateMachine(...)`、`new WorkflowStateMachine(...)`）→ 禁止 ❌（除非经 archgate 审批）
+详见 [`../../ARCHITECTURE.md` §1 与 §12](../ARCHITECTURE.md)。退/留判定详见 `../../AGENTS.md` 退/留判定表。
 
 ---
 
-*最后更新: 2026-06-07*
+*最后更新: 2026-06-09（D-PLAN-RETIRE + errors.ts 零生产引用确认）*

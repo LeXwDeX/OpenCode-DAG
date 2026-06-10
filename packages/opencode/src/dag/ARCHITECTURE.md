@@ -54,9 +54,11 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ## 1. state-machine 模块
 
-**定位**: DAG 引擎基础模块，管理 Workflow / Node / ShadowNode 三种实体的状态生命周期。
+> ⚠️ **本节描述 Core 内部状态机实现，全部为 Capability reservoir，未装配生产路径。** 其中 `ShadowNodeStatus` / `NodeType.SHADOW`（Shadow 节点）是状态机的**内部子状态**，**生产路径不可见、不可被编排为节点类型**——编排只使用 `worker_type`（见 API.md 节点配置）。
 
-**装配状态**: 类型（`WorkflowStatus` / `NodeStatus` / `ShadowNodeStatus` / `errors.ts` 转换函数、`IEventBus`）被 scheduler、group-manager、session 引用；`NodeStateMachine` / `WorkflowStateMachine` 实现类为 **Capability reservoir**，未装配到生产路径（生产路径使用 Session 层的 `session-service` + `WorkflowEngine`）。详见 §8 与 §11。
+**定位**: DAG 引擎基础模块，管理 Workflow / Node 的状态生命周期（Node 含一个 Core 内部的 Shadow 子状态机，仅供 reservoir 场景使用）。
+
+**装配状态**: 类型（`WorkflowStatus` / `NodeStatus` / `ShadowNodeStatus` / `errors.ts` 转换函数、`IEventBus`）被 scheduler、group-manager、session 引用；`NodeStateMachine` / `WorkflowStateMachine` 实现类为 **Capability reservoir**，未装配到生产路径（生产路径使用 Session 层的 `session-service` + `WorkflowEngine`）。详见 §8 与 §12。
 
 **核心接口**: IStatePersister, IEventBus, IWorkflowStateMachine, INodeStateMachine
 
@@ -86,7 +88,9 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 ## 3. worktree-manager 模块
 
-**定位**: 文件隔离模块，基于 Git Worktree 为每个并行工作流提供独立文件隔离环境。被 group-manager 可选依赖。
+**定位**: 文件隔离模块，基于 Git Worktree 为节点提供独立文件隔离环境。被 group-manager 可选依赖。
+
+**装配状态**: **已接入生产路径**（opt-in）。`worktreeManagerLayer`（`layer.ts:41`）经 `defaultLayer`（`layer.ts:125`）装配为单例；`spawnReadyNode`（`workflow-engine.ts:874-911`）在节点配置 `worker_config.use_worktree === true` 时运行时调用 `create()` / `cleanup()`（默认关闭，commit `c80861d32` 引入）。注意：它**不是** Capability reservoir，与 §12 中 state-machine/scheduler/group-manager 的"未装配"定位不同。
 
 **核心接口**: IWorktreeManager, IWorktreePersister（可选）
 
@@ -101,7 +105,7 @@ state-machine ← scheduler / worktree-manager / group-manager / session ← que
 
 **定位**: 执行调度模块，在 state-machine + worktree-manager 之上提供节点生命周期管理和执行调度。
 
-**装配状态**: **Capability reservoir**。`Scheduler` 实现类当前无生产调用方（生产路径使用 `WorkflowEngine`）。保留理由：为未来"影子执行 / 工具路径 / dry-run"等场景提供备选调度能力。详见 §11。
+**装配状态**: **Capability reservoir**。`Scheduler` 实现类当前无生产调用方（生产路径使用 `WorkflowEngine`）。保留理由：为未来"工具路径 / Group 级并发调度"等场景提供备选调度能力。详见 §12。
 
 **核心接口**: IScheduler, INodeExecutor（外部注入执行器，禁止硬编码）
 
@@ -188,7 +192,7 @@ DAG 模块采用**双路径设计**：Core 路径（内存/工具）与 Session 
         ▲                                          ▲
         │                                          │
    CLI / test harness /                    DAG 生产执行
-   影子执行 / 外部集成                    (WorkflowEngine)
+   外部集成                                (WorkflowEngine)
 ```
 
 **关键点**:
@@ -197,6 +201,8 @@ DAG 模块采用**双路径设计**：Core 路径（内存/工具）与 Session 
 - **隔离机制**: listener 按 `workflow_id` 字段过滤（不是事件类型前缀），参见 `__tests__/DualPathIsolation.test.ts`
 
 ### 8.b 状态类型归属表
+
+> 注：本表 **Core 行**（`WorkflowStatus` / `NodeStatus` / `ShadowNodeStatus`）均为 Core 状态机**内部**类型，**生产路径不可编排**；其中 `ShadowNodeStatus` 是 Core 内部 Shadow 子状态机。生产实际使用 **Session 行**的 `DAG*Status`。
 
 | 层 | 类型 | 枚举值数 | 用途 |
 |----|------|---------|------|
@@ -219,7 +225,6 @@ DAG 模块采用**双路径设计**：Core 路径（内存/工具）与 Session 
 | **DAG 生产执行**（workflow-engine） | Session | 需要 SQLite 持久化 + Effect 包装 |
 | **CLI 工具**（如 dagworker 命令） | Session | 生产场景，需 DB 持久化 |
 | **单元测试 / 集成测试** | Core | 纯内存，无 SQLite 依赖，速度快 |
-| **影子执行**（dry-run / 预览） | Core | 工具场景，不需要 DB 持久化 |
 | **外部集成**（如 MCP 调用方） | 视场景 | 需 DB 持久化选 Session，纯内存选 Core |
 | **Test harness**（CI/CD 测试框架） | Core | 纯内存，易 mock |
 
@@ -294,6 +299,7 @@ bus.subscribe('workflow.started', (event) => {
 | **D6** | `node.reset` 纳入 NodeEvent union（方案 C） | admin bypass 仍应发事件（保留铁律 #3/#4） | 2026-06-05 |
 | **D7** | 不提升 writeNodeState / readNodeState 到公共 IStatePersister | 接口隔离；仅 NodeStateMachine 自身使用 | 2026-06-05 |
 | **D-PAUSE-SESSION** | Session 层扩展 `DAGWorkflowStatus` 加入 `'paused'`；HTTP 层新增 §10 DAG Mutation API（pause/resume POST endpoint） | P2 pause/resume 控制面需要 DB 持久化暂停状态；§5「有意省略」假设不再成立；Core 与 Session 状态转移规则仍独立实现；HTTP 写操作通过独立的 §10 DAG Mutation API 路由（绕过 §9 只读约束）| 2026-06-07 |
+| **D-PLAN-RETIRE** | **Core 三实现类退役 + Session 为唯一生产真相源**：NodeStateMachine / WorkflowStateMachine / Scheduler / GroupManager 实现类退出 reservoir，Session 路径提纯为 A 层(纯逻辑) + B 层(运行时) + C 层(观察控制面复用聚合)。保留 state-machine/{EventBus,IStateMachine,types}.ts + group-manager/types.ts + worktree-manager/{types,IWorktreeManager,WorktreeManager}.ts（生产强依赖）。ARCHIVED/ABORTED/ShadowNodeStatus/node PAUSED 随实现类退役（不进 A 层真相源）。详见 `.task_state/task_plan_dag_integration.md`。 | 用户目标=干净边界+可观察/探针/控制。Core 三模块与 Session 范式级错配(Promise vs Effect/fiber, Group/Branch vs 扁平 node)不可直接复用；生产已用更成熟方式实现 Core 设想的全部能力(重试/暂停/中止)。archgate 两轮校验 PASS 方向。 | 2026-06-09 |
 
 更多设计决策详见 `.task_state/dag-completion/taskplan.md` 与 `.task_state/findings.md`。
 
@@ -486,24 +492,28 @@ TUI button:  调用 HTTP API (POST /pause/:id)
 
 ## 12. Core 路径定位说明（Capability Reservoir Doctrine）
 
-**背景**: `state-machine/`、`group-manager/`、`scheduler/`、`worktree-manager/` 中的实现类（`NodeStateMachine`、`WorkflowStateMachine`、`GroupManager`、`Scheduler`、`WorktreeManager`）在代码库中存在但**未装配到生产路径**。生产路径使用 `session-service` + `WorkflowEngine`（Session 路径，§5）。
+> ⚠️ **本 Doctrine 已有批准的退役方向（D-PLAN-RETIRE, §8.e, 2026-06-09）**。三实现类（NodeStateMachine / WorkflowStateMachine / Scheduler / GroupManager）将退出 reservoir，Session 路径提纯为单一真相源三层架构。在退役 WP 实际执行并完成后，本节将重写为稳态架构描述。**退役尚未执行前，下列约束仍然有效**。
 
-**这些实现类不是死代码**。它们被设计为 **Capability reservoir**（能力储备池），为以下未来场景预留：
+**背景**: `state-machine/`、`group-manager/`、`scheduler/` 中的实现类（`NodeStateMachine`、`WorkflowStateMachine`、`GroupManager`、`Scheduler`）在代码库中存在但**未装配到生产路径**。生产路径使用 `session-service` + `WorkflowEngine`（Session 路径，§5）。
 
-| 场景 | 使用的 Core 路径模块 | 理由 |
-|------|----------------------|------|
-| 影子执行（dry-run / 预览） | `NodeStateMachine` + `WorkflowStateMachine` | 无需 SQLite，纯内存，速度快 |
-| 工具路径（MCP 外部调用） | Core 路径（按场景选取） | 无需 Effect 包装，接口更简单 |
-| 丰富状态转移（`FAILED→RUNNING` 重试） | `state-machine` | Core 层支持，Session 层省略 |
-| 层级调度（Group 级并发） | `GroupManager` | Core 层有完整 DependencyGraph，Session 层简化 |
-| 文件隔离（Git worktree） | `WorktreeManager` | Core 层完整实现，供 Session 层按需注入 |
+> 注：`worktree-manager/` 的 `WorktreeManager` **不在此列**——它已 opt-in 装配进生产路径（详见 §3）。本节 Doctrine 仅约束上述 3 个仍未装配的模块。
+
+**这些实现类不是死代码**。它们被设计为 **Capability reservoir**（能力储备池）。
+
+> ⚠️ 以下"未来场景"表 **已因 D-PLAN-RETIRE（§8.e, 2026-06-09）失效**——Core 实现类批准退役后，这些场景不会以 Core 路径模块方式实现。保留此表仅为历史参考，不构成新开发指导。
+
+| 场景 | 使用的 Core 路径模块 | 理由 | 状态 |
+|------|----------------------|------|------|
+| ~~工具路径（MCP 外部调用）~~ | ~~Core 路径~~ | — | **失效**（D-PLAN-RETIRE） |
+| ~~丰富状态转移（`FAILED→RUNNING` 重试）~~ | ~~`state-machine`~~ | — | **失效**（生产用 running→pending 重试） |
+| ~~层级调度（Group 级并发）~~ | ~~`GroupManager`~~ | — | **失效**（D-PLAN-RETIRE） |
 
 **类型共享规则**: Core 路径的**类型**（枚举、接口、错误类）被 Session 路径引用（例如 `WorkflowStatus` / `IEventBus`），这是有意设计。仅**实现类**（具体 `new Xxx(...)` 调用）保持隔离。
 
 **禁止操作**:
 - ❌ 从 `workflow-engine.ts`（Session 路径）直接 `new NodeStateMachine(...)`
 - ❌ 从 `session-service.ts` 调用 Core 路径实现类的 `transition()` 等方法
-- ❌ 删除 Core 路径实现类（它们是有意的 Capability reservoir）
+- ❌ 删除 Core 路径实现类（**D-PLAN-RETIRE 已批准退役方向**；退役 WP 执行时此条被豁免，但必须遵守退/留判定表中的"必留资产"边界）
 - ✅ Core 路径类型（`WorkflowStatus` / `NodeStatus` / `IGroupManager` 接口定义等）可被 Session 路径引用
 
 **判定流程**:
@@ -512,4 +522,4 @@ TUI button:  调用 HTTP API (POST /pause/:id)
 
 ---
 
-*最后更新: 2026-06-07（P2 pause/resume 架构扩展）*
+*最后更新: 2026-06-09（D-PLAN-RETIRE 退役方向批准 + §12 Doctrine 更新）*
