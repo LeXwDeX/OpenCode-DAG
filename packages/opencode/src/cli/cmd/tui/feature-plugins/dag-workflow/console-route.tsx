@@ -253,8 +253,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   // ── ControlBar action dispatch ───────────────────────────────────────────
   // ControlBar emits intents only; this route owns the dialogs (api.ui.*) and
   // the data.ts wrapper calls. pause/resume reuse pauseResume; cancel is gated
-  // by a DialogConfirm (terminal is irreversible); replan collects a 1-10
-  // concurrency via DialogPrompt.
+  // by a DialogConfirm (terminal is irreversible); replan opens a DialogSelect
+  // menu with 4 operations: concurrency / add node / remove node / update node.
   function handleControlAction(action: ControlAction, workflowId: string) {
     if (action === "pause" || action === "resume") {
       void pauseResume(action, workflowId)
@@ -270,14 +270,79 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       )
       return
     }
-    // replan
+    // replan → show 4-option menu (concurrency / add / remove / update)
     props.api.ui.dialog.replace(() =>
-      props.api.ui.DialogPrompt({
+      props.api.ui.DialogSelect<string>({
         title: i18n().t("dlg_replan_title"),
-        placeholder: i18n().t("dlg_replan_ph"),
-        onConfirm: (value) => void replanCurrent(workflowId, value),
+        options: [
+          { title: i18n().t("replan_concurrency"), value: "concurrency" },
+          { title: i18n().t("replan_add_node"), value: "add_node" },
+          { title: i18n().t("replan_remove_node"), value: "remove_node" },
+          { title: i18n().t("replan_update_node"), value: "update_node" },
+        ],
+        onSelect: (option) => handleReplanOption(option.value, workflowId),
       }),
     )
+  }
+
+  function handleReplanOption(op: string, workflowId: string) {
+    if (op === "concurrency") {
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogPrompt({
+          title: i18n().t("dlg_concurrency_title"),
+          placeholder: i18n().t("dlg_concurrency_ph"),
+          onConfirm: (value) => void replanCurrent(workflowId, value),
+        }),
+      )
+      return
+    }
+    if (op === "add_node") {
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogPrompt({
+          title: i18n().t("dlg_add_node_title"),
+          placeholder: i18n().t("dlg_add_node_ph"),
+          onConfirm: (json) => void addNodeReplan(workflowId, json),
+        }),
+      )
+      return
+    }
+    if (op === "remove_node") {
+      const ns = nodes()
+      if (ns.length === 0) {
+        toast.show({ message: i18n().t("toast_no_nodes"), variant: "error" })
+        return
+      }
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogSelect<string>({
+          title: i18n().t("dlg_remove_node_title"),
+          options: ns.map((n) => ({
+            title: n.config.name || n.node_id,
+            value: n.config.id,
+            description: `${n.status} (${n.config.worker_type})`,
+          })),
+          onSelect: (opt) => confirmRemoveNode(workflowId, opt.value),
+        }),
+      )
+      return
+    }
+    if (op === "update_node") {
+      const ns = nodes()
+      if (ns.length === 0) {
+        toast.show({ message: i18n().t("toast_no_nodes"), variant: "error" })
+        return
+      }
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogSelect<string>({
+          title: i18n().t("dlg_update_node_title"),
+          options: ns.map((n) => ({
+            title: n.config.name || n.node_id,
+            value: n.config.id,
+            description: `${n.status} (${n.config.worker_type})`,
+          })),
+          onSelect: (opt) => promptUpdateNode(workflowId, opt.value),
+        }),
+      )
+    }
   }
 
   async function cancelCurrent(workflowId: string) {
@@ -300,6 +365,86 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       await replanWorkflow(props.api.client, workflowId, { new_max_concurrency: parsed.value })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  async function addNodeReplan(workflowId: string, json: string) {
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(json)
+    } catch {
+      toast.show({ message: i18n().t("toast_invalid_json"), variant: "error" })
+      return
+    }
+    if (!parsed.id || typeof parsed.id !== "string") {
+      toast.show({ message: i18n().t("toast_missing_node_id"), variant: "error" })
+      return
+    }
+    try {
+      setActionError(null)
+      await replanWorkflow(props.api.client, workflowId, {
+        add_nodes: [parsed],
+        changed_by: "tui-add-node",
+      })
+      toast.show({ message: i18n().t("toast_node_added"), variant: "success" })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+      toast.show({ message: i18n().t("toast_replan_error"), variant: "error" })
+    }
+  }
+
+  function confirmRemoveNode(workflowId: string, nodeId: string) {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogConfirm({
+        title: i18n().t("dlg_confirm_remove_title"),
+        message: i18n().t("dlg_confirm_remove_msg").replace("{node}", nodeId),
+        onConfirm: () => void removeNodeReplan(workflowId, nodeId),
+      }),
+    )
+  }
+
+  async function removeNodeReplan(workflowId: string, nodeId: string) {
+    try {
+      setActionError(null)
+      await replanWorkflow(props.api.client, workflowId, {
+        remove_nodes: [nodeId],
+        changed_by: "tui-remove-node",
+      })
+      toast.show({ message: i18n().t("toast_node_removed"), variant: "success" })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+      toast.show({ message: i18n().t("toast_replan_error"), variant: "error" })
+    }
+  }
+
+  function promptUpdateNode(workflowId: string, nodeId: string) {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogPrompt({
+        title: i18n().t("dlg_update_node_prompt"),
+        placeholder: i18n().t("dlg_update_node_ph"),
+        onConfirm: (json) => void updateNodeReplan(workflowId, nodeId, json),
+      }),
+    )
+  }
+
+  async function updateNodeReplan(workflowId: string, nodeId: string, json: string) {
+    let parsed: Record<string, unknown>
+    try {
+      parsed = JSON.parse(json)
+    } catch {
+      toast.show({ message: i18n().t("toast_invalid_json"), variant: "error" })
+      return
+    }
+    try {
+      setActionError(null)
+      await replanWorkflow(props.api.client, workflowId, {
+        update_nodes: [{ id: nodeId, ...parsed }],
+        changed_by: "tui-update-node",
+      })
+      toast.show({ message: i18n().t("toast_node_updated"), variant: "success" })
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+      toast.show({ message: i18n().t("toast_replan_error"), variant: "error" })
     }
   }
 
