@@ -49,6 +49,8 @@ import type {
   DagMutationReplanResponses,
   DagMutationResumeErrors,
   DagMutationResumeResponses,
+  DagMutationStepErrors,
+  DagMutationStepResponses,
   DagReplanPatchBody,
   EventSubscribeResponses,
   EventTuiCommandExecute2,
@@ -1073,6 +1075,38 @@ export class DagMutation extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<DagMutationCancelResponses, DagMutationCancelErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Step a paused DAG workflow (execute 1 ready node)
+   *
+   * Executes exactly one ready node to completion or failure while the workflow remains paused. Returns not_paused if the workflow isn't paused, or no_ready_nodes if no pending nodes with satisfied dependencies exist.
+   */
+  public step<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationStepResponses, DagMutationStepErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/step",
       ...options,
       ...params,
     })

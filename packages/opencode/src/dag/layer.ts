@@ -7,8 +7,8 @@ import { DAGQuery } from "./query/dag-query"
 import { DAGSessionService, setEventBus } from "./session/session-service"
 import { recoverOrphanedWorkflows } from "./session/recovery"
 import { EventBus } from "./state-machine/EventBus"
-import type { IWorktreeManager } from "./worktree-manager/IWorktreeManager"
 import { WorktreeManager } from "./worktree-manager/WorktreeManager"
+import { WorktreeManagerTag } from "./worktree-manager/tags"
 import { SessionPrompt } from "@/session/prompt"
 import type { PromptOps } from "@/session/prompt-ops"
 
@@ -18,7 +18,7 @@ export class DAGQueryTag extends Context.Service<DAGQueryTag, DAGQuery>()("@open
 
 export class SharedEventBusTag extends Context.Service<SharedEventBusTag, EventBus>()("@opencode/SharedDAGEventBus") {}
 
-export class WorktreeManagerTag extends Context.Service<WorktreeManagerTag, IWorktreeManager>()("@opencode/DAGWorktreeManager") {}
+export { WorktreeManagerTag }
 
 // ── Layer: idempotent via Effect Layer memo map ──
 

@@ -1557,6 +1557,9 @@ export type DagViolation = {
     | "timeout_exceeded"
     | "execution_failed"
     | "process_orphan"
+    | "condition_skipped"
+    | "subdag_depth_exceeded"
+    | "subdag_timeout"
   severity: "info" | "warning" | "error" | "critical"
   message: string
   timestamp: string
@@ -1600,6 +1603,21 @@ export type DagResumeResponse = {
 export type DagCancelResponse = {
   status: string
 }
+
+export type DagStepResponse =
+  | {
+      ok: true
+      node_id: string
+      status: "completed"
+      output: unknown
+    }
+  | {
+      ok: false
+      reason: string
+      workflow_status?: string
+      node_id?: string
+      error?: string
+    }
 
 export type DagReplanPatchBody = {
   add_nodes?: Array<unknown>
@@ -4954,6 +4972,36 @@ export type DagMutationCancelResponses = {
 }
 
 export type DagMutationCancelResponse = DagMutationCancelResponses[keyof DagMutationCancelResponses]
+
+export type DagMutationStepData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/step"
+}
+
+export type DagMutationStepErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationStepError = DagMutationStepErrors[keyof DagMutationStepErrors]
+
+export type DagMutationStepResponses = {
+  /**
+   * Workflow step result — one node executed to completion or failure
+   */
+  200: DagStepResponse
+}
+
+export type DagMutationStepResponse = DagMutationStepResponses[keyof DagMutationStepResponses]
 
 export type DagMutationReplanData = {
   body?: DagReplanPatchBody
