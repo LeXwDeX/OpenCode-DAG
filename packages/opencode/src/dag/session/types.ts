@@ -138,9 +138,9 @@ export type DAGInputMapping = Record<string, DAGInputMappingEntry>
  * DAG 节点定义
  *
  * **Architectural note** — `DAGNodeConfig` and `DAGConfig` (below) are the single
- * canonical sources of truth for DAG configuration shape. Every other document
- * (USER_GUIDE.md YAML examples, dagworker-reference.md, dag-worker.txt) MUST stay
- * consistent with these interfaces.
+ * canonical sources of truth for DAG configuration shape. Any example, template,
+ * or tool doc (and the DAG `AGENTS.md` §6.1) MUST stay consistent with these
+ * interfaces; the docs reference these types, never the reverse.
  *
  * Field semantics worth highlighting:
  *

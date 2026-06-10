@@ -168,3 +168,7 @@ export interface WorkflowStatistics {
   averageNodeDuration: number
   totalElapsedTime: number
 }
+
+// RESERVED INTERNAL PROBE surface (D-PROBE-RESERVE) — re-exported so probe-types
+// is anchored into the query barrel (防孤儿：使 probe-types 非零引用). 不对外暴露给 AGENT。
+export type { IDAGProbe, NodeBlockReason, TopologyLayer, TopologySnapshot, ExecutionSnapshot, CascadeImpact } from './probe-types'

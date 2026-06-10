@@ -74,30 +74,21 @@ export type {
 } from "./execution-core"
 
 /**
- * Dual-Path Architecture
+ * Session Path — Production Runtime (single source of truth)
  *
- * The DAG module uses an explicit "Core vs Session" dual-path design
- * (documented in ARCHITECTURE.md §8).
+ * This file (`workflow-engine.ts`) is the **Session path**: the production
+ * runtime that orchestrates DAG execution via the SQLite-backed
+ * `DAGSessionService`. Pure scheduling/transition logic is delegated to the
+ * A-layer `execution-core.ts`.
  *
- * This file (`workflow-engine.ts`) is the **Session path** — the current
- * production runtime that orchestrates DAG execution via the SQLite-backed
- * `DAGSessionService`.
+ * The legacy **Core path** (`state-machine/` + `scheduler/` + `group-manager/`
+ * implementation classes) is approved for RETIREMENT (D-PLAN-RETIRE) — it has
+ * zero production references and is range-fenced for deletion. See the DAG
+ * `AGENTS.md` (§1.2 + §6 retire/keep table) for the authoritative boundary.
  *
- * The **Core path** (`state-machine/`, `scheduler/`, `group-manager/`) is
- * deliberately isolated from this file. It is NOT dead code; it serves as a
- * capability reservoir for future integration (tool path, richer transitions
- * like FAILED→RUNNING retry).
- *
- * NOTE: dry-run / shadow-execution was previously listed as a reservoir use
- * case but has been dropped — no concrete application scenario was found, so
- * it will NOT be built (decision 2026-06-09). Do not reintroduce it.
- *
- * Integration between the two paths is intentionally avoided to preserve
- * testability of each independently (see ARCHITECTURE.md:281-282, decision D-PLAN).
- *
- * If you find yourself tempted to call `NodeStateMachine`, `Scheduler`, or
- * `GroupManager` from here — STOP. That breaks the dual-path design.
- * File a design review first.
+ * If you find yourself tempted to `new NodeStateMachine`, `new Scheduler`, or
+ * `new GroupManager` from here — STOP. Those are retiring; the Session path is
+ * the only production truth. Keep using `execution-core` pure functions instead.
  */
 
 /**
