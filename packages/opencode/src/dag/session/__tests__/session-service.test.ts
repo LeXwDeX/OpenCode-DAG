@@ -155,8 +155,13 @@ describe('DAG Session Types - Shape Validation', () => {
         'max_nodes_exceeded',
         'max_concurrency_exceeded',
         'timeout_exceeded',
+        'execution_failed',
+        'process_orphan',
+        'condition_skipped',
+        'subdag_depth_exceeded',
+        'subdag_timeout',
       ];
-      expect(types).toHaveLength(5);
+      expect(types).toHaveLength(10);
     });
   });
 

@@ -23,6 +23,8 @@ import type {
   DAGNodeStatus,
   DAGViolationType,
   DAGViolationSeverity,
+  CreateNodeInput,
+  UpdateNodeConfigInput,
 } from "./types"
 import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
@@ -184,21 +186,6 @@ export class WorkflowConfigValidationError extends Error {
   }
 }
 
-export interface CreateNodeInput {
-  workflowId: string
-  /** caller-provided id (e.g. ${workflowId}::${cfgId}); falls back to auto-generated */
-  nodeId?: string
-  name: string
-  nodeName: string
-  nodeType: string
-  config: any  // JSON blob — typed as DAGNodeConfig internally when persisted
-  inputData?: unknown
-  timeoutMs?: number
-  retryCount?: number
-  maxRetries?: number
-  dependencyNodes?: string[]
-}
-
 export interface UpdateNodeStatusInput {
   sessionId: string
   status: DAGNodeStatus
@@ -223,12 +210,6 @@ export interface CreateHistoryInput {
   newState: unknown
   changeDetails: unknown
   changedBy?: string | null
-}
-
-export interface UpdateNodeConfigInput {
-  nodeId: string
-  newConfig: DAGNodeConfig
-  newDependencies?: string[]
 }
 
 export interface AtomicReplanInput {

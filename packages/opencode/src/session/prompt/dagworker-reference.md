@@ -265,9 +265,13 @@ type DAGViolationType =
   | "max_concurrency_exceeded"    // Config set max_concurrency > 10
   | "timeout_exceeded"            // Node or workflow timed out
   | "execution_failed"            // Runtime spawn/infrastructure error
+  | "process_orphan"              // Orphan process detected during recovery
+  | "condition_skipped"           // Node condition evaluated to false (skipped)
+  | "subdag_depth_exceeded"       // Sub-DAG nesting depth > 3
+  | "subdag_timeout"              // Sub-DAG lifecycle bridge timeout
 ```
 
-Severity levels: `error` | `warning` | `info`. Most node-level violations emit `error`-level unless explicitly downgraded by worker config.
+Severity levels: `critical` | `error` | `warning` | `info`. Most node-level violations emit `error`-level unless explicitly downgraded by worker config.
 
 ## 9. Timeout semantics
 

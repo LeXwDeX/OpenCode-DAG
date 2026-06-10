@@ -79,7 +79,7 @@ CREATE TABLE dag_violation (
   workflow_id TEXT NOT NULL,                        -- Reference to workflow
   chat_session_id TEXT NOT NULL,                    -- Denormalized for easier querying
   node_id TEXT,                                     -- Optional reference to node
-  violation_type TEXT NOT NULL,                     -- 'required_node_skipped' | 'dependency_violated' | etc.
+  violation_type TEXT NOT NULL,                     -- See DAG_VIOLATION_TYPES in session/types.ts
   severity TEXT NOT NULL,                          -- 'error' | 'warning' | 'info'
   message TEXT NOT NULL,                            -- Human-readable violation message
   details TEXT,                                    -- JSON: additional violation details

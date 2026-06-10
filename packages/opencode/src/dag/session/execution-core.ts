@@ -25,11 +25,9 @@ import type {
   DAGNodeStatus,
   DAGWorkflowStatus,
   ReplanPatch,
-} from "./types"
-import type {
   CreateNodeInput,
   UpdateNodeConfigInput,
-} from "./session-service"
+} from "./types"
 
 // ============================================================================
 // Replan Result Types

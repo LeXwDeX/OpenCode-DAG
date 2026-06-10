@@ -685,3 +685,28 @@ export type ReplanResult =
       final_total: number
     }
   | { ok: false; reason: string; detail?: unknown }
+
+// ============================================================================
+// 9. Service Input Types (decoupled from session-service to keep A-layer pure)
+// ============================================================================
+
+export interface CreateNodeInput {
+  workflowId: string
+  /** caller-provided id (e.g. ${workflowId}::${cfgId}); falls back to auto-generated */
+  nodeId?: string
+  name: string
+  nodeName: string
+  nodeType: string
+  config: any
+  inputData?: unknown
+  timeoutMs?: number
+  retryCount?: number
+  maxRetries?: number
+  dependencyNodes?: string[]
+}
+
+export interface UpdateNodeConfigInput {
+  nodeId: string
+  newConfig: DAGNodeConfig
+  newDependencies?: string[]
+}
