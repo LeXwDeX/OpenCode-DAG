@@ -85,7 +85,7 @@ DAG 所有状态变更模块必须遵守：
 
 ### 4.1 控制命令现状
 
-`pause`/`resume`/`cancel`/`replan` 已全栈贯通：`dagworker` tool（LLM 入口）→ HTTP Mutation API（`server/.../dag-mutation`）→ `WorkflowEngine` → `session-service`。TUI 控制台（`cli/.../dag-workflow/`）提供按钮 + create 多字段对话 + replan 节点编辑。`step`/`inspect` 命令未实现（见 backlog WP-5）。
+`pause`/`resume`/`cancel`/`replan`/`step` 已全栈贯通：`dagworker` tool（LLM 入口）→ HTTP Mutation API（`server/.../dag-mutation`）→ `WorkflowEngine` → `session-service`。TUI 控制台（`cli/.../dag-workflow/`）提供按钮 + create 多字段对话 + replan 节点编辑 + paused 态 step 单步。step 语义：paused 状态下单步触发 1 个 ready node 至完成/失败（workflow 始终保持 paused，通过 `stepMode` token 阻断自动调度链）。`inspect` 命令未实现（见 backlog WP-5 inspect）。
 
 ---
 
