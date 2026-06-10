@@ -1540,14 +1540,16 @@ export const layer = Layer.effect(
 // these spawn/fs services closes them in its own defaultLayer (see
 // git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
 // in makeRuntime deduplicates the underlying instances across services.
-export const defaultLayer = layer.pipe(
-  Layer.provide(MCP.defaultLayer),
-  Layer.provide(FetchHttpClient.layer),
-  Layer.provide(Provider.defaultLayer),
-  Layer.provide(Auth.defaultLayer),
-  Layer.provide(AppFileSystem.defaultLayer),
-  Layer.provide(CrossSpawnSpawner.defaultLayer),
-  Layer.provide(SessionHooks.defaultLayer),
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(MCP.defaultLayer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Provider.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(AppFileSystem.defaultLayer),
+    Layer.provide(CrossSpawnSpawner.defaultLayer),
+    Layer.provide(SessionHooks.defaultLayer),
+  ),
 )
 
 // ── type:"mcp" hook execution ───────────────────────────────────
