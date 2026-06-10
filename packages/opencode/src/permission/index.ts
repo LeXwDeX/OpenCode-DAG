@@ -359,6 +359,8 @@ export function disabled(tools: string[], ruleset: Ruleset): Set<string> {
   return PermissionV2.disabled(tools, ruleset)
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(Bus.layer), Layer.provide(SettingsHook.defaultLayer))
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(Layer.provide(Bus.layer), Layer.provide(SettingsHook.defaultLayer)),
+)
 
 export * as Permission from "."

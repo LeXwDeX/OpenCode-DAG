@@ -954,14 +954,16 @@ export const layer: Layer.Layer<
   Service,
   never,
   BackgroundJob.Service | Bus.Service | Storage.Service | SyncEvent.Service | RuntimeFlags.Service
-> = layerBase.pipe(Layer.provide(SettingsHook.defaultLayer))
+> = Layer.suspend(() => layerBase.pipe(Layer.provide(SettingsHook.defaultLayer)))
 
-export const defaultLayer = layer.pipe(
-  Layer.provide(BackgroundJob.defaultLayer),
-  Layer.provide(Bus.layer),
-  Layer.provide(Storage.defaultLayer),
-  Layer.provide(SyncEvent.defaultLayer),
-  Layer.provide(RuntimeFlags.defaultLayer),
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(BackgroundJob.defaultLayer),
+    Layer.provide(Bus.layer),
+    Layer.provide(Storage.defaultLayer),
+    Layer.provide(SyncEvent.defaultLayer),
+    Layer.provide(RuntimeFlags.defaultLayer),
+  ),
 )
 
 const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function* (
