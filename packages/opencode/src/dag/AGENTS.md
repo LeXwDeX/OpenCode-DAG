@@ -91,14 +91,12 @@ DAG 所有状态变更模块必须遵守：
 
 ## 5. 诊断探针（D-PROBE-RESERVE，预留接口）
 
-`query/probe-types.ts`（`IDAGProbe`）+ `query/dag-probe.ts`（`DAGProbe` 骨架）是**预留的只读诊断探针接口**，回答"节点为何阻塞 / 拓扑分层 / 运行快照 / 级联影响"。
-
-**当前状态**：接口骨架已就位（占位，运行时逻辑未实现，见 backlog WP-4），未来实现复用 A 层 `execution-core` 纯函数。
+`query/probe-types.ts`（`IDAGProbe`）+ `query/dag-probe.ts`（`DAGProbe` 占位骨架）是**刻意保留的只读诊断探针接口**，预留用于回答"节点为何阻塞 / 拓扑分层 / 运行快照 / 级联影响"。所有方法 throw `'reserved interface — not yet implemented (D-PROBE-RESERVE)'`，运行时逻辑**按用户决策长期保持预留**，除非用户显式提示激活。
 
 **刻意约束（不可违反）**：
 - 探针**只读**（经 sessionService 取数，绝不写状态、不 emit、不绕状态机）。
 - 探针**代码层可见**（被 `query-types.ts` type re-export 锚定，非孤儿；禁止当 unused 删除）。
-- 探针**不暴露给 AGENT**：不进 `dagworker` action 枚举、不加 HTTP 路由、不进 layer 装配。实现 WP-4 时仍须保持此隐藏边界（除非显式变更该决策）。
+- 探针**不暴露给 AGENT**：不进 `dagworker` action 枚举、不加 HTTP 路由、不进 layer 装配（即使用户激活运行时后仍须保持此隐藏边界，除非显式变更决策）。
 
 ---
 
