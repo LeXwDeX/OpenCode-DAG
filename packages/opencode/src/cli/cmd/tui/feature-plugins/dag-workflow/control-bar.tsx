@@ -22,13 +22,14 @@ import type { DAGWorkflowStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { t, workflowStatusLabel, type Lang } from "./i18n"
 
-export type ControlAction = "pause" | "resume" | "cancel" | "replan"
+export type ControlAction = "pause" | "resume" | "cancel" | "replan" | "step"
 
 export type ControlBarActions = {
   pause: boolean
   resume: boolean
   cancel: boolean
   replan: boolean
+  step: boolean
 }
 
 /**
@@ -40,9 +41,10 @@ export type ControlBarActions = {
  *   irreversible; pending has not started yet)
  */
 export function controlBarActions(status: DAGWorkflowStatus): ControlBarActions {
-  if (status === "running") return { pause: true, resume: false, cancel: true, replan: true }
-  if (status === "paused") return { pause: false, resume: true, cancel: true, replan: false }
-  return { pause: false, resume: false, cancel: false, replan: false }
+  if (status === "running") return { pause: true, resume: false, cancel: true, replan: true, step: false }
+  // P2-B: step is enabled when paused (executes exactly 1 ready node)
+  if (status === "paused") return { pause: false, resume: true, cancel: true, replan: false, step: true }
+  return { pause: false, resume: false, cancel: false, replan: false, step: false }
 }
 
 /**
@@ -79,6 +81,11 @@ export function ControlBar(props: {
       <Show when={actions().resume}>
         <text fg={theme.primary} onMouseUp={() => props.onAction("resume")}>
           {t(props.lang, "ctrl_resume")}
+        </text>
+      </Show>
+      <Show when={actions().step}>
+        <text fg={theme.primary} onMouseUp={() => props.onAction("step")}>
+          {t(props.lang, "ctrl_step")}
         </text>
       </Show>
       <Show when={actions().cancel}>

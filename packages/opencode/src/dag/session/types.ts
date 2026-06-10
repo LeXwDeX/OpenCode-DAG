@@ -710,3 +710,38 @@ export interface UpdateNodeConfigInput {
   newConfig: DAGNodeConfig
   newDependencies?: string[]
 }
+
+// ============================================================================
+// 10. Step Result (P2-B: single-node step execution under paused workflow)
+// ============================================================================
+
+/**
+ * Result of `WorkflowEngine.stepWorkflow(workflowId)` — executes exactly 1
+ * ready node to completion or failure while the workflow remains `paused`.
+ *
+ * - `{ok: true, ...}` — node executed and reached a terminal state.
+ * - `{ok: false, reason: "not_paused"}` — workflow was not in `paused` status.
+ * - `{ok: false, reason: "no_ready_nodes"}` — workflow is paused but no
+ *   ready nodes are available (all dependencies unsatisfied or none pending).
+ * - `{ok: false, reason: "node_failed", ...}` — node reached `failed` state.
+ * - `{ok: false, reason: "step_interrupted"}` — step was interrupted
+ *   (e.g., workflow cancelled during step execution).
+ */
+export type StepResult =
+  | {
+      ok: true
+      node_id: string
+      status: "completed"
+      output: unknown
+    }
+  | {
+      ok: false
+      reason: "not_paused" | "no_ready_nodes" | "step_interrupted"
+      workflow_status?: DAGWorkflowStatus
+    }
+  | {
+      ok: false
+      reason: "node_failed"
+      node_id: string
+      error: string
+    }

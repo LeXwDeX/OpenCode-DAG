@@ -5,10 +5,38 @@
 /**
  * DAG Internal Diagnostic Probe — RESERVED INTERFACE (D-PROBE-RESERVE, 2026-06-10)
  *
- * 这是一个【有意预留的前向声明】诊断探针接口，不是死代码，禁止当作 "unused" 删除。
- * 实现被刻意推迟（见 .task_state/task_plan_dag_integration.md WP-4 可观察性探针）。
- * 刻意不暴露给 AGENT：不进 dagworker action 枚举、不加 HTTP 路由、不进 MCP 工具清单、不进 layer 装配。
- * 仅供未来 DAG 诊断/可观察性场景内部按需实例化。
+ * ┌──────────────────────────────────────────────────────────────────┐
+ * │  ⚠️ DO NOT DELETE — THIS IS INTENTIONALLY RESERVED, NOT DEAD   │
+ * └──────────────────────────────────────────────────────────────────┘
+ *
+ * WHY THIS LOOKS LIKE ORPHAN CODE:
+ *   This file defines the diagnostic probe interface (IDAGProbe) and its
+ *   5 data structures. It is deliberately NOT wired to any production surface:
+ *   - No dagworker action enum entry (AGENT cannot call it)
+ *   - No HTTP route (external callers cannot reach it)
+ *   - No MCP tool registration (not in tool manifest)
+ *   - Not in layer.ts assembly (not instantiated at boot)
+ *
+ * WHY IT EXISTS:
+ *   The interface locks down the DAG diagnostic capability surface area so
+ *   future implementation (backlog WP-4 / P2-A) does not need to redesign the
+ *   data shapes or add/remove methods retroactively. Implementing later is
+ *   then purely additive — fill the placeholder throws in dag-probe.ts with
+ *   real logic reusing A-layer pure functions from execution-core.ts.
+ *
+ * ANTI-ORPHAN PROTECTION (4 layers):
+ *   1. query-types.ts re-exports IDAGProbe (type-level anchor, ensures import chain)
+ *   2. dag-probe.test.ts asserts the contract (type-level + throw placeholder)
+ *   3. D-PROBE-RESERVE tag in file headers and error messages
+ *   4. AGENTS.md §5 documents the intentional reservation + hidden boundary
+ *
+ * FUTURE IMPLEMENTOR GUIDE:
+ *   Replace placeholder throws in dag-probe.ts with real logic:
+ *   - explainBlock → areDependenciesSatisfied (execution-core.ts)
+ *   - getTopology → detectCycle (DAGNodeConfig[], NOT DAGNodeSession[]) + BFS layers
+ *   - getExecutionSnapshot → getReadyNodes + computeSpawnBudget
+ *   - predictCascade → findPendingDescendants
+ *   Keep the hidden boundary unless the user explicitly changes the decision.
  */
 
 /**

@@ -79,6 +79,25 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       },
     )
 
+    // P2-B: step handler — executes one ready node under a paused workflow.
+    // Engine-missing → status gate returns {ok:false, reason:"not_paused"} (no live engine,
+    // so no paused workflow to step). Matches the pause/resume pattern of reading through
+    // dagQuery as a fallback.
+    const step = Effect.fn("DagMutationHttpApi.step")(
+      function* (ctx: { params: { workflowId: string } }) {
+        const engine = WorkflowEngine.get(ctx.params.workflowId)
+        if (!engine) {
+          const workflow = yield* Effect.promise(() => dagQuery.getWorkflow(ctx.params.workflowId))
+          return {
+            ok: false as const,
+            reason: "not_paused",
+            workflow_status: workflow?.status ?? "pending",
+          }
+        }
+        return yield* engine.stepWorkflow(ctx.params.workflowId)
+      },
+    )
+
     const replan = Effect.fn("DagMutationHttpApi.replan")(
       function* (ctx: {
         params: { workflowId: string }
@@ -152,6 +171,7 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       .handle("pause", pause)
       .handle("resume", resume)
       .handle("cancel", cancel)
+      .handle("step", step)
       .handle("replan", replan)
       .handle("create", create)
   }),

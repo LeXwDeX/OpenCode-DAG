@@ -24,6 +24,7 @@ import type {
   DAGWorkflowStatus,
   ReplanPatch,
   ReplanResult,
+  StepResult,
 } from "./types"
 import type { PromptOps } from "@/session/prompt-ops"
 import { Agent } from "@/agent/agent"
@@ -122,6 +123,7 @@ export interface WorkflowEngine {
   replanWorkflow(workflowId: string, patch: ReplanPatch): Effect.Effect<ReplanResult>
   pauseWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
   resumeWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
+  stepWorkflow(workflowId: string): Effect.Effect<StepResult, never>
 }
 
 // ============================================================================
@@ -143,6 +145,15 @@ const engineRegistry = new Map<string, WorkflowEngine>()
 const spawnedNodes = new Set<string>()
 const concurrencyRegistry = new Map<string, number>()
 const replanInFlight = new Set<string>()
+// P2-B: Module-level registry for step-execution (single-node under paused workflow).
+// A workflow is in step mode iff its workflowId is in `stepMode`. While set:
+// - spawnReadyNode's paused guard allows spawn for the target workflow
+// - handleNodeCompletion/Failure skip scheduleReadyNodes + maybeFinalize
+// - maybeFinalize is suppressed (workflow stays paused throughout)
+// stepResolve stores the Deferred callback to be called when the stepped node
+// reaches a terminal state (completed/failed), resolving the stepWorkflow awaiter.
+const stepMode = new Set<string>()
+const stepResolve = new Map<string, (result: StepResult) => void>()
 
 // ============================================================================
 // WP-D3: Sub-DAG Lifecycle Bridge — Parent↔Child event subscription registry
@@ -414,6 +425,8 @@ export const __internal_spawnedNodes = (): Set<string> => spawnedNodes
 export const __internal_replanInFlight = (): Set<string> => replanInFlight
 /** @internal test-only — exposes module-private concurrencyRegistry map for unit testing */
 export const __internal_concurrencyRegistry = (): Map<string, number> => concurrencyRegistry
+/** @internal test-only — exposes module-private stepMode set for unit testing */
+export const __internal_stepMode = (): Set<string> => stepMode
 
 const make = Effect.gen(function* () {
   const dagSessionService = yield* DAGSessionService.make
@@ -463,7 +476,9 @@ const make = Effect.gen(function* () {
           logData: { worker_type: node.config.worker_type },
         })
       }
-      if (wf && wf.status === 'paused') {
+      // P2-B: step-mode relaxation — when stepMode is active for this workflow,
+      // spawn is allowed even under 'paused' (stepWorkflow is driving a single-node execution).
+      if (wf && wf.status === 'paused' && !stepMode.has(workflowId)) {
         return
       }
 
@@ -1167,7 +1182,19 @@ const make = Effect.gen(function* () {
         })
       }
       
-      // 2. 调度下一批准备就绪的节点
+      // 2. P2-B: stepMode guard (WARN-1) — under step mode, resolve the Deferred
+      //    with ok:true and skip scheduleReadyNodes + maybeFinalize. The Deferred
+      //    callback drives the stepWorkflow awaiter back to control.
+      if (stepMode.has(workflowId)) {
+        const resolve = stepResolve.get(workflowId)
+        if (resolve) {
+          stepResolve.delete(workflowId)
+          resolve({ ok: true, node_id: nodeId, status: 'completed', output })
+        }
+        return { success: true }
+      }
+
+      // 2b. Schedule next batch of ready nodes (normal path, not under stepMode)
       yield* scheduleReadyNodes(workflowId)
 
       // 3. Workflow terminal convergence
@@ -1224,10 +1251,22 @@ const make = Effect.gen(function* () {
       // 3. Cascade skip downstream pending nodes BEFORE scheduleReadyNodes
       yield* cascadeSkipDownstream(workflowId, nodeId)
 
-      // 4. Schedule other independent branches
+      // 4. P2-B: stepMode guard (WARN-1) — under step mode, resolve the Deferred
+      //    with ok:false:node_failed and skip schedule/finalize. Cascade skip
+      //    (step 3 above) still runs to honor DAG semantics.
+      if (stepMode.has(workflowId)) {
+        const resolve = stepResolve.get(workflowId)
+        if (resolve) {
+          stepResolve.delete(workflowId)
+          resolve({ ok: false, reason: 'node_failed', node_id: nodeId, error: error.message })
+        }
+        return { success: true }
+      }
+
+      // 4b. Schedule other independent branches (normal path)
       yield* scheduleReadyNodes(workflowId)
 
-      // 5. Workflow terminal convergence
+      // 5. Workflow terminal convergence (WARN-2)
       yield* maybeFinalizeWorkflow(workflowId)
       
       return { success: true }
@@ -1248,6 +1287,19 @@ const make = Effect.gen(function* () {
       const TERMINAL: DAGWorkflowStatus[] = ['completed', 'failed', 'cancelled']
 
       yield* sessionService.updateWorkflowStatus(workflowId, 'cancelled')
+
+      // P2-B: when cancelling a workflow currently in step-mode, resolve the
+      // step deferred with step_interrupted so the stepWorkflow awaiter
+      // unblocks immediately. Effect.ensuring in stepWorkflow handles
+      // stepMode/stepResolve cleanup on its own — we only delete stepResolve
+      // here to guard against double-resolution from handleNodeCompletion.
+      if (stepMode.has(workflowId)) {
+        const resolve = stepResolve.get(workflowId)
+        if (resolve) {
+          stepResolve.delete(workflowId)
+          resolve({ ok: false, reason: 'step_interrupted', workflow_status: 'cancelled' })
+        }
+      }
 
       // WP-D3: cascade to any running "dag" sub-workflows. Read node metadata
       // which was persisted in spawnReadyNode's "dag" dispatch path.
@@ -1296,6 +1348,72 @@ const make = Effect.gen(function* () {
       yield* scheduleReadyNodes(workflowId)
       return 'running' as DAGWorkflowStatus
     }) as Effect.Effect<DAGWorkflowStatus, never>
+
+  // ============================================================================
+  // P2-B: stepWorkflow — execute exactly 1 ready node while workflow stays paused
+  //
+  // Semantics:
+  // - REJECT if workflow status is not 'paused'
+  // - Return {ok:false, reason:"no_ready_nodes"} if no pending-with-satisfied-deps
+  // - Spawn exactly 1 ready node via spawnReadyNode (maxConcurrency budget = 1)
+  // - Await completion/failure of that node via a Deferred (Promise) resolved in
+  //   handleNodeCompletion/Failure when stepMode.has(workflowId)
+  // - Workflow status remains 'paused' throughout (no finalize, no auto-schedule)
+  // - Effect.ensuring guarantees stepMode cleanup on fiber interrupt/complete/fail
+  // ============================================================================
+  const stepWorkflow: WorkflowEngine['stepWorkflow'] = (workflowId) =>
+    Effect.gen(function* () {
+      // 0+1. Status gate + ready nodes computation (duplicated from above for correctness)
+      const workflow = yield* sessionService.getWorkflow(workflowId)
+      if (!workflow || workflow.status !== 'paused') {
+        return {
+          ok: false,
+          reason: 'not_paused',
+          workflow_status: workflow?.status ?? 'cancelled',
+        } as StepResult
+      }
+
+      const allNodes = yield* sessionService.listNodes(workflowId)
+      const completedNodeIds = new Set<string>(
+        allNodes.filter((n: DAGNodeSession) => n.status === 'completed').map((n: DAGNodeSession) => n.node_id),
+      )
+      const failedNodeIds = new Set<string>(
+        allNodes.filter((n: DAGNodeSession) => n.status === 'failed').map((n: DAGNodeSession) => n.node_id),
+      )
+      const runningNodeIds = new Set<string>(
+        allNodes.filter((n: DAGNodeSession) => n.status === 'running').map((n: DAGNodeSession) => n.node_id),
+      )
+      const readyNodes = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
+      const outputMap = buildOutputMap(allNodes)
+      const { executeList } = splitByCondition(readyNodes, outputMap)
+      if (executeList.length === 0) {
+        return { ok: false, reason: 'no_ready_nodes' } as StepResult
+      }
+      const targetNode = executeList[0]
+
+      // 2. Register step-mode token (handleNodeCompletion/Failure gate) + Deferred
+      //    (Promise resolved by handleNodeCompletion/Failure via callback map).
+      stepMode.add(workflowId)
+      let deferredResolve: (r: StepResult) => void
+      const deferred = new Promise<StepResult>((r) => { deferredResolve = r })
+      stepResolve.set(workflowId, deferredResolve!)
+
+      // 3. Fork spawnReadyNode for the single target node (budget=1)
+      yield* spawnReadyNode(workflowId, targetNode, outputMap).pipe(Effect.forkDetach)
+
+      // 4. Await completion/failure via Deferred — resolved by
+      //    handleNodeCompletion/Failure when stepMode.has(workflowId)
+      const result: StepResult = yield* Effect.promise(() => deferred).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            stepMode.delete(workflowId)
+            stepResolve.delete(workflowId)
+          }),
+        ),
+      )
+
+      return result
+    }) as Effect.Effect<StepResult, never>
 
   /**
    * 获取工作流状态
@@ -1505,6 +1623,7 @@ const make = Effect.gen(function* () {
     replanWorkflow,
     pauseWorkflow,
     resumeWorkflow,
+    stepWorkflow,
     setPromptOps,
     spawnReadyNode,
   } as WorkflowEngine & {

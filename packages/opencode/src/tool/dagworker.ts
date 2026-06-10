@@ -87,6 +87,7 @@ export const Parameters = Schema.Struct({
     Schema.Literal("logs"),
     Schema.Literal("pause"),
     Schema.Literal("resume"),
+    Schema.Literal("step"),
   ])).annotate({
     description: "Action to perform. Defaults to 'start' if not specified.",
   }),
@@ -704,6 +705,61 @@ export const DAGWorkerTool = Tool.define(
               workflowId,
               action: "resume",
               status: resumeStatus as string,
+            } as Record<string, unknown>,
+            attachments: [],
+          }
+        }
+
+        case "step": {
+          if (!params.workflow) {
+            return yield* Effect.fail(
+              new Error("'step' action requires 'workflow' parameter with workflow ID")
+            )
+          }
+          const workflowId = params.workflow
+          const engine = WorkflowEngine.get(workflowId)
+          if (!engine) {
+            const workflow = yield* dagSessionService.getWorkflow(workflowId)
+            return {
+              title: `Step failed: ${workflowId}`,
+              output: formatOutput(
+                `Cannot step workflow ${workflowId}: no active engine found. Current DB status: ${workflow?.status ?? "unknown"}`
+              ),
+              metadata: {
+                workflowId,
+                action: "step",
+                error: "engine_not_found",
+                currentStatus: workflow?.status ?? "unknown",
+              } as Record<string, unknown>,
+              attachments: [],
+            }
+          }
+          const stepResult = yield* engine.stepWorkflow(workflowId)
+          if (stepResult.ok) {
+            return {
+              title: `Step completed: ${stepResult.node_id}`,
+              output: formatOutput(
+                `Node ${stepResult.node_id} completed successfully. Workflow status remains paused.`
+              ),
+              metadata: {
+                workflowId,
+                action: "step",
+                nodeId: stepResult.node_id,
+                nodeStatus: stepResult.status,
+              } as Record<string, unknown>,
+              attachments: [],
+            }
+          }
+          return {
+            title: `Step failed: ${workflowId}`,
+            output: formatOutput(
+              `Step rejected: reason=${stepResult.reason}${"node_id" in stepResult ? ` node=${stepResult.node_id}` : ""}${"error" in stepResult ? ` error=${stepResult.error}` : ""}`
+            ),
+            metadata: {
+              workflowId,
+              action: "step",
+              ok: false,
+              reason: stepResult.reason,
             } as Record<string, unknown>,
             attachments: [],
           }

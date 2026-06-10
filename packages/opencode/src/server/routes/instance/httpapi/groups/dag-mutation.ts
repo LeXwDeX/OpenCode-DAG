@@ -37,6 +37,24 @@ const CancelResponse = Schema.Struct({
   status: Schema.String,
 }).annotate({ identifier: "DagCancelResponse" })
 
+// P2-B: Step result — executes a single ready node under a paused workflow.
+// Discriminated union on `ok` for type-safe consumption by SDK clients.
+const StepResponse = Schema.Union([
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    node_id: Schema.String,
+    status: Schema.Literal("completed"),
+    output: Schema.Unknown,
+  }),
+  Schema.Struct({
+    ok: Schema.Literal(false),
+    reason: Schema.String,
+    workflow_status: Schema.optional(Schema.String),
+    node_id: Schema.optional(Schema.String),
+    error: Schema.optional(Schema.String),
+  }),
+]).annotate({ identifier: "DagStepResponse" })
+
 // Replan patch body. add_nodes/update_nodes are kept permissive (Schema.Unknown elements):
 // DAGNodeConfig is structurally rich and the engine re-validates via validateReplanPostConfig.
 const ReplanPatchBody = Schema.Struct({
@@ -124,6 +142,18 @@ const dagMutationGroup = HttpApiGroup.make("dag-mutation")
         summary: "Cancel a DAG workflow",
         description:
           "Cancels the DAG workflow. When no in-memory engine exists, the status is downgraded via sessionService.updateWorkflowStatus(cancelled); an already-terminal workflow returns its current status idempotently (no 500).",
+      }),
+    ),
+    HttpApiEndpoint.post("step", `${root}/workflows/:workflowId/step`, {
+      params: WorkflowIdParams,
+      query: WorkflowIdQuery,
+      success: described(StepResponse, "Workflow step result — one node executed to completion or failure"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag-mutation.step",
+        summary: "Step a paused DAG workflow (execute 1 ready node)",
+        description:
+          "Executes exactly one ready node to completion or failure while the workflow remains paused. Returns not_paused if the workflow isn't paused, or no_ready_nodes if no pending nodes with satisfied dependencies exist.",
       }),
     ),
     HttpApiEndpoint.post("replan", `${root}/workflows/:workflowId/replan`, {

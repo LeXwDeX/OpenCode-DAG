@@ -16,21 +16,23 @@ import { controlBarActions, parseReplanConcurrency } from "./control-bar"
 import type { DAGWorkflowStatus } from "@/dag/session/types"
 
 describe("ControlBar — controlBarActions gating", () => {
-  it("running enables pause, cancel, replan (not resume)", () => {
+  it("running enables pause, cancel, replan (not resume, not step)", () => {
     expect(controlBarActions("running")).toEqual({
       pause: true,
       resume: false,
       cancel: true,
       replan: true,
+      step: false,
     })
   })
 
-  it("paused enables resume, cancel (not pause, not replan)", () => {
+  it("paused enables resume, cancel, step (not pause, not replan)", () => {
     expect(controlBarActions("paused")).toEqual({
       pause: false,
       resume: true,
       cancel: true,
       replan: false,
+      step: true,
     })
   })
 
@@ -42,6 +44,7 @@ describe("ControlBar — controlBarActions gating", () => {
         resume: false,
         cancel: false,
         replan: false,
+        step: false,
       })
     }
   })
@@ -52,6 +55,7 @@ describe("ControlBar — controlBarActions gating", () => {
       resume: false,
       cancel: false,
       replan: false,
+      step: false,
     })
   })
 })

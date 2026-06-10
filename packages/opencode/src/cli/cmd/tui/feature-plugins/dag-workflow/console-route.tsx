@@ -37,6 +37,7 @@ import {
   cancelWorkflow,
   replanWorkflow,
   createWorkflow,
+  stepWorkflow,
 } from "./data"
 import {
   listDAGTemplates,
@@ -240,6 +241,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     }
   }
 
+  // P2-B: Step wrapper — runs the data.ts stepWorkflow and surfaces errors as toast.
+  async function stepOne(workflowId: string) {
+    try {
+      setActionError(null)
+      await stepWorkflow(props.api.client, workflowId)
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   function togglePauseResume() {
     const wf = currentWorkflow()
     if (!wf) return
@@ -258,6 +269,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   function handleControlAction(action: ControlAction, workflowId: string) {
     if (action === "pause" || action === "resume") {
       void pauseResume(action, workflowId)
+      return
+    }
+    // P2-B: step — no confirmation dialog (idempotent + only runs 1 ready node)
+    if (action === "step") {
+      void stepOne(workflowId)
       return
     }
     if (action === "cancel") {

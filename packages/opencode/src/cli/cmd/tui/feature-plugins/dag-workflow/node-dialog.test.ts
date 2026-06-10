@@ -139,6 +139,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     ctrl_resume: ["[Resume]", "[恢复]"],
     ctrl_cancel: ["[Cancel]", "[取消]"],
     ctrl_replan: ["[Replan]", "[调整并发]"],
+    ctrl_step: ["[Step]", "[单步]"],
     ctrl_new: ["[+ New]", "[+ 新建]"],
     dlg_cancel_title: ["Cancel workflow", "取消工作流"],
     dlg_cancel_msg: ["Cancelling is irreversible. Continue?", "取消不可逆，确认继续？"],
