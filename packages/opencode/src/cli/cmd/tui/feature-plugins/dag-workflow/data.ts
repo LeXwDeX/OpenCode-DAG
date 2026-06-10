@@ -665,6 +665,10 @@ export function useWorkflowStats(props: {
 // SDK 读写分离：只读走 client.dag.*（Dag class），状态变更走
 // client.dagMutation.*（DagMutation class）。所有 wrapper 仅转发到 server
 // POST 路由，由 WorkflowEngine + sessionService 状态机校验，TUI 不直接改状态。
+// D-TUI-RESERVE (design-only): future inspect/probe wrappers may be added here only
+// after probe runtime / inspect is explicitly activated. Until then, do not add
+// SDK calls, routes, or client methods for inspect; TUI remains limited to the
+// existing read APIs and dagMutation controls.
 // ============================================================================
 
 export async function pauseWorkflow(client: Client, workflowId: string) {

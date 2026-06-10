@@ -72,6 +72,10 @@ export const layer = Layer.effect(
   }),
 )
 
+// D-TDZ-DEFENSE (design-only): if an import-smoke TDZ appears here, prefer
+// wrapping defaultLayer as `Layer.suspend(() => layer.pipe(...))`. Keep the
+// provided service set unchanged; do not move SessionShare dependencies into
+// app-runtime just to mask the cycle.
 export const defaultLayer = layer.pipe(
   Layer.provide(ShareNext.defaultLayer),
   Layer.provide(Session.defaultLayer),

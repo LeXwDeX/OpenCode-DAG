@@ -118,6 +118,10 @@ const dagQueryLayer = Layer.effect(
 // `Layer.provide(SessionPrompt.defaultLayer)` below — NOT via the flat array
 // in server.ts, which does not cross-wire siblings. Effect memoization ensures
 // the same `SessionPrompt.defaultLayer` instance is shared across the build.
+// D-TDZ-DEFENSE (design-only): SessionPrompt.defaultLayer has participated in
+// historical DAG import cycles. If smoke tests regress, first try Layer.suspend
+// around the smallest DAG layer boundary; use leaf tag extraction only when an
+// eagerly accessed Context.Service/tag causes the cycle.
 export const defaultLayer = dagQueryLayer.pipe(
   Layer.provideMerge(sharedEventBusLayer),
   Layer.provideMerge(worktreeManagerLayer),

@@ -1,5 +1,9 @@
 # TUI 与 DAG Worker 系统集成设计报告
 
+> **状态更新（2026-06-10）**: RETIRED / HISTORICAL。
+> 当前 DAG 稳态约束以 `packages/opencode/src/dag/AGENTS.md` 为唯一来源；本文仅保留历史设计背景，不作为 archgate/code_spec/实现输入。
+> 后续删除/归档门槛见 `.task_state/dag_design_reservations.md` §0。
+
 > **文档状态**: 草稿（待讨论）  
 > **创建时间**: 2026-01-XX  
 > **作者**: Main Agent  

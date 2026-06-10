@@ -632,6 +632,9 @@ export const layer: Layer.Layer<
   }),
 )
 
+// D-TDZ-DEFENSE (design-only): appLayer/defaultLayer are potential eager layer
+// aggregation points. If a smoke test reports TDZ here, suspend the smallest
+// affected layer boundary first and keep Worktree.Service shape unchanged.
 export const appLayer = layer.pipe(
   Layer.provide(Git.defaultLayer),
   Layer.provide(AppProcess.defaultLayer),

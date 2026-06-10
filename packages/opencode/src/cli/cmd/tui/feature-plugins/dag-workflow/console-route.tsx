@@ -262,6 +262,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   }
 
   // ── ControlBar action dispatch ───────────────────────────────────────────
+  // D-TUI-RESERVE (design-only): future UX capabilities live here as intents only:
+  // template preview, replan diff preview, form-based node editor, and inspect panel.
+  // They must keep the current boundary: UI emits intent -> data.ts wrapper -> server API -> WorkflowEngine.
+  // Do not add direct SDK calls or DAG SQLite access in presentation components.
   // ControlBar emits intents only; this route owns the dialogs (api.ui.*) and
   // the data.ts wrapper calls. pause/resume reuse pauseResume; cancel is gated
   // by a DialogConfirm (terminal is irreversible); replan opens a DialogSelect

@@ -62,6 +62,10 @@ import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 
+// D-TDZ-DEFENSE (design-only): CoreLayer is a high-fan-in aggregation point.
+// Prefer fixing cyclic services at their child layer boundary with Layer.suspend
+// or leaf tag extraction. Do not wrap this whole layer to hide a real cycle
+// unless archgate approves that broader blast radius.
 const CoreLayer = Layer.mergeAll(
   Npm.defaultLayer,
   AppFileSystem.defaultLayer,

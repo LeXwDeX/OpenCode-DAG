@@ -37,6 +37,9 @@
  *   - getExecutionSnapshot → getReadyNodes + computeSpawnBudget
  *   - predictCascade → findPendingDescendants
  *   Keep the hidden boundary unless the user explicitly changes the decision.
+ *   Probe runtime activation does NOT automatically expose it to agents.
+ *   Future inspect should be a controlled façade over this internal probe,
+ *   added only after an explicit user decision.
  */
 
 /**

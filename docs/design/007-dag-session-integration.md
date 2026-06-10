@@ -1,5 +1,9 @@
 # DAG Session 模块设计（含 Chat 集成）
 
+> **状态更新（2026-06-10）**: RETIRED / HISTORICAL。
+> 当前 DAG 稳态约束以 `packages/opencode/src/dag/AGENTS.md` 为唯一来源；本文仅保留历史设计背景，不作为 archgate/code_spec/实现输入。
+> 后续删除/归档门槛见 `.task_state/dag_design_reservations.md` §0。
+
 > **版本**: 2.0 ⭐ 取代 v1.0
 > **状态**: 设计完成，待评审
 > **创建日期**: 2026-06-05
