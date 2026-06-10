@@ -3,6 +3,11 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Session path (workflow-engine.ts) uses flat node+dependencies model,
+ * not Group/Branch hierarchy. Do not import from production code.
+ * See AGENTS.md 退/留判定表.
+ *
  * Group Manager 实现
  *
  * @module dag/group-manager/GroupManager

@@ -2,6 +2,13 @@
 // Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
+/**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Session path (workflow-engine.ts) handles scheduling via Effect/fiber.
+ * Promise-based paradigm conflicts with production fiber model.
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ */
+
 import type { IScheduler } from './IScheduler';
 import type {
   WorkerInfo,

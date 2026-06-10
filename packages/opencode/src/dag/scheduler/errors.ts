@@ -3,6 +3,10 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Session path defines its own error handling.
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ *
  * DAG 调度器错误类型
  */
 

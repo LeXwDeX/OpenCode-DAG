@@ -3,6 +3,10 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Barrel file with zero production references.
+ * Exported implementation classes are deprecated. Use execution-core.ts instead.
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ *
  * @file State Machine Module Entry
  * @description DAG 状态机模块入口文件
  * 

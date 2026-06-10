@@ -3,6 +3,10 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Session path does not use Group/Branch hierarchy.
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ *
  * Group Manager 接口定义
  *
  * @module dag/group-manager/IGroupManager

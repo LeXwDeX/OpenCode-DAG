@@ -3,8 +3,11 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ *
  * Group Manager 错误类型定义
- * 
+ *
  * @module dag/group-manager/errors
  */
 

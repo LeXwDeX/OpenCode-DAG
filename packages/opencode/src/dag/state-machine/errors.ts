@@ -3,6 +3,10 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
+ * @deprecated D-PLAN-RETIRE (2026-06-09) — Zero production references.
+ * Session path has independent transition tables (execution-core.ts).
+ * Do not import from production code. See AGENTS.md 退/留判定表.
+ *
  * @file State Machine Errors
  * @description DAG 状态机错误类型定义
  * 
