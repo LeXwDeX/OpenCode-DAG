@@ -129,23 +129,20 @@ DAG 工作流配置形状的**唯一权威定义** = `session/types.ts` 的 `DAG
 - ❌ TUI / 外部进程直连 DAG SQLite（必经 server）。
 - ❌ 绕过状态机直接 `DB.insert/update` 状态（破坏铁律 #1/#4）。
 - ❌ bridge 反向回写 `WorkflowEngine` / `session-service`。
-- ❌ 从 Session 路径 `new` 任何 Core 实现类（NodeStateMachine/Scheduler/GroupManager）。
+- ❌ 重新引入 Core 实现类（NodeStateMachine/Scheduler/GroupManager）—— 已退役（D-PLAN-RETIRE），代码承载删除。
 - ❌ 删除**必留/传递必留**资产（见退/留判定表）。
 - ❌ 把 `worker_type === "dag"` 注册为 agent 名（保留字，触发子 DAG 派发）。
 
-### 6.4 退/留判定表（WP-6 退役未完成，**活约束**，删错即击穿生产）
+### 6.4 必留资产判定表（WP-6 已完成，Core 实现类已退役）
 
 | 资产 | 判定 | 生产引用证据 |
 |------|------|---|
-| `state-machine/{EventBus,IStateMachine,types}.ts` | **必留** | layer.ts:9 / session-service.ts:27-29 / workflow-engine.ts:40 / bridge:19-20 |
-| `group-manager/types.ts` | **传递必留** | EventBus.ts:22 + IStateMachine.ts:32（GroupEvent union） |
-| `worktree-manager/*` | **必留** | layer.ts:10-11 + workflow-engine.ts:36-37（已装配生产） |
+| `state-machine/{EventBus,IStateMachine,types}.ts` | **必留** | layer.ts / session-service.ts / workflow-engine.ts / bridge |
+| `group-manager/types.ts` | **传递必留** | EventBus.ts + IStateMachine.ts（GroupEvent union） |
+| `worktree-manager/*` | **必留** | layer.ts + workflow-engine.ts（已装配生产） |
 | `query/{probe-types,dag-probe}.ts` | **必留（预留）** | query-types.ts re-export 锚定（§5，禁删） |
-| `state-machine/{NodeStateMachine,WorkflowStateMachine,errors,index}.ts` | 可退 | 零生产引用 |
-| `scheduler/*` | 可退 | 整目录零生产引用 |
-| `group-manager/{GroupManager,DependencyGraph,IDependencyGraph,IGroupManager,errors}.ts` | 可退 | 零生产引用 |
 
-退役执行（删可退文件 + 处理 ≈332 孤儿测试）必须走 archgate→implement(TDD)→verify→review→集成测试全流程，分批进行。详见 `.task_state/dag_backlog.md` WP-6。
+退役细节（已删除的 Core 实现类 + 孤儿测试清单）见 `.task_state/dag_backlog.md` WP-6 DONE 区。
 
 ### 6.5 常见陷阱
 
