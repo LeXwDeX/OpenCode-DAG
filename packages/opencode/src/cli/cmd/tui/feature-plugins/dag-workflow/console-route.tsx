@@ -41,6 +41,7 @@ import {
 import {
   listDAGTemplates,
   instantiateDAGTemplate,
+  type DAGTemplateInput,
 } from "@/dag/integration/templates"
 import {
   DagWorkflowRenderer,
@@ -58,6 +59,21 @@ import { useToast } from "@tui/ui/toast"
 const ROUTE = "dag-workflow"
 
 type ViewMode = "tree" | "ascii-dag"
+
+// ── Pure utility: convert raw dialog fields to a template input ──────────
+// Empty/whitespace-only scope and context become undefined (omitted from input).
+export function buildTemplateInput(fields: {
+  goal: string
+  scope: string
+  context: string
+}): DAGTemplateInput {
+  const input: DAGTemplateInput = { goal: fields.goal }
+  const scopeTrimmed = fields.scope?.trim()
+  const contextTrimmed = fields.context?.trim()
+  if (scopeTrimmed) input.scope = scopeTrimmed
+  if (contextTrimmed) input.context = contextTrimmed
+  return input
+}
 
 export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const { theme } = useTheme()
@@ -288,9 +304,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   }
 
   // ── Create workflow from template ─────────────────────────────────────────
-  // Two-step dialog chain via api.ui.dialog.replace: select a template, then
-  // collect a goal. create is template-derived only (instantiateDAGTemplate);
-  // node add/remove and AI generation are out of scope for the TUI.
+  // Three-step dialog chain via api.ui.dialog.replace: select a template, then
+  // collect goal → scope → context. create is template-derived only
+  // (instantiateDAGTemplate); node add/remove and AI generation are out of
+  // scope for the TUI. Scope and context are optional (empty → omitted).
   function handleCreate() {
     props.api.ui.dialog.replace(() =>
       props.api.ui.DialogSelect<string>({
@@ -300,23 +317,48 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           value: tpl.id,
           description: tpl.description,
         })),
-        onSelect: (option) => promptGoalThenCreate(option.value),
+        onSelect: (option) => promptFieldsAndCreate(option.value),
       }),
     )
   }
 
-  function promptGoalThenCreate(templateId: string) {
+  // ── Create workflow from template: 3-step field-collection dialog chain ──
+  function promptFieldsAndCreate(templateId: string): void {
     props.api.ui.dialog.replace(() =>
       props.api.ui.DialogPrompt({
         title: i18n().t("dlg_goal_title"),
         placeholder: i18n().t("dlg_goal_ph"),
-        onConfirm: (goal) => void createFromTemplate(templateId, goal),
+        onConfirm: (goal) => promptScopeAndCreate(templateId, goal),
       }),
     )
   }
 
-  async function createFromTemplate(templateId: string, goal: string) {
-    const result = instantiateDAGTemplate(templateId, { goal })
+  function promptScopeAndCreate(templateId: string, goal: string): void {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogPrompt({
+        title: i18n().t("dlg_scope_title"),
+        placeholder: i18n().t("dlg_scope_ph"),
+        onConfirm: (scope) => promptContextAndCreate(templateId, goal, scope),
+      }),
+    )
+  }
+
+  function promptContextAndCreate(templateId: string, goal: string, scope: string): void {
+    props.api.ui.dialog.replace(() =>
+      props.api.ui.DialogPrompt({
+        title: i18n().t("dlg_context_title"),
+        placeholder: i18n().t("dlg_context_ph"),
+        onConfirm: (context) => void createFromTemplate(templateId, { goal, scope, context }),
+      }),
+    )
+  }
+
+  async function createFromTemplate(
+    templateId: string,
+    fields: { goal: string; scope: string; context: string },
+  ): Promise<void> {
+    const input = buildTemplateInput(fields)
+    const result = instantiateDAGTemplate(templateId, input)
     if ("error" in result) {
       setActionError(result.error)
       toast.show({ message: i18n().t("toast_create_error"), variant: "error" })
@@ -325,7 +367,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     try {
       setActionError(null)
       await createWorkflow(props.api.client, {
-        name: goal.slice(0, 80),
+        name: fields.goal.slice(0, 80),
         chatSessionId: sessionID(),
         config: result,
       })

@@ -147,6 +147,13 @@ describe("WP4 i18n — t() dict lookup", () => {
     dlg_create_title: ["Choose a template", "选择模板"],
     dlg_goal_title: ["Workflow goal", "工作流目标"],
     dlg_goal_ph: ["Describe the goal", "描述目标"],
+    dlg_scope_title: ["Scope (optional)", "范围（可选）"],
+    dlg_scope_ph: ["e.g., frontend only, API layer", "例如：仅前端、API层"],
+    dlg_context_title: ["Context (optional)", "上下文（可选）"],
+    dlg_context_ph: [
+      "e.g., using React 19, TypeScript strict mode",
+      "例如：使用React 19、TypeScript严格模式",
+    ],
     toast_created: ["Workflow created (pending). Start it via a chat turn.", "工作流已创建（待启动），请通过对话轮启动。"],
     toast_replan_range: ["Concurrency must be between 1 and 10", "并发数必须在 1 到 10 之间"],
     toast_create_error: ["Failed to create workflow", "创建工作流失败"],
