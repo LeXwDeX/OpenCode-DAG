@@ -156,6 +156,14 @@ const stepMode = new Set<string>()
 const stepResolve = new Map<string, (result: StepResult) => void>()
 
 // ============================================================================
+// WP1-B: Node-level timeout — settled registry
+// Tracks which nodes have settled (reached terminal state).
+// Key: node_id, Value: boolean (true once node settles).
+// Used by setTimeout-based timeout fiber to check if node already done.
+// ============================================================================
+const nodeSettledRegistry = new Map<string, boolean>()
+
+// ============================================================================
 // WP-D3: Sub-DAG Lifecycle Bridge — Parent↔Child event subscription registry
 // ============================================================================
 //
@@ -427,6 +435,8 @@ export const __internal_replanInFlight = (): Set<string> => replanInFlight
 export const __internal_concurrencyRegistry = (): Map<string, number> => concurrencyRegistry
 /** @internal test-only — exposes module-private stepMode set for unit testing */
 export const __internal_stepMode = (): Set<string> => stepMode
+/** @internal test-only — exposes module-private nodeSettled registry for unit testing (WP1) */
+export const __internal_nodeSettled = (): Map<string, boolean> => nodeSettledRegistry
 
 const make = Effect.gen(function* () {
   const dagSessionService = yield* DAGSessionService.make
@@ -459,6 +469,14 @@ const make = Effect.gen(function* () {
     outputMap?: Map<string, unknown>,
   ): Effect.Effect<void, never, never> => {
     let worktreeCleanup: (() => Promise<void>) | undefined
+
+    // WP1-B: register node as not-yet-settled. Effect.ensuring sets it to true
+    // when the node reaches any terminal state (clears the timeout).
+    nodeSettledRegistry.set(node.node_id, false)
+
+    // WP1-B: timeout state in closure scope so Effect.ensuring can access it.
+    let nodeSettledFlag = false
+    let nodeTimeoutId: ReturnType<typeof setTimeout> | undefined
 
     const body = Effect.gen(function* () {
       // 0. Paused guard (§10.e Option C): if workflow is paused, bail out
@@ -633,6 +651,52 @@ const make = Effect.gen(function* () {
         }
 
         return
+      }
+
+      // WP1-B: Node-level timeout fiber (kill switch).
+      // Uses setTimeout + Deferred (mirrors installSubdagLifecycleBridge pattern).
+      // The timeout fires a violation + marks node failed.
+      // nodeSettled Deferred is resolved in Effect.ensuring (ALL exit paths),
+      // WP1-B: Uses setTimeout + cleared in Effect.ensuring (mirrors installSubdagLifecycleBridge pattern).
+      // The timeout fires a violation + marks node failed.
+      // nodeSettledFlag is set to true in Effect.ensuring (ALL exit paths),
+      // which also clears the timeout timer so stale firing is prevented.
+      // Only active for non-dag nodes (dag nodes use installSubdagLifecycleBridge timeout).
+      const nodeTimeoutMs = node.config.timeout_ms
+
+      if (nodeTimeoutMs) {
+        nodeTimeoutId = setTimeout(() => {
+          if (nodeSettledFlag) return // Already settled, don't fire
+          Effect.runPromise(
+            Effect.gen(function* () {
+              yield* sessionService.createViolation({
+                workflowId,
+                nodeId: node.node_id,
+                type: "timeout_exceeded",
+                severity: "error",
+                message: `node exceeded timeout_ms=${nodeTimeoutMs}`,
+                details: { timeout_ms: nodeTimeoutMs },
+              }).pipe(
+                Effect.tapError((err) => Effect.logWarning(`[DAG] timeout violation create failed for ${node.node_id}: ${err}`)),
+                Effect.ignore,
+              )
+              // Mark node failed only if still in non-terminal state
+              const currentForTimeout = yield* sessionService.getNode(node.node_id).pipe(
+                Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
+              )
+              if (currentForTimeout && (currentForTimeout.status === "running" || currentForTimeout.status === "pending")) {
+                yield* sessionService.updateNodeStatus({
+                  sessionId: node.node_id,
+                  status: "failed",
+                  error: `node exceeded timeout_ms=${nodeTimeoutMs}`,
+                } satisfies UpdateNodeStatusInput).pipe(
+                  Effect.tapError((err) => Effect.logWarning(`[DAG] timeout status update failed for ${node.node_id}: ${err}`)),
+                  Effect.ignore,
+                )
+              }
+            }).pipe(Effect.ignore),
+          )
+        }, nodeTimeoutMs)
       }
 
       // 2. Resolve agent
@@ -888,9 +952,17 @@ const make = Effect.gen(function* () {
       }
 
       // 7. Post-prompt: if node still 'running' (subagent never called node_complete)
-      const finalNodes = yield* sessionService.listNodes(workflowId)
-      const thisNode = finalNodes.find((n: DAGNodeSession) => n.node_id === node.node_id)
-      if (thisNode && thisNode.status === 'running') {
+      // WP1-C: Post-prompt guard — if timeout fiber already marked node failed,
+      // skip node_complete_missing check (prevents double status transitions).
+      const postPromptNode = yield* sessionService.getNode(node.node_id).pipe(
+        Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
+      )
+      if (postPromptNode?.status === "failed") {
+        // Timeout fiber (or other mechanism) already marked node failed.
+        // Skip node_complete_missing logic to avoid duplicate transitions.
+        return
+      }
+      if (postPromptNode?.status === 'running') {
         yield* sessionService.updateNodeStatus({
           sessionId: node.node_id,
           status: 'failed',
@@ -910,11 +982,19 @@ const make = Effect.gen(function* () {
         })
       }
     }).pipe(
-      Effect.ensuring(Effect.sync(() => {
-        if (worktreeCleanup) {
-          worktreeCleanup().catch((err) => console.warn(`[DAG] worktree cleanup failed: ${err}`))
-        }
-      })),
+      Effect.ensuring(
+        // WP1-B: signal node-settled on ALL exit paths.
+        // Sets the settled flag (prevents stale timeout from firing) +
+        // clears the timeout timer (no leak) + removes from settled registry.
+        Effect.sync(() => {
+          nodeSettledFlag = true
+          if (nodeTimeoutId !== undefined) clearTimeout(nodeTimeoutId)
+          nodeSettledRegistry.delete(node.node_id)
+          if (worktreeCleanup) {
+            worktreeCleanup().catch((err) => console.warn(`[DAG] worktree cleanup failed: ${err}`))
+          }
+        }),
+      ),
       Effect.catchCause((cause) =>
         Effect.gen(function* () {
           const errMsg = String(Cause.squash(cause))

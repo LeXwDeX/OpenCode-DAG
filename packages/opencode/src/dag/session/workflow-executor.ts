@@ -40,24 +40,30 @@ export interface WorkflowExecutor {
  * 创建 WorkflowExecutor 实例
  * 
  * 执行循环包含超时保护和 cancelled 检测：
- * - 超过 maxRuntimeMs 自动中止
+ * - 超过 effectiveTimeout 自动中止
  * - 工作流状态变为 cancelled 立即退出
+ *
+ * Timeout resolution order (highest priority first):
+ * 1. config.timeout_ms (if set in DAGConfig)
+ * 2. maxRuntimeMs parameter (caller-provided, defaults to DEFAULT_MAX_RUNTIME_MS)
  */
 export function createWorkflowExecutor(
   engine: WorkflowEngine,
   config: DAGConfig,
   maxRuntimeMs: number = DEFAULT_MAX_RUNTIME_MS
 ): WorkflowExecutor {
+  // WP1-A: config.timeout_ms takes precedence over param default
+  const effectiveTimeout = config.timeout_ms ?? maxRuntimeMs
   return {
     start(workflowId: string): Effect.Effect<void, never, never> {
       return Effect.gen(function* () {
         const startedAt = Date.now()
         
         while (true) {
-          // Timeout guard: abort if max runtime exceeded
-          if (Date.now() - startedAt > maxRuntimeMs) {
+          // Timeout guard: abort if effective timeout exceeded
+          if (Date.now() - startedAt > effectiveTimeout) {
             yield* engine.cancelWorkflow(workflowId)
-            console.error(`Workflow ${workflowId} exceeded max runtime (${maxRuntimeMs}ms), cancelled`)
+            console.error(`Workflow ${workflowId} exceeded max runtime (${effectiveTimeout}ms), cancelled`)
             break
           }
           
