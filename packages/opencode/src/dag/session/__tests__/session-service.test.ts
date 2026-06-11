@@ -825,6 +825,15 @@ describe('Iron Law #3: buildSessionNodeEvent', () => {
     expect(event!.type).toBe('node.skipped')
   })
 
+  it('skipped transition carries upstream_failed_node when provided', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'skipped', {
+      upstreamFailedNode: 'node-root',
+    })
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.skipped')
+    expect((event as { upstream_failed_node?: string }).upstream_failed_node).toBe('node-root')
+  })
+
   it('pending transition emits null (no event)', () => {
     const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'pending')
     expect(event).toBeNull()

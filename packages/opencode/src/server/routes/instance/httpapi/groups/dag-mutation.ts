@@ -37,6 +37,10 @@ const CancelResponse = Schema.Struct({
   status: Schema.String,
 }).annotate({ identifier: "DagCancelResponse" })
 
+const StartResponse = Schema.Struct({
+  status: Schema.String,
+}).annotate({ identifier: "DagStartResponse" })
+
 // P2-B: Step result — executes a single ready node under a paused workflow.
 // Discriminated union on `ok` for type-safe consumption by SDK clients.
 const StepResponse = Schema.Union([
@@ -154,6 +158,18 @@ const dagMutationGroup = HttpApiGroup.make("dag-mutation")
         summary: "Step a paused DAG workflow (execute 1 ready node)",
         description:
           "Executes exactly one ready node to completion or failure while the workflow remains paused. Returns not_paused if the workflow isn't paused, or no_ready_nodes if no pending nodes with satisfied dependencies exist.",
+      }),
+    ),
+    HttpApiEndpoint.post("start", `${root}/workflows/:workflowId/start`, {
+      params: WorkflowIdParams,
+      query: WorkflowIdQuery,
+      success: described(StartResponse, "Workflow start confirmation"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag-mutation.start",
+        summary: "Start an existing pending DAG workflow",
+        description:
+          "Starts an existing pending workflow without creating workflow or node rows. Non-pending workflows return their current status.",
       }),
     ),
     HttpApiEndpoint.post("replan", `${root}/workflows/:workflowId/replan`, {

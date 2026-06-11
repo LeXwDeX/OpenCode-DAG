@@ -976,6 +976,7 @@ const make = Effect.gen(function* () {
         yield* sessionService.updateNodeStatus({
           sessionId: d.node_id,
           status: 'skipped',
+          upstreamFailedNode: triggerNodeId,
         } satisfies UpdateNodeStatusInput).pipe(
           Effect.tapError((err) => Effect.logWarning(`[DAG] cascade-skip status update failed for ${d.node_id}: ${err}`)),
           Effect.ignore
@@ -1201,7 +1202,7 @@ const make = Effect.gen(function* () {
       yield* maybeFinalizeWorkflow(workflowId)
       
       return { success: true }
-    }) as Effect.Effect<{ success: boolean }, never>
+    })
 
   /**
    * 处理节点失败
@@ -1270,7 +1271,7 @@ const make = Effect.gen(function* () {
       yield* maybeFinalizeWorkflow(workflowId)
       
       return { success: true }
-    }) as Effect.Effect<{ success: boolean }, never>
+    })
 
   /**
    * 取消工作流

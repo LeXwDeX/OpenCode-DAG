@@ -2,8 +2,8 @@
 /**
  * ControlBar — TUI component for DAG workflow lifecycle control.
  *
- * Renders [Pause] [Resume] [Cancel] [Replan] buttons gated by the current
- * workflow status, plus the live status text.
+ * Renders lifecycle buttons gated by the current workflow status, plus the
+ * live status text.
  *
  * Pure callback injection (mirrors the original PauseResumeBar):
  * - NO SDK / data.ts wrapper imports here.
@@ -13,8 +13,9 @@
  *
  * Status gating (terminal statuses disable every action — irreversible):
  * - running → [Pause] [Cancel] [Replan]
- * - paused  → [Resume] [Cancel]
- * - pending / completed / failed / cancelled → all disabled
+ * - paused  → [Resume] [Step] [Cancel]
+ * - pending → [Start]
+ * - completed / failed / cancelled → all disabled
  */
 
 import { createMemo, Show, type JSX } from "solid-js"
@@ -22,9 +23,10 @@ import type { DAGWorkflowStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { t, workflowStatusLabel, type Lang } from "./i18n"
 
-export type ControlAction = "pause" | "resume" | "cancel" | "replan" | "step"
+export type ControlAction = "start" | "pause" | "resume" | "cancel" | "replan" | "step"
 
 export type ControlBarActions = {
+  start: boolean
   pause: boolean
   resume: boolean
   cancel: boolean
@@ -36,15 +38,15 @@ export type ControlBarActions = {
  * controlBarActions — pure status → enabled-actions map.
  *
  * - running → pause + cancel + replan
- * - paused  → resume + cancel
- * - pending / completed / failed / cancelled → all disabled (terminal is
- *   irreversible; pending has not started yet)
+ * - paused  → resume + step + cancel
+ * - pending → start
+ * - completed / failed / cancelled → all disabled (terminal is irreversible)
  */
 export function controlBarActions(status: DAGWorkflowStatus): ControlBarActions {
-  if (status === "running") return { pause: true, resume: false, cancel: true, replan: true, step: false }
+  if (status === "running") return { start: false, pause: true, resume: false, cancel: true, replan: true, step: false }
   // P2-B: step is enabled when paused (executes exactly 1 ready node)
-  if (status === "paused") return { pause: false, resume: true, cancel: true, replan: false, step: true }
-  return { pause: false, resume: false, cancel: false, replan: false, step: false }
+  if (status === "paused") return { start: false, pause: false, resume: true, cancel: true, replan: false, step: true }
+  return { start: status === "pending", pause: false, resume: false, cancel: false, replan: false, step: false }
 }
 
 /**
@@ -73,6 +75,11 @@ export function ControlBar(props: {
 
   return (
     <box flexDirection="row" gap={2} paddingTop={1}>
+      <Show when={actions().start}>
+        <text fg={theme.primary} onMouseUp={() => props.onAction("start")}>
+          {t(props.lang, "ctrl_start")}
+        </text>
+      </Show>
       <Show when={actions().pause}>
         <text fg={theme.primary} onMouseUp={() => props.onAction("pause")}>
           {t(props.lang, "ctrl_pause")}

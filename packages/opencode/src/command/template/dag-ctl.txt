@@ -79,6 +79,24 @@ $ARGUMENTS
 - `/dag cancel <workflowId>`
 - `/dag cancel`（无参数 → 列出 → 选择 → 确认）
 
+### pause 操作
+
+暂停 running workflow；已运行节点继续，暂停期间不调度新节点。
+
+**执行步骤**：解析 workflowId 后调用 `dagworker` 工具：`{ action: "pause", workflow: <workflowId> }`
+
+### resume 操作
+
+恢复 paused workflow，状态回到 running 并调度 ready 节点。
+
+**执行步骤**：解析 workflowId 后调用 `dagworker` 工具：`{ action: "resume", workflow: <workflowId> }`
+
+### step 操作
+
+在 paused workflow 下执行 1 个 ready 节点；workflow 保持 paused。
+
+**执行步骤**：解析 workflowId 后调用 `dagworker` 工具：`{ action: "step", workflow: <workflowId> }`
+
 ### list 操作
 
 列出当前 session 的所有 workflow（含历史）。
@@ -154,7 +172,7 @@ $ARGUMENTS
 
 | 命令 | 职责 |
 |---|---|
-| `/dag` | 运行时控制（start/status/cancel/list/replan/open） |
+| `/dag` | 运行时控制（start/status/pause/resume/step/cancel/list/replan/open） |
 | `/dag-worker` | 配置管理（JSON 编辑、validate、preview、diff、inherit） |
 | `/init` | 引导生 AGENTS.md（无关） |
 | `/review` | 代码审查（无关） |

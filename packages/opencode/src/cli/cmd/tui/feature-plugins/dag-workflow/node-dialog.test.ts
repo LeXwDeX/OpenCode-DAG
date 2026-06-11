@@ -135,6 +135,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_tool_calls: ["Tool Calls", "工具调用"],
     label_violations: ["Violations", "违规"],
     label_no_violations: ["No violations", "无违规"],
+    ctrl_start: ["[Start]", "[启动]"],
     ctrl_pause: ["[Pause]", "[暂停]"],
     ctrl_resume: ["[Resume]", "[恢复]"],
     ctrl_cancel: ["[Cancel]", "[取消]"],
@@ -177,6 +178,7 @@ describe("WP4 i18n — t() dict lookup", () => {
       "例如：使用React 19、TypeScript严格模式",
     ],
     toast_created: ["Workflow created (pending). Start it via a chat turn.", "工作流已创建（待启动），请通过对话轮启动。"],
+    toast_created_pending_start: ["Workflow created (pending). Use [Start] to run it.", "工作流已创建（待启动），请使用 [Start] 运行。"],
     toast_replan_range: ["Concurrency must be between 1 and 10", "并发数必须在 1 到 10 之间"],
     toast_create_error: ["Failed to create workflow", "创建工作流失败"],
     toast_action_error: ["Action failed", "操作失败"],
@@ -188,6 +190,15 @@ describe("WP4 i18n — t() dict lookup", () => {
       expect(t("zh", key)).toBe(cases[key][1])
     })
   }
+})
+
+describe("ControlBar i18n", () => {
+  it("uses the ctrl_start key for the start label", async () => {
+    const source = await Bun.file(new URL("./control-bar.tsx", import.meta.url)).text()
+
+    expect(source).toContain('t(props.lang, "ctrl_start")')
+    expect(source).not.toContain("          [Start]")
+  })
 })
 
 describe("WP4 NodeDialog — output and timing helpers", () => {

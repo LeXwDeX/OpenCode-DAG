@@ -191,6 +191,7 @@ export interface UpdateNodeStatusInput {
   status: DAGNodeStatus
   outputData?: unknown
   error?: unknown
+  upstreamFailedNode?: string
 }
 
 export interface CreateViolationInput {
@@ -652,6 +653,7 @@ const make = Effect.gen(function* () {
       if (_eventBus && nodeWorkflowId) {
         const event = buildSessionNodeEvent(nodeWorkflowId, input.sessionId, nodeName, input.status, {
           outputSummary: input.outputData,
+          upstreamFailedNode: input.upstreamFailedNode,
         })
         if (event) _eventBus.emit(event)
       }

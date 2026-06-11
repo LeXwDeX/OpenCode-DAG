@@ -2,10 +2,13 @@
  * DAG Mutation HttpApi Handlers — State-changing endpoints (§10).
  */
 
-import { WorkflowEngine } from "@/dag/session/workflow-engine"
+import { registerEngine, unregisterEngine, WorkflowEngine } from "@/dag/session/workflow-engine"
+import { createWorkflowExecutor } from "@/dag/session/workflow-executor"
 import { DAGQueryTag } from "@/dag/layer"
 import { DAGSessionService, WorkflowConfigValidationError } from "@/dag/session/session-service"
 import type { ReplanPatch } from "@/dag/session/types"
+import { SessionPrompt } from "@/session/prompt"
+import type { PromptOps } from "@/session/prompt-ops"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -15,6 +18,14 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
   Effect.gen(function* () {
     const dagQuery = yield* DAGQueryTag
     const sessionService = yield* DAGSessionService.make
+    const promptSvc = yield* SessionPrompt.Service
+
+    const promptOps: PromptOps = {
+      cancel: promptSvc.cancel,
+      resolvePromptParts: promptSvc.resolvePromptParts,
+      prompt: promptSvc.prompt as PromptOps["prompt"],
+      loop: promptSvc.loop,
+    }
 
     const pause = Effect.fn("DagMutationHttpApi.pause")(
       function* (ctx: { params: { workflowId: string } }) {
@@ -98,6 +109,25 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       },
     )
 
+    const start = Effect.fn("DagMutationHttpApi.start")(
+      function* (ctx: { params: { workflowId: string } }) {
+        const workflow = yield* sessionService.getWorkflow(ctx.params.workflowId)
+        if (!workflow) return { status: "missing" }
+        if (workflow.status !== "pending") return { status: workflow.status }
+        const existing = WorkflowEngine.get(ctx.params.workflowId)
+        if (existing) return { status: workflow.status }
+
+        const engine = yield* WorkflowEngine.make
+        ;(engine as typeof engine & { setPromptOps(ops: PromptOps): void }).setPromptOps(promptOps)
+        registerEngine(workflow.id, engine)
+        return yield* Effect.gen(function* () {
+          yield* engine.startWorkflow(workflow.id, workflow.config)
+          yield* createWorkflowExecutor(engine, workflow.config).start(workflow.id).pipe(Effect.forkDetach)
+          return { status: "running" }
+        }).pipe(Effect.catchCause((cause) => Effect.sync(() => unregisterEngine(workflow.id)).pipe(Effect.andThen(Effect.failCause(cause)))))
+      },
+    )
+
     const replan = Effect.fn("DagMutationHttpApi.replan")(
       function* (ctx: {
         params: { workflowId: string }
@@ -172,6 +202,7 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       .handle("resume", resume)
       .handle("cancel", cancel)
       .handle("step", step)
+      .handle("start", start)
       .handle("replan", replan)
       .handle("create", create)
   }),

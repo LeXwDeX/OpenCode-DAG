@@ -14,3 +14,10 @@ Actions:
 - `resume`: Resume a paused workflow — status returns to running and ready nodes are scheduled.
 - `list`: See every workflow spawned in the lifetime of this process.
 - `replan`: Restructure a running workflow's tail (add/remove/update pending nodes, optionally change max_concurrency). Terminal/frozen nodes are immutable scaffolding. Writes one atomically-applied row to dag_workflow_history.
+- `template_list`: List built-in workflow templates.
+- `template_show`: Render a built-in template with input without starting it.
+- `template_start`: Render and start a built-in template workflow.
+- `node_detail`: Inspect one node's status, output, error_info, retries, and timestamps.
+- `history`: Query workflow replan audit history.
+- `logs`: Query structured node execution logs.
+- `step`: Execute exactly one ready node while a workflow remains paused.

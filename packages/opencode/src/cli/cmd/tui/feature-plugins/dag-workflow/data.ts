@@ -688,6 +688,10 @@ export async function stepWorkflow(client: Client, workflowId: string) {
   return client.dagMutation.step({ workflowId })
 }
 
+export async function startWorkflow(client: Client, workflowId: string) {
+  return client.dagMutation.start({ workflowId })
+}
+
 export type ReplanPatchInput = {
   add_nodes?: unknown[]
   remove_nodes?: string[]

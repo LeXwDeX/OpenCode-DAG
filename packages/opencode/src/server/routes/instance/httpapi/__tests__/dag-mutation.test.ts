@@ -59,7 +59,7 @@ describe('DAG Mutation API — Endpoint Shape', () => {
 })
 
 describe('DAG Mutation API — cancel/replan/create endpoints', () => {
-  it('group exposes cancel, replan, create endpoints alongside pause/resume', async () => {
+  it('group exposes start, cancel, replan, create endpoints alongside pause/resume', async () => {
     const mod = await import('../groups/dag-mutation')
     const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, unknown> }> }
     const group = api.groups['dag-mutation']
@@ -67,6 +67,7 @@ describe('DAG Mutation API — cancel/replan/create endpoints', () => {
     const names = Object.keys(group.endpoints)
     expect(names).toContain('pause')
     expect(names).toContain('resume')
+    expect(names).toContain('start')
     expect(names).toContain('cancel')
     expect(names).toContain('replan')
     expect(names).toContain('create')
@@ -77,6 +78,13 @@ describe('DAG Mutation API — cancel/replan/create endpoints', () => {
     const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, { path: string }> }> }
     const cancel = api.groups['dag-mutation'].endpoints['cancel']
     expect(cancel.path).toBe('/dag/workflows/:workflowId/cancel')
+  })
+
+  it('start endpoint path is /dag/workflows/:workflowId/start', async () => {
+    const mod = await import('../groups/dag-mutation')
+    const api = mod.DagMutationApi as unknown as { groups: Record<string, { endpoints: Record<string, { path: string }> }> }
+    const start = api.groups['dag-mutation'].endpoints['start']
+    expect(start.path).toBe('/dag/workflows/:workflowId/start')
   })
 
   it('replan endpoint path is /dag/workflows/:workflowId/replan and carries a payload', async () => {
@@ -100,7 +108,7 @@ describe('DAG Mutation API — cancel/replan/create endpoints', () => {
     expect(mod.DagValidationError).toBeDefined()
   })
 
-  it('handler module registers cancel, replan, create handles (layer builds without unhandled endpoints)', async () => {
+  it('handler module registers start, cancel, replan, create handles (layer builds without unhandled endpoints)', async () => {
     // Importing the handler module forces HttpApiBuilder.group to assemble all declared
     // endpoints. If any of cancel/replan/create lacks a .handle(...), this import throws.
     const mod = await import('../handlers/dag-mutation')

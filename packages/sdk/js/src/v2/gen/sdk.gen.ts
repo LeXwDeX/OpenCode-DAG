@@ -49,6 +49,8 @@ import type {
   DagMutationReplanResponses,
   DagMutationResumeErrors,
   DagMutationResumeResponses,
+  DagMutationStartErrors,
+  DagMutationStartResponses,
   DagMutationStepErrors,
   DagMutationStepResponses,
   DagReplanPatchBody,
@@ -1075,6 +1077,38 @@ export class DagMutation extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<DagMutationCancelResponses, DagMutationCancelErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/cancel",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start an existing pending DAG workflow
+   *
+   * Starts an existing pending workflow without creating workflow or node rows. Non-pending workflows return their current status.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationStartResponses, DagMutationStartErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/start",
       ...options,
       ...params,
     })

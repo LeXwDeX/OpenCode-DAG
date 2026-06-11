@@ -18,6 +18,7 @@ import type { DAGWorkflowStatus } from "@/dag/session/types"
 describe("ControlBar — controlBarActions gating", () => {
   it("running enables pause, cancel, replan (not resume, not step)", () => {
     expect(controlBarActions("running")).toEqual({
+      start: false,
       pause: true,
       resume: false,
       cancel: true,
@@ -28,6 +29,7 @@ describe("ControlBar — controlBarActions gating", () => {
 
   it("paused enables resume, cancel, step (not pause, not replan)", () => {
     expect(controlBarActions("paused")).toEqual({
+      start: false,
       pause: false,
       resume: true,
       cancel: true,
@@ -40,6 +42,7 @@ describe("ControlBar — controlBarActions gating", () => {
     const terminal: DAGWorkflowStatus[] = ["completed", "failed", "cancelled"]
     for (const s of terminal) {
       expect(controlBarActions(s)).toEqual({
+        start: false,
         pause: false,
         resume: false,
         cancel: false,
@@ -49,8 +52,9 @@ describe("ControlBar — controlBarActions gating", () => {
     }
   })
 
-  it("pending disables every action (not yet started)", () => {
+  it("pending exposes start only", () => {
     expect(controlBarActions("pending")).toEqual({
+      start: true,
       pause: false,
       resume: false,
       cancel: false,

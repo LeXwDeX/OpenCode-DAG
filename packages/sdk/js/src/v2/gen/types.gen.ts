@@ -1604,6 +1604,10 @@ export type DagCancelResponse = {
   status: string
 }
 
+export type DagStartResponse = {
+  status: string
+}
+
 export type DagStepResponse =
   | {
       ok: true
@@ -4972,6 +4976,36 @@ export type DagMutationCancelResponses = {
 }
 
 export type DagMutationCancelResponse = DagMutationCancelResponses[keyof DagMutationCancelResponses]
+
+export type DagMutationStartData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/start"
+}
+
+export type DagMutationStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationStartError = DagMutationStartErrors[keyof DagMutationStartErrors]
+
+export type DagMutationStartResponses = {
+  /**
+   * Workflow start confirmation
+   */
+  200: DagStartResponse
+}
+
+export type DagMutationStartResponse = DagMutationStartResponses[keyof DagMutationStartResponses]
 
 export type DagMutationStepData = {
   body?: never
