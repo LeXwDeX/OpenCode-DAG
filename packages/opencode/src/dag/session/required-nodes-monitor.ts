@@ -8,9 +8,12 @@
 // Kept as reference for potential future async monitoring needs.
 
 import { Effect } from "effect"
+import * as Log from "@opencode-ai/core/util/log"
 import { EventBus } from "../state-machine/EventBus"
 import type { IDAGSessionService } from "./session-service"
 import type { DAGNodeConfig } from "./types"
+
+const log = Log.create({ service: "dag.monitor" })
 
 /**
  * Required Nodes Monitor
@@ -61,7 +64,7 @@ export class RequiredNodesMonitor {
       )
       
       if (!workflow) {
-        console.error(`Workflow ${workflowId} not found`)
+        log.error(`Workflow ${workflowId} not found`)
         return
       }
 
@@ -72,7 +75,7 @@ export class RequiredNodesMonitor {
       const node = allNodes.find(n => n.config.name === nodeName)
       
       if (!node) {
-        console.error(`Node "${nodeName}" not found in workflow ${workflowId}`)
+        log.error(`Node "${nodeName}" not found in workflow ${workflowId}`)
         return
       }
 
@@ -102,9 +105,9 @@ export class RequiredNodesMonitor {
         )
       )
       
-      console.warn(`Required node "${nodeName}" was skipped in workflow ${workflowId}`)
+      log.warn(`Required node "${nodeName}" was skipped in workflow ${workflowId}`)
     } catch (error) {
-      console.error(`Failed to handle skipped node ${nodeName}:`, error)
+      log.error(`Failed to handle skipped node ${nodeName}`, { error })
     }
   }
 
@@ -119,7 +122,7 @@ export class RequiredNodesMonitor {
       )
       
       if (!workflow) {
-        console.error(`Workflow ${workflowId} not found`)
+        log.error(`Workflow ${workflowId} not found`)
         return
       }
 
@@ -146,7 +149,7 @@ export class RequiredNodesMonitor {
 
       // 5. 如果有缺失的 required nodes，记录违规
       if (missingRequired.length > 0) {
-        console.warn(
+        log.warn(
           `Workflow ${workflowId} completed but ${missingRequired.length} required nodes did not complete`
         )
 
@@ -170,7 +173,7 @@ export class RequiredNodesMonitor {
         //    不再尝试 updateWorkflowStatus — completed→failed 违反铁律 #2
       }
     } catch (error) {
-      console.error(`Failed to check required nodes for workflow ${workflowId}:`, error)
+      log.error(`Failed to check required nodes for workflow ${workflowId}`, { error })
     }
   }
 }

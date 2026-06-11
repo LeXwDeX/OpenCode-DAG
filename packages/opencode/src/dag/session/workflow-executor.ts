@@ -3,9 +3,12 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 import { Effect } from "effect"
+import * as Log from "@opencode-ai/core/util/log"
 import type { WorkflowEngine, WorkflowStatusSnapshot } from "./workflow-engine"
 import { unregisterEngine } from "./workflow-engine"
 import type { DAGConfig } from "./types"
+
+const log = Log.create({ service: "dag.executor" })
 
 /** DAG executor default max runtime: 10 minutes */
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000
@@ -58,7 +61,7 @@ export function createWorkflowExecutor(
           // Timeout guard: abort if effective timeout exceeded
           if (Date.now() - startedAt > effectiveTimeout) {
             yield* engine.cancelWorkflow(workflowId)
-            console.error(`Workflow ${workflowId} exceeded max runtime (${effectiveTimeout}ms), cancelled`)
+            log.error(`Workflow ${workflowId} exceeded max runtime (${effectiveTimeout}ms), cancelled`)
             break
           }
           

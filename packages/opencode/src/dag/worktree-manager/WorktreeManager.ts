@@ -30,6 +30,9 @@ import {
 import { $ } from 'bun';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import * as Log from '@opencode-ai/core/util/log';
+
+const log = Log.create({ service: "dag.worktree" });
 
 /**
  * Worktree Manager 实现
@@ -272,7 +275,7 @@ export class WorktreeManager implements IWorktreeManager {
     if (worktree.autoCleanup && AUTO_CLEANUP_STATUSES.includes(status)) {
       setTimeout(() => {
         this.cleanup(worktreeId).catch((err) =>
-          console.error(`Auto-cleanup failed for ${worktreeId}:`, err),
+          log.error(`Auto-cleanup failed for ${worktreeId}`, { err }),
         );
       }, 0);
     }

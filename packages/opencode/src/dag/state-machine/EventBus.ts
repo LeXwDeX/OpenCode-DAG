@@ -12,6 +12,7 @@
  * - #17: 事件必须广播
  */
 
+import * as Log from "@opencode-ai/core/util/log";
 import type {
   IEventBus,
   EventEmitter,
@@ -20,6 +21,8 @@ import type {
 import type { WorkflowEvent, NodeEvent } from './types';
 import type { WorktreeEvent } from '../worktree-manager/types';
 import type { GroupEvent } from '../group-manager/types';
+
+const log = Log.create({ service: "dag.eventbus" });
 
 /**
  * 简单的事件总线实现
@@ -99,7 +102,7 @@ export class EventBus implements IEventBus {
         try {
           listener(event);
         } catch (error) {
-          console.error(`Error in event listener for ${event.type}:`, error);
+          log.error(`Error in event listener for ${event.type}`, { error });
         }
       });
     }
@@ -109,7 +112,7 @@ export class EventBus implements IEventBus {
       try {
         listener(event);
       } catch (error) {
-        console.error(`Error in wildcard event listener:`, error);
+        log.error(`Error in wildcard event listener`, { error });
       }
     });
   }
