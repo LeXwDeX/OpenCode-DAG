@@ -672,8 +672,8 @@ describe('replan: module registry coordination — behavioural', () => {
 // ---------------------------------------------------------------------------
 // Scenario 21 — history-row correctness — deferred.
 // Requires inspection of the DAG workflow history SQLite table after
-// atomicReplan commits. Covered by the integration test tier
-// (packages/opencode/src/dag/__tests__/dag-integration.test.ts).
+// atomicReplan commits. No existing test tier covers this (the former
+// dag-integration.test.ts tier was removed from CI); see TODO below.
 // ---------------------------------------------------------------------------
 // TODO: Scenario 21 — verify history row contents (old_state, new_state,
 //       changeDetails) after a successful replan. Requires DB fixtures.

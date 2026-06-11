@@ -43,7 +43,7 @@ runs:
           ${{ runner.os }}-bun-
 
     - name: Install setuptools for distutils compatibility
-      run: python3 -m pip install setuptools || pip install setuptools || true
+      run: python3 -m pip install --break-system-packages setuptools || python3 -m pip install setuptools || pip install setuptools || true
       shell: bash
 
     - name: Install dependencies
