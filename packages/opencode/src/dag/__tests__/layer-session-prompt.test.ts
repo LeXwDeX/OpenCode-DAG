@@ -18,7 +18,8 @@
 
 import { describe, it, expect } from "bun:test"
 import { Effect, Layer } from "effect"
-import { defaultLayer as dagDefaultLayer } from "@/dag/layer"
+import { defaultLayer as dagDefaultLayer, SharedEventBusTag, DAGQueryTag } from "@/dag/layer"
+import { WorktreeManagerTag } from "@/dag/worktree-manager/tags"
 import { SessionPrompt } from "@/session/prompt"
 
 // ---------------------------------------------------------------------------
@@ -94,5 +95,33 @@ describe("WP-A1: dag layer SessionPrompt.Service injection", () => {
     expect(composed).toBeDefined()
     // Composition must be referentially a new Layer (not the original)
     expect(composed).not.toBe(dagDefaultLayer)
+  })
+
+  // -------------------------------------------------------------------------
+  // Compile-time anchor: defaultLayer must stay self-contained — zero residual
+  // DAG-internal requirement in its RIn channel. The terminal cast at the
+  // server.ts assembly edge erases residual requirements from the type, so
+  // this anchor is the only compile-time guard for the composition order in
+  // dag/layer.ts: if `sharedEventBusLayer` loses its outermost provider
+  // position, RIn regains `SharedEventBusTag` and `bun typecheck` fails here.
+  // effect 4.0.0-beta.66: Layer<in ROut, out E = never, out RIn = never>
+  // (RIn is the THIRD type parameter — verified against dist/Layer.d.ts:45).
+  // -------------------------------------------------------------------------
+  it("defaultLayer has zero residual DAG-internal requirement (compile-time anchor)", () => {
+    type DagDefaultLayerRIn =
+      typeof dagDefaultLayer extends Layer.Layer<infer _ROut, infer _E, infer RIn> ? RIn : never
+
+    type NoResidualSharedEventBus = [Extract<DagDefaultLayerRIn, SharedEventBusTag>] extends [never] ? true : false
+    type NoResidualWorktreeManager = [Extract<DagDefaultLayerRIn, WorktreeManagerTag>] extends [never] ? true : false
+    type NoResidualDagQuery = [Extract<DagDefaultLayerRIn, DAGQueryTag>] extends [never] ? true : false
+
+    // Assignments fail to compile if any DAG-internal tag leaks into RIn.
+    const noResidualSharedEventBus: NoResidualSharedEventBus = true
+    const noResidualWorktreeManager: NoResidualWorktreeManager = true
+    const noResidualDagQuery: NoResidualDagQuery = true
+
+    expect(noResidualSharedEventBus).toBe(true)
+    expect(noResidualWorktreeManager).toBe(true)
+    expect(noResidualDagQuery).toBe(true)
   })
 })
