@@ -236,11 +236,16 @@ OpenCode 内置两种 Agent，可用 `Tab` 键快速切换：
 - 内置 LSP 支持
 - 聚焦终端界面 (TUI)
 - 客户端/服务器架构。可在本机运行，同时用移动设备远程驱动
+- **🪝 Hooks API 超集**：在 Claude Code 原有 22 种触发事件 × 5 种执行类型的基础上，本分支**完整兼容 Claude Code Hooks 协议**，并新增了 DAG 工作流事件总线集成（`workflow.*` / `node.*` 事件）、TUI 订阅与 HTTP API 转发。完整协议规范见 [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal 指令系统**：`todowrite` 工具 + 结构化目标追踪，让 agent 在长时间多步骤任务中持久化工作队列，避免上下文窗口丢失任务状态
+- **🪝 TODO PreHook**：支持在 `PreToolUse` 钩子中注入 TODO 列表到上下文，hooks 驱动的目标重入机制确保 agent 始终能看到当前进度
+- **🛡️ Sandbox Coding 工作区**：每个 sandbox 拥有独立临时目录 + LSP 诊断 + 多语言工具链（Python/Node/TS/Go/Rust/C/C++），agent 可在隔离沙箱中试跑代码、调试编译、运行测试，验证通过后再通过 edit/write 工具合并到项目文件
 
 ### 这和 opencode 官方版本有什么不同？
 
-- 新增 Harness-DAG-Workflow 工作流引擎（AGPL-3.0）
-- 持续 DEBUG 中文使用场景的兼容性问题
+- **🪝 Hooks API 超集 + Goal 指令 + TODO PreHook + Sandbox 工作区**：在保留上游全部 Hooks 能力的基础上，新增 DAG 事件集成、结构化任务追踪、Hook 驱动的目标重入、多语言隔离 Coding 沙箱（详见上方差异对比）
+- **🧩 DAG WorkFlow 模式（开发中 · 进度约 90%）**：自研 [Harness-DAG-Workflow](./docs/harness-dag.md) 工作流引擎，让 LLM agent 能在单次会话中编排多节点并行任务。核心功能已落地（调度 / 生命周期 / pause-resume-cancel-replan-step / 子 DAG / 条件分支 / 数据流 / crash recovery / 探针），TUI 面板已贯通，剩余能力正在收尾（详见 [DAG AGENTS.md](./packages/opencode/src/dag/AGENTS.md)）
+- **🔧 中文特性 DEBUG**：持续 DEBUG 中文分词、CJK 字符、全角标点、中文路径与 IME 兼容等上游遗留问题
 - 长期独立维护，与上游节奏解耦
 
 ## 社区
