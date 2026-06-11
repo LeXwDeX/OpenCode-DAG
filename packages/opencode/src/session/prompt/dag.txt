@@ -14,6 +14,24 @@ Use DAG workflows when user intent matches these patterns (in any language):
 - **Keywords**: `DAG工作流`, `工作流`, `DAG 工作流`, `DAGWORKFLOW`, `/DAGWORKFLOW`, `DAGWORKER`, orchestrated multi-step tasks, parallel-but-dependent stages, build pipelines, staged code-repair plans, or any "run these N steps with dependency order" request.
 - **Signals**: ≥2 steps with explicit or implicit dependency ordering; fan-out/fan-in patterns; long-running multi-stage work where later stages depend on earlier outputs.
 
+## Node & Workflow Statuses
+
+### Node status: `pending | queued | running | completed | failed | skipped`
+- `pending`  — waiting on unresolved dependencies.
+- `queued`   — dependencies resolved, waiting for an execution slot (`running_count < max_concurrency`).
+- `running`  — child agent session actively executing.
+- `completed` / `failed` / `skipped` — terminal, immutable. `skipped` is for required-upstream failure or `condition` evaluated to `false`.
+
+One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fails before exhaustion, `failed → pending` (sole exception to the immutability rule).
+
+### Workflow status: `pending | running | paused | completed | failed | cancelled`
+- `completed / failed / cancelled` are terminal.
+- `running ↔ paused` is a legal bidirectional transition:
+  - `dagworker pause` moves a running workflow to `paused` (running nodes continue; no new nodes are scheduled).
+  - `dagworker resume` moves a paused workflow back to `running` (ready nodes are scheduled again).
+  - `dagworker step` stays in `paused` but executes exactly one ready node to completion/failure.
+- A `paused` workflow can still be `cancelled`, but **cannot** be directly `completed` — it must resume or step first.
+
 ## The Tool
 
 `dagworker` is a registered tool with 14 `action` values:
@@ -55,7 +73,9 @@ Use DAG workflows when user intent matches these patterns (in any language):
       "timeout_ms": 300000,
       "retry": { "max_attempts": 2, "delay_ms": 5000 },
       "worker_type": "string (subagent name, e.g. 'implement')",
-      "worker_config": { "agent": "implement", "prompt": "your task prompt" }
+      "worker_config": { "agent": "implement", "prompt": "your task prompt" },
+      "condition": { "ref_node": "upstream_id", "op": "eq|ne|gt|lt|gte|lte|exists|not_exists", "value": "<compare against>" },
+      "input_mapping": { "inputKey": { "ref_node": "upstream_id", "ref_path": "$.optional.subfield" } }
     }
   ]
 }
@@ -67,6 +87,27 @@ Use DAG workflows when user intent matches these patterns (in any language):
 - 默认 registry 通常含 `build` / `plan` / `general` / `explore`；`scout` 视 `experimental-scout` 开关而定。
 - `implement` / `verify` / `review` / `archgate` / `patcher` 等均为自定义 agent，使用前需在 opencode.json 的 `agent.*` 字段注册。
 - 运行时 canonical schema 是 JSON `DAGConfig` / `DAGNodeConfig`（来自 `src/dag/session/types.ts`）。
+
+### Recognized `worker_config` keys
+
+| Key | Type | Effect |
+|---|---|---|
+| `agent` | string | Agent-name override — takes precedence over `worker_type` when resolving the child session's agent. Usually `agent === worker_type`; only specify this when they diverge. |
+| `prompt` | string | Task prompt handed to the child subagent. |
+| `use_worktree` | `true` | Opt-in per-node git worktree isolation (default `false` — child shares the host worktree). |
+| `subDagConfig` | `DAGConfig` | Reserved for `worker_type === "dag"` — triggers sub-DAG dispatch. Depth cap: 3. |
+
+### `condition` (declarative skip/ready, WP-B1)
+
+- Evaluates the output of `ref_node` (must be a member of this node's `dependencies[]`) using `op` against `value`.
+- If the result is `false`, the node is marked `skipped` and propagates skip to its transitive downstream.
+- **`required: true` nodes cannot declare `condition`** — schema rejects the config.
+
+### `input_mapping` (declarative upstream data injection, WP-C1)
+
+- `Record<inputKey, { ref_node, ref_path? }>` — for each input key, pull output (or a `ref_path` sub-field) of `ref_node` (must be in `dependencies`) and inject it into the node's prompt at spawn time.
+- Safe defaults: missing / null output / path-not-found / beyond-deps → audit as `skipped` with a reason code; node is not auto-failed, just injected without that key.
+- Large payloads are truncated per-entry and per-total (engine enforced).
 
 Hard invariants:
 - **Node cap**: ≤ 20 nodes per workflow.

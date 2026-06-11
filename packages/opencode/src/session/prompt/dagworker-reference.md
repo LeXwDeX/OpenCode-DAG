@@ -185,12 +185,52 @@ interface DAGNodeConfig {
   }
   worker_type: string           // Subagent name (must exist in agent catalog).
   worker_config: {
-    agent: string               // Same as worker_type.
+    agent: string               // Agent-name override. See "Recognized worker_config keys" below.
     prompt: string              // The task given to the subagent.
     // ...any agent-specific fields...
   }
+  condition?: DAGNodeCondition  // Optional declarative skip/ready (WP-B1).
+  input_mapping?: DAGInputMapping  // Optional declarative upstream data injection (WP-C1).
 }
 ```
+
+#### Recognized `worker_config` keys
+
+| Key | Type | Effect |
+|---|---|---|
+| `agent` | string | Agent-name override. When present, child session uses `agent` instead of `worker_type` for `agent.get(...)` resolution. Usually `agent === worker_type`; only specify when they diverge. |
+| `prompt` | string | Task prompt handed to the child subagent. |
+| `use_worktree` | `true` | Opt-in per-node git worktree isolation (default `false`). |
+| `subDagConfig` | `DAGConfig` | Reserved for `worker_type === "dag"` (sub-DAG dispatch, depth ≤ 3). |
+
+#### `condition` (WP-B1 — declarative skip/ready)
+
+```ts
+type DAGNodeCondition = {
+  ref_node: string              // Upstream node id (must be in this node's dependencies).
+  op: "eq" | "ne" | "gt" | "lt" | "gte" | "lte" | "exists" | "not_exists"
+  value?: unknown               // Comparison baseline (ignored for exists/not_exists).
+}
+```
+
+- Evaluate upstream node's output using `op` against `value`.
+- Result `false` → node marked `skipped` (not `failed`) and transitive downstream is also skipped.
+- **`required: true` nodes cannot declare `condition`** — schema rejects the config.
+- Missing in config (or `null`) → unconditional execution (backward-compatible).
+
+#### `input_mapping` (WP-C1 — declarative upstream data injection)
+
+```ts
+type DAGInputMapping = Record<
+  string,                       // inputKey
+  { ref_node: string, ref_path?: string }
+>
+```
+
+- For each `inputKey`, pull `ref_node`'s output (or a JSON-path sub-field via `ref_path`) at spawn time and inject into the node's prompt.
+- `ref_node` must be a member of `dependencies[]` (schema enforced).
+- Safe defaults: `null_output`, `non_object_output`, `path_not_found`, `beyond_deps` → audit as `skipped` with a reason code; node runs without that key.
+- Per-entry and per-total payload caps enforced by engine (truncated).
 
 ### Worker Type Resolution
 
@@ -220,34 +260,61 @@ This keeps the dependency-resolution logic uniform.
 ## 6. Node status state machine
 
 ```
-pending ─┐
-          ├─▶ running ─▶ completed
-          │              ─▶ failed
-          └─▶ skipped (when required upstream failed)
+pending ─▶ queued ─▶ running ─▶ completed
+  │             │                ─▶ failed ─┐
+  │             │                            │ retry (max_attempts not exhausted)
+  │             └─▶ skipped                  │ (the SOLE permitted reversal)
+  └─▶ skipped (when required upstream        ▼
+         failed or condition is false)     pending
 ```
 
-Terminal states (`completed`, `failed`, `skipped`) are **immutable** — no rollbacks.
+Terminal states (`completed`, `failed` when retries exhausted, `skipped`) are **immutable**.
+
+The `queued` state means: dependencies resolved, but the node is waiting for an execution slot (`running_count < max_concurrency`). It is NOT `running` yet.
 
 ### Status transitions
 
 | From | To | Trigger |
 |---|---|---|
-| pending | running | `scheduleReadyNodes` picks it (after metadata.chat_session_id persists §10) |
+| pending | queued | `scheduleReadyNodes` resolves dependencies and admits the node |
 | pending | failed | Outer `catchCause` on spawn infrastructure failure |
-| running | completed | `node_complete` called with `status: "completed"` |
-| running | failed | `node_complete` called with `status: "failed"`, OR subagent idle, OR outer `catchCause` |
-| running | skipped | Required upstream failed |
 | pending | skipped | Required upstream failed |
+| queued | running | Spawn fiber actually starts the child session |
+| queued | skipped | Required upstream failed |
+| running | completed | `node_complete` called with `status: "completed"` |
+| running | failed | `node_complete` called with `status: "failed"`, OR subagent idle (`node_complete_missing`), OR outer `catchCause`, OR timeout |
+| running | skipped | Required upstream failed |
+| running | pending | `condition` evaluated to `false` (→ actually `skipped`); same slot as `running → skipped` |
+| failed | pending | Retry reversal: `retry_count < max_attempts - 1` (sole exception to iron law #2) |
 
-Terminal states block any further transition (iron law #2).
+Terminal states block any further transition (iron law #2), except retry `failed → pending`.
 
 ## 7. Workflow status state machine
 
 ```
 pending ─▶ running ─▶ completed
-                   ─▶ failed
-                   ─▶ cancelled
+              │      ─▶ failed
+              │      ─▶ cancelled
+              └─▶ paused ─▶ running  (resume / step)
+                 │         ─▶ cancelled
+                 │
+                 └──▶ (stays paused unless resumed / stepped / cancelled)
 ```
+
+### Status transitions
+
+| From | To | Trigger |
+|---|---|---|
+| pending | running | First node starts |
+| pending | cancelled | `dagworker action=cancel` on a `pending` workflow |
+| running | completed | Last required node succeeds |
+| running | failed | Required node failed or unrecoverable error |
+| running | cancelled | `dagworker action=cancel`, timeout, parent session abort |
+| running | paused | `dagworker action=pause` |
+| paused | running | `dagworker action=resume` |
+| paused | cancelled | `dagworker action=cancel` (the only terminal transition out of `paused`) |
+
+**Note about `step`**: `dagworker action=step` keeps the workflow in `paused` the entire time — it executes exactly one ready node (synchronous from the step request's view), then returns. The workflow never reaches `running` during a step.
 
 ### Terminal conditions
 
@@ -306,6 +373,8 @@ Every status transition emits an event:
 | `workflow.completed` | All terminal nodes OK |
 | `workflow.failed` | Required node failed or fatal error |
 | `workflow.cancelled` | Cancel requested or timeout |
+| `workflow.paused` | Workflow moves `running → paused` |
+| `workflow.resumed` | Workflow moves `paused → running` |
 | `node.started` | Node enters `running` |
 | `node.completed` | Node marked `completed` |
 | `node.failed` | Node marked `failed` |
