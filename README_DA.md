@@ -245,11 +245,16 @@ Funktionelt er de meget ens, men de vigtigste forskelle er:
 - Indbygget LSP-understøttelse
 - Fokus på terminalgrænseflade (TUI)
 - Klient/server-arkitektur. Kan køres lokalt og samtidig fjernstyres fra en mobilenhed
+- **🪝 Hooks API-supersæt**: Bygger på Claude Codes 22 triggerhændelser × 5 udførelsestyper; denne fork er **fuldt kompatibel med Claude Code Hooks-protokollen** og tilføjer DAG-workflow event-bus-integration (`workflow.*` / `node.*`), TUI-abonnementer og videresendelse via HTTP API. Fuld specifikation: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal-instruktionssystem**: `todowrite`-værktøjet + struktureret målsporing bevarer agentens arbejdskø gennem lange flertrins-sessioner og forhindrer tab af opgavestatus ved skift i kontekstvinduet
+- **🪝 TODO PreHook**: Understøtter injektion af TODO-listen i konteksten via `PreToolUse` hooks; hooks-drevet goal reentry sikrer, at agenten altid ser den aktuelle fremdrift
+- **🛡️ Sandbox Coding Workspace**: Hver sandbox har sit eget midlertidige bibliotek, LSP-diagnostik og flersprogede toolchains (Python/Node/TS/Go/Rust/C/C++); agenten kan afprøve, kompilere og debugge kode isoleret og først efter verifikation flette den ind i projektfiler via edit/write
 
 ### Hvad er forskellen fra den officielle opencode-version?
 
-- Tilføjet Harness-DAG-Workflow workflowmotor (AGPL-3.0)
-- Løbende DEBUG af kompatibilitetsproblemer i kinesiske brugsscenarier
+- **🪝 Hooks API-supersæt + Goal-instruktioner + TODO PreHook + Sandbox Workspace**: Bevarer alle upstream Hooks-funktioner og tilføjer DAG-hændelsesintegration, struktureret opgavesporing, hooks-drevet goal reentry og en isoleret flersproget coding sandbox
+- **🧩 DAG WorkFlow-tilstand (WIP · ca. 90%)**: En selvudviklet [Harness-DAG-Workflow](./docs/harness-dag.md)-motor, der lader en LLM agent orkestrere parallelle opgaver med flere noder i én session. Kernefunktionerne er landet (scheduling / livscyklus / pause-resume-cancel-replan-step / sub-DAG / betingede grene / data flow / crash recovery / probes), TUI-panelet er tilsluttet, og de sidste detaljer færdiggøres
+- **🔧 Rettelser for kinesisk kompatibilitet**: Løbende DEBUG af CJK-tokenisering, fullwidth-tegnsætning, kinesiske stier og IME-edge cases fra upstream
 - Langsigtet uafhængig vedligeholdelse, afkoblet fra upstream-opdateringsrytmen
 
 ## Fællesskab

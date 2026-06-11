@@ -245,11 +245,16 @@ Funktionell sehr ähnlich, die wesentlichen Unterschiede sind:
 - Integrierte LSP-Unterstützung
 - Fokus auf Terminal-Oberfläche (TUI)
 - Client/Server-Architektur. Kann lokal ausgeführt und gleichzeitig über ein Mobilgerät ferngesteuert werden.
+- **🪝 Hooks-API-Superset**: Aufbauend auf den 22 Trigger-Ereignissen × 5 Ausführungstypen von Claude Code ist dieser Fork **vollständig kompatibel mit dem Claude Code Hooks-Protokoll** und ergänzt eine DAG-Workflow-Event-Bus-Integration (`workflow.*` / `node.*`), TUI-Abonnements und HTTP-API-Weiterleitung. Vollständige Spezifikation: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal-Anweisungssystem**: Das `todowrite`-Werkzeug plus strukturierte Zielverfolgung halten die Arbeitswarteschlange des agent über lange mehrstufige Sitzungen hinweg persistent und verhindern, dass Aufgabenstatus durch Kontextfenster-Wechsel verloren geht
+- **🪝 TODO PreHook**: Unterstützt das Injizieren der TODO-Liste in den Kontext über `PreToolUse`-Hooks; der hooks-gesteuerte Goal-Reentry-Mechanismus stellt sicher, dass der agent immer den aktuellen Fortschritt sieht
+- **🛡️ Sandbox Coding Workspace**: Jede Sandbox besitzt ein eigenes temporäres Verzeichnis, LSP-Diagnosen und mehrsprachige Toolchains (Python/Node/TS/Go/Rust/C/C++); der agent kann Code isoliert ausprobieren, kompilieren und debuggen und ihn erst nach Verifikation per edit/write in Projektdateien übernehmen
 
 ### Was unterscheidet dies von der offiziellen opencode-Version?
 
-- Neue Harness-DAG-Workflow-Engine (AGPL-3.0)
-- Fortlaufende Debugs von Kompatibilitätsproblemen bei der Verwendung mit Chinesisch
+- **🪝 Hooks-API-Superset + Goal-Anweisungen + TODO PreHook + Sandbox Workspace**: Behält alle upstream Hooks-Funktionen bei und ergänzt DAG-Event-Integration, strukturierte Aufgabenverfolgung, hooks-gesteuerten Goal-Reentry und eine isolierte mehrsprachige Coding-Sandbox
+- **🧩 DAG-WorkFlow-Modus (WIP · ca. 90%)**: Eine selbst entwickelte [Harness-DAG-Workflow](./docs/harness-dag.md)-Engine, mit der ein LLM agent mehrknotige parallele Aufgaben in einer einzigen Sitzung orchestrieren kann. Kernfunktionen sind umgesetzt (Scheduling / Lebenszyklus / pause-resume-cancel-replan-step / sub-DAG / bedingte Verzweigung / data flow / crash recovery / probes), das TUI-Panel ist angebunden, die restliche Politur läuft
+- **🔧 Korrekturen für chinesische Sprachkompatibilität**: Laufendes DEBUG von CJK-Tokenisierung, vollbreiter Interpunktion, chinesischen Pfaden und IME-Edge-Cases aus upstream
 - Langfristig unabhängig gepflegt, vom Upstream-Rhythmus entkoppelt
 
 ## Community

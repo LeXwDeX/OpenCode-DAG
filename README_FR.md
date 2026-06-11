@@ -238,11 +238,16 @@ Fonctionnellement similaire, mais les principales différences sont :
 - Prise en charge LSP intégrée
 - Axé sur l'interface en terminal (TUI)
 - Architecture client/serveur — exécution locale, pilotage à distance depuis un appareil mobile
+- **🪝 Sur-ensemble de Hooks API** : basé sur les 22 événements déclencheurs × 5 types d’exécution de Claude Code, ce fork est **entièrement compatible avec le protocole Claude Code Hooks** et ajoute l’intégration du bus d’événements DAG (`workflow.*` / `node.*`), les abonnements TUI et le relais via HTTP API. Spécification complète : [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Système d’instructions Goal** : l’outil `todowrite` + le suivi structuré des objectifs conservent la file de travail de l’agent pendant les longues sessions multi-étapes et évitent la perte d’état lors des changements de fenêtre de contexte
+- **🪝 TODO PreHook** : permet d’injecter la liste TODO dans le contexte via les hooks `PreToolUse`; le mécanisme de retour aux objectifs piloté par hooks garantit que l’agent voit toujours la progression actuelle
+- **🛡️ Sandbox Coding Workspace** : chaque sandbox dispose de son propre répertoire temporaire, de diagnostics LSP et de toolchains multi-langages (Python/Node/TS/Go/Rust/C/C++). L’agent peut essayer, compiler et déboguer du code isolément, puis l’intégrer aux fichiers du projet via edit/write après vérification
 
 ### En quoi cela diffère-t-il de la version officielle d'opencode ?
 
-- Ajout du moteur Harness-DAG-Workflow (AGPL-3.0)
-- Débogage continu des cas limites liés à la langue chinoise
+- **🪝 Sur-ensemble de Hooks API + instructions Goal + TODO PreHook + Sandbox Workspace** : conserve toutes les capacités Hooks amont et ajoute l’intégration des événements DAG, le suivi structuré des tâches, le retour aux objectifs piloté par hooks et un coding sandbox isolé multi-langages
+- **🧩 Mode DAG WorkFlow (WIP · environ 90%)** : moteur [Harness-DAG-Workflow](./docs/harness-dag.md) développé en interne, permettant à un agent LLM d’orchestrer des tâches parallèles multi-nœuds dans une seule session. Les capacités principales sont en place (planification / cycle de vie / pause-resume-cancel-replan-step / sub-DAG / branches conditionnelles / data flow / crash recovery / probes), le panneau TUI est connecté, et les finitions restantes sont en cours
+- **🔧 Correctifs de compatibilité avec le chinois** : DEBUG continu de la tokenisation CJK, de la ponctuation pleine chasse, des chemins chinois et des cas limites IME hérités de l’amont
 - Maintenance indépendante, découplée du rythme de publication en amont
 
 ## Communauté

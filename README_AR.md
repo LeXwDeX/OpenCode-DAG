@@ -235,15 +235,19 @@ scoop bucket add extras; scoop install extras/opencode-desktop
 - دعم مدمج لـ LSP
 - تركيز على واجهة الطرفية (TUI)
 - معمارية عميل/خادم. يمكن تشغيله محلياً والتحكم به عن بُعد باستخدام جهاز محمول
+- **🪝 مجموعة Hooks API فائقة**: بناءً على 22 حدث تشغيل × 5 أنواع تنفيذ في Claude Code، هذا الفرع **متوافق بالكامل مع بروتوكول Claude Code Hooks** ويضيف تكامل ناقل أحداث DAG workflow (`workflow.*` / `node.*`)، واشتراكات TUI، وتمريراً عبر HTTP API. المواصفة الكاملة: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 نظام تعليمات Goal**: أداة `todowrite` مع تتبع أهداف منظم يحافظان على قائمة عمل agent أثناء الجلسات الطويلة متعددة الخطوات ويمنعان فقدان حالة المهام عند تغيّر نافذة السياق
+- **🪝 TODO PreHook**: يدعم حقن قائمة TODO في السياق عبر hooks من نوع `PreToolUse`؛ آلية العودة إلى الأهداف المدفوعة بالـ hooks تضمن أن agent يرى دائماً التقدم الحالي
+- **🛡️ Sandbox Coding Workspace**: كل sandbox يملك مجلداً مؤقتاً مستقلاً وتشخيصات LSP وسلاسل أدوات متعددة اللغات (Python/Node/TS/Go/Rust/C/C++)؛ يستطيع agent تجربة الكود وتجميعه وتصحيح أخطائه في عزل، ثم دمجه في ملفات المشروع عبر edit/write بعد التحقق
 
 ### ما الفرق بين هذا والإصدار الرسمي من opencode؟
 
-- إضافة محرك سير العمل Harness-DAG-Workflow (AGPL-3.0)
-- إصلاح مستمر لمشاكل التوافق في سيناريوهات استخدام اللغة الصينية
+- **🪝 مجموعة Hooks API فائقة + تعليمات Goal + TODO PreHook + Sandbox Workspace**: تحتفظ بكل قدرات Hooks في upstream وتضيف تكامل أحداث DAG، وتتبع مهام منظم، وعودة إلى الأهداف مدفوعة بالـ hooks، وcoding sandbox معزول متعدد اللغات
+- **🧩 وضع DAG WorkFlow (قيد التطوير · حوالي 90%)**: محرك [Harness-DAG-Workflow](./docs/harness-dag.md) مطوّر ذاتياً يسمح لـ LLM agent بتنسيق مهام متوازية متعددة العقد داخل جلسة واحدة. القدرات الأساسية اكتملت (الجدولة / دورة الحياة / pause-resume-cancel-replan-step / sub-DAG / التفرع الشرطي / data flow / crash recovery / probes)، ولوحة TUI متصلة، وما تبقى هو اللمسات النهائية
+- **🔧 إصلاحات توافق اللغة الصينية**: DEBUG مستمر لـ CJK tokenization، وعلامات الترقيم كاملة العرض، والمسارات الصينية، وحالات IME الموروثة من upstream
 - صيانة مستقلة طويلة الأمد، غير مرتبطة بجدول المصدر الأصلي
 
 ## المجتمع
 
 - 📖 [مجتمع opencode الأصلي](https://opencode.ai)
 - 📝 [قسم المشكلات في هذا الفرع](./issues) (للإبلاغ عن المشكلات واقتراح ميزات جديدة)
-

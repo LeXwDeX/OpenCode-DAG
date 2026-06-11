@@ -238,11 +238,16 @@ PR을 생성하기 전에 [`CONTRIBUTING.md`](./CONTRIBUTING.md)를 읽어주십
 - 내장 LSP 지원
 - 터미널 UI(TUI)에 초점
 - 클라이언트/서버 아키텍처 — 로컬에서 실행, 모바일에서 원격 구동
+- **🪝 Hooks API 상위 집합**: Claude Code의 22개 트리거 이벤트 × 5개 실행 유형을 기반으로 하며, 이 포크는 **Claude Code Hooks 프로토콜과 완전히 호환**되고 DAG 워크플로 이벤트 버스 통합(`workflow.*` / `node.*` 이벤트), TUI 구독, HTTP API 포워딩을 추가합니다. 전체 사양: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal 지시 시스템**: `todowrite` 도구와 구조화된 목표 추적으로 긴 다단계 agent 세션에서도 작업 큐를 유지하고, 컨텍스트 창 변화로 작업 상태가 사라지는 일을 줄입니다
+- **🪝 TODO PreHook**: `PreToolUse` hook을 통해 TODO 목록을 컨텍스트에 주입할 수 있으며, hooks 기반 goal reentry 메커니즘으로 agent가 항상 현재 진행 상황을 볼 수 있게 합니다
+- **🛡️ Sandbox Coding Workspace**: 각 sandbox는 독립된 임시 디렉터리, LSP 진단, 다중 언어 toolchain(Python/Node/TS/Go/Rust/C/C++)을 갖습니다. agent는 격리 환경에서 코드를 시험, 컴파일, 디버그하고 검증 후 edit/write로 프로젝트 파일에 병합할 수 있습니다
 
 ### 공식 opencode와 어떻게 다른가요?
 
-- Harness-DAG-Workflow 엔진 추가 (AGPL-3.0)
-- 중국어 관련 예외 케이스의 지속적 디버깅
+- **🪝 Hooks API 상위 집합 + Goal 지시 + TODO PreHook + Sandbox Workspace**: upstream의 모든 Hooks 기능을 유지하면서 DAG 이벤트 통합, 구조화된 작업 추적, hooks 기반 goal reentry, 다중 언어 격리 coding sandbox를 추가합니다
+- **🧩 DAG WorkFlow 모드(WIP · 약 90%)**: 자체 개발한 [Harness-DAG-Workflow](./docs/harness-dag.md) 엔진으로, LLM agent가 단일 세션에서 다중 노드 병렬 작업을 오케스트레이션할 수 있습니다. 핵심 기능(스케줄링 / 라이프사이클 / pause-resume-cancel-replan-step / sub-DAG / 조건 분기 / data flow / crash recovery / probes)은 구현되었고, TUI 패널도 연결되었으며, 남은 마무리 작업이 진행 중입니다
+- **🔧 중국어 호환성 수정**: upstream에서 이어진 CJK tokenization, 전각 문장부호, 중국어 경로 처리, IME edge cases를 지속적으로 DEBUG합니다
 - 독립 유지 관리, 업스트림 릴리스 주기와 분리
 
 ## 커뮤니티

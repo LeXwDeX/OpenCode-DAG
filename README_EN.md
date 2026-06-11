@@ -238,11 +238,16 @@ Functionally similar, but the key differences are:
 - Built-in LSP support
 - Focused on the terminal UI (TUI)
 - Client/server architecture — run on your machine, drive remotely from mobile
+- **🪝 Hooks API Superset**: Building on Claude Code's 22 trigger events × 5 execution types, this fork is **fully compatible with the Claude Code Hooks protocol** and additionally provides DAG workflow event-bus integration (`workflow.*` / `node.*` events), TUI subscriptions, and HTTP API forwarding. Full protocol specification: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal Instruction System**: `todowrite` tool + structured goal tracking — persists a working task queue across long multi-step agent sessions, preventing task state loss from context-window churn
+- **🪝 TODO PreHook**: Supports injecting the TODO list into context via `PreToolUse` hooks — a hooks-driven goal-reentry mechanism ensures the agent always sees current progress
+- **🛡️ Sandbox Coding Workspace**: Every sandbox comes with its own ephemeral directory + LSP diagnostics + multi-language toolchains (Python/Node/TS/Go/Rust/C/C++) — agents can trial, compile, and debug code in isolation and only merge into project files via edit/write once verified
 
 ### How is this different from the official opencode?
 
-- Adds the Harness-DAG-Workflow engine (AGPL-3.0)
-- Ongoing DEBUG of Chinese-language edge cases
+- **🪝 Hooks API Superset + Goal Instructions + TODO PreHook + Sandbox Workspace**: Retains all upstream Hooks capabilities and adds DAG event integration, structured task tracking, hooks-driven goal reentry, and a multi-language isolated Coding sandbox (see above for details)
+- **🧩 DAG WorkFlow Mode (WIP · ~90% complete)**: A self-developed [Harness-DAG-Workflow](./docs/harness-dag.md) engine that lets an LLM agent orchestrate multi-node parallel tasks within a single session. Core capabilities are landed (scheduling / lifecycle / pause-resume-cancel-replan-step / sub-DAG / conditional branching / data flow / crash recovery / probes), TUI panel connected, remaining polish in progress (see [DAG AGENTS.md](./packages/opencode/src/dag/AGENTS.md))
+- **🔧 Chinese-Language Compatibility Fixes**: Ongoing DEBUG of CJK tokenization, fullwidth punctuation, Chinese path handling, and IME edge cases inherited from upstream
 - Independently maintained, decoupled from upstream release cadence
 
 ## Community

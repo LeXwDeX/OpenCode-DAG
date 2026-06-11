@@ -236,11 +236,16 @@ OpenCode มี Agent ในตัวสองตัว ใช้ปุ่ม `T
 - มี LSP ในตัว
 - เน้นส่วนติดต่อเทอร์มินัล (TUI)
 - สถาปัตยกรรมไคลเอนต์/เซิร์ฟเวอร์ รันบนเครื่องท้องถิ่นและควบคุมระยะไกลด้วยอุปกรณ์มือถือ
+- **🪝 Hooks API แบบ superset**: ต่อยอดจากเหตุการณ์ทริกเกอร์ 22 แบบ × ประเภทการรัน 5 แบบของ Claude Code โดย fork นี้**เข้ากันได้กับ Claude Code Hooks protocol อย่างสมบูรณ์** และเพิ่มการรวม event bus ของ DAG workflow (`workflow.*` / `node.*`), การ subscribe ใน TUI และการ forward ผ่าน HTTP API ดูสเปกเต็มได้ที่ [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 ระบบคำสั่ง Goal**: เครื่องมือ `todowrite` + การติดตามเป้าหมายแบบมีโครงสร้าง ช่วยเก็บคิวงานของ agent ระหว่างงานหลายขั้นตอนระยะยาว และลดการสูญเสียสถานะงานเมื่อ context window เปลี่ยน
+- **🪝 TODO PreHook**: รองรับการ inject รายการ TODO เข้า context ผ่าน hook `PreToolUse`; กลไก goal reentry ที่ขับเคลื่อนด้วย hooks ทำให้ agent เห็นความคืบหน้าปัจจุบันเสมอ
+- **🛡️ Sandbox Coding Workspace**: sandbox แต่ละตัวมีไดเรกทอรีชั่วคราวแยก, LSP diagnostics และ toolchain หลายภาษา (Python/Node/TS/Go/Rust/C/C++); agent สามารถทดลอง คอมไพล์ และดีบักโค้ดแบบแยกส่วน ก่อนรวมกลับเข้าไฟล์โปรเจกต์ผ่าน edit/write
 
 ### นี่แตกต่างจากเวอร์ชันทางการของ opencode อย่างไร?
 
-- เพิ่มเครื่องมือ Harness-DAG-Workflow (AGPL-3.0)
-- แก้ไขปัญหาความเข้ากันได้ในสถานการณ์การใช้งานภาษาจีนอย่างต่อเนื่อง
+- **🪝 Hooks API superset + Goal instructions + TODO PreHook + Sandbox Workspace**: รักษาความสามารถ Hooks จาก upstream ทั้งหมด และเพิ่มการรวม event ของ DAG, การติดตามงานแบบมีโครงสร้าง, goal reentry ผ่าน hooks และ coding sandbox หลายภาษาแบบแยกส่วน
+- **🧩 โหมด DAG WorkFlow (WIP · เสร็จประมาณ 90%)**: เอนจิน [Harness-DAG-Workflow](./docs/harness-dag.md) ที่พัฒนาเอง ช่วยให้ LLM agent จัดการงานขนานหลายโหนดใน session เดียวได้ ความสามารถหลักเสร็จแล้ว (scheduling / lifecycle / pause-resume-cancel-replan-step / sub-DAG / conditional branching / data flow / crash recovery / probes), แผง TUI เชื่อมต่อแล้ว และกำลังเก็บรายละเอียดส่วนที่เหลือ
+- **🔧 การแก้ไขความเข้ากันได้ของภาษาจีน**: DEBUG ต่อเนื่องสำหรับ CJK tokenization, เครื่องหมาย fullwidth, path ภาษาจีน และ IME edge cases จาก upstream
 - ดูแลอย่างอิสระในระยะยาว ไม่ขึ้นกับจังหวะของต้นน้ำ
 
 ## ชุมชน

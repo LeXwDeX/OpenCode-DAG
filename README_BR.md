@@ -237,11 +237,16 @@ Funcionalmente, é muito semelhante. Principais diferenças:
 - Suporte LSP incorporado
 - Focado na interface de terminal (TUI)
 - Arquitetura cliente/servidor. Pode rodar localmente e ser controlado remotamente por dispositivos móveis
+- **🪝 Superset da Hooks API**: com base nos 22 eventos disparadores × 5 tipos de execução do Claude Code, este fork é **totalmente compatível com o protocolo Claude Code Hooks** e ainda adiciona integração com o barramento de eventos do DAG workflow (`workflow.*` / `node.*`), assinaturas no TUI e encaminhamento via HTTP API. Especificação completa: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Sistema de instruções Goal**: a ferramenta `todowrite` + rastreamento estruturado de objetivos mantêm a fila de trabalho do agent durante sessões longas e multi-etapas, evitando perda de estado quando a janela de contexto muda
+- **🪝 TODO PreHook**: permite injetar a lista TODO no contexto via hooks `PreToolUse`; o mecanismo de reentrada em objetivos guiado por hooks garante que o agent sempre veja o progresso atual
+- **🛡️ Sandbox Coding Workspace**: cada sandbox tem seu próprio diretório temporário, diagnósticos LSP e toolchains multilíngues (Python/Node/TS/Go/Rust/C/C++); o agent pode testar, compilar e depurar código em isolamento e só mesclar nos arquivos do projeto via edit/write após verificar
 
 ### Como isso difere da versão oficial do opencode?
 
-- Adiciona o motor de fluxo de trabalho Harness-DAG-Workflow (AGPL-3.0)
-- DEBUG contínuo de problemas de compatibilidade em cenários de uso com chinês
+- **🪝 Superset da Hooks API + instruções Goal + TODO PreHook + Sandbox Workspace**: preserva todos os recursos de Hooks do upstream e adiciona integração de eventos DAG, rastreamento estruturado de tarefas, reentrada em objetivos guiada por hooks e um coding sandbox multilíngue isolado
+- **🧩 Modo DAG WorkFlow (WIP · ~90%)**: motor [Harness-DAG-Workflow](./docs/harness-dag.md) desenvolvido internamente, permitindo que um agent LLM orquestre tarefas paralelas com múltiplos nós em uma única sessão. As capacidades centrais já foram implementadas (agendamento / ciclo de vida / pause-resume-cancel-replan-step / sub-DAG / ramificação condicional / data flow / crash recovery / probes), o painel TUI está conectado e o polimento final está em andamento
+- **🔧 Correções de compatibilidade com chinês**: DEBUG contínuo de tokenização CJK, pontuação de largura total, caminhos chineses e casos de IME herdados do upstream
 - Manutenção independente de longo prazo, desacoplada do ritmo upstream
 
 ## Comunidade

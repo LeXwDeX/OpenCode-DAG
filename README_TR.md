@@ -236,11 +236,16 @@ Proje adınızda "opencode" kullanıyorsanız (örneğin "opencode-dashboard" ve
 - Yerleşik LSP desteği
 - Terminal arayüzüne (TUI) odaklanır
 - İstemci/sunucu mimarisi. Yerel makinede çalıştırılabilir ve aynı anda mobil cihazla uzaktan kontrol edilebilir
+- **🪝 Hooks API üst kümesi**: Claude Code'un 22 tetikleyici olayı × 5 yürütme türü üzerine kuruludur; bu fork **Claude Code Hooks protokolüyle tamamen uyumludur** ve ek olarak DAG iş akışı olay veri yolu entegrasyonu (`workflow.*` / `node.*` olayları), TUI abonelikleri ve HTTP API yönlendirmesi sağlar. Tam protokol: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal talimat sistemi**: `todowrite` aracı + yapılandırılmış hedef takibi, uzun ve çok adımlı agent oturumlarında çalışma kuyruğunu kalıcı tutar ve bağlam penceresi değiştiğinde görev durumunun kaybolmasını önler
+- **🪝 TODO PreHook**: `PreToolUse` hook'ları üzerinden TODO listesini bağlama enjekte etmeyi destekler; hook tabanlı hedefe geri dönüş mekanizması agent'ın her zaman güncel ilerlemeyi görmesini sağlar
+- **🛡️ Sandbox Coding Workspace**: her sandbox ayrı geçici dizin, LSP tanıları ve çok dilli toolchain'ler (Python/Node/TS/Go/Rust/C/C++) içerir; agent kodu izolasyonda deneyebilir, derleyebilir ve hata ayıklayabilir, doğrulandıktan sonra edit/write ile proje dosyalarına aktarabilir
 
 ### Bu, opencode'un resmi sürümünden nasıl farklıdır?
 
-- Harness-DAG-Workflow iş akışı motoru eklenmiştir (AGPL-3.0)
-- Çince kullanım senaryolarındaki uyumluluk sorunları sürekli olarak düzeltilmektedir
+- **🪝 Hooks API üst kümesi + Goal talimatları + TODO PreHook + Sandbox Workspace**: upstream Hooks yeteneklerini korur; DAG olay entegrasyonu, yapılandırılmış görev takibi, hook tabanlı hedefe dönüş ve çok dilli izole coding sandbox ekler
+- **🧩 DAG WorkFlow modu (WIP · yaklaşık %90 tamamlandı)**: tek bir oturumda LLM agent'ın çok düğümlü paralel görevleri orkestre etmesini sağlayan öz geliştirme [Harness-DAG-Workflow](./docs/harness-dag.md) motoru. Çekirdek yetenekler tamamlandı (zamanlama / yaşam döngüsü / pause-resume-cancel-replan-step / sub-DAG / koşullu dallanma / data flow / crash recovery / probes), TUI paneli bağlı, kalan işler son rötuş aşamasında
+- **🔧 Çince uyumluluk düzeltmeleri**: upstream'den gelen CJK tokenization, tam genişlik noktalama, Çince yol işleme ve IME edge case'leri üzerinde sürekli DEBUG
 - Uzun vadeli bağımsız bakım, yukarı akış temposundan ayrıştırılmıştır
 
 ## Topluluk

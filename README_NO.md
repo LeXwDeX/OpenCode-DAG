@@ -236,11 +236,16 @@ Funksjonsmessig ganske likt, med noen viktige forskjeller:
 - Innebygd LSP-støtte
 - Fokusert på terminalgrensesnitt (TUI)
 - Klient/tjener-arkitektur. Kan kjøre lokalt og samtidig styres eksternt fra en mobil enhet
+- **🪝 Hooks API-supersett**: bygger på Claude Codes 22 triggerhendelser × 5 utførelsestyper; denne forken er **fullt kompatibel med Claude Code Hooks-protokollen** og legger i tillegg til DAG-arbeidsflytens event-bus-integrasjon (`workflow.*` / `node.*`), TUI-abonnementer og videresending via HTTP API. Full spesifikasjon: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal-instruksjonssystem**: `todowrite`-verktøyet + strukturert målsporing holder arbeidskøen til agent ved like gjennom lange flertrinnsøkter og hindrer at oppgavestatus går tapt når kontekstvinduet endres
+- **🪝 TODO PreHook**: støtter injisering av TODO-listen i konteksten via `PreToolUse`-hooks; en hooks-drevet mekanisme for å vende tilbake til mål sørger for at agent alltid ser gjeldende fremdrift
+- **🛡️ Sandbox Coding Workspace**: hver sandbox har egen midlertidig mappe, LSP-diagnostikk og flerspråklige toolchains (Python/Node/TS/Go/Rust/C/C++); agent kan prøve, kompilere og feilsøke kode isolert og først etter verifisering slå den inn i prosjektfiler via edit/write
 
 ### Hva er forskjellen sammenlignet med den offisielle opencode-versjonen?
 
-- Ny Harness-DAG-Workflow arbeidsflytmotor (AGPL-3.0)
-- Kontinuerlig feilsøking av kompatibilitetsproblemer i kinesiske bruksscenarier
+- **🪝 Hooks API-supersett + Goal-instruksjoner + TODO PreHook + Sandbox Workspace**: beholder alle upstream Hooks-funksjoner og legger til DAG-hendelsesintegrasjon, strukturert oppgavesporing, hooks-drevet målreentry og en isolert flerspråklig coding sandbox
+- **🧩 DAG WorkFlow-modus (WIP · ca. 90%)**: en egenutviklet [Harness-DAG-Workflow](./docs/harness-dag.md)-motor som lar en LLM agent orkestrere parallellarbeid med flere noder i én økt. Kjernefunksjonene er på plass (planlegging / livssyklus / pause-resume-cancel-replan-step / sub-DAG / betingede grener / data flow / crash recovery / probes), TUI-panelet er koblet til, og siste finpuss pågår
+- **🔧 Kinesisk-kompatibilitetsfikser**: løpende DEBUG av CJK-tokenisering, fullbredde-tegnsetting, kinesiske stier og IME-edge cases fra upstream
 - Langsiktig uavhengig vedlikehold, uavhengig av oppstrøms tempo
 
 ## Fellesskap

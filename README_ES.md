@@ -245,11 +245,16 @@ Funcionalmente es muy similar; las diferencias clave son:
 - Soporte LSP integrado
 - Enfoque en la interfaz de terminal (TUI)
 - Arquitectura cliente/servidor. Puede ejecutarse en su máquina local y controlarse de forma remota desde un dispositivo móvil
+- **🪝 Superset de Hooks API**: sobre los 22 eventos disparadores × 5 tipos de ejecución de Claude Code, este fork es **totalmente compatible con el protocolo Claude Code Hooks** y añade integración con el bus de eventos DAG (`workflow.*` / `node.*`), suscripciones TUI y reenvío mediante HTTP API. Especificación completa: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Sistema de instrucciones Goal**: la herramienta `todowrite` + seguimiento estructurado de objetivos mantienen la cola de trabajo del agent durante sesiones largas de varios pasos y evitan perder el estado de las tareas cuando cambia la ventana de contexto
+- **🪝 TODO PreHook**: permite inyectar la lista TODO en el contexto mediante hooks `PreToolUse`; el mecanismo de reentrada a objetivos impulsado por hooks garantiza que el agent siempre vea el progreso actual
+- **🛡️ Sandbox Coding Workspace**: cada sandbox tiene su propio directorio temporal, diagnósticos LSP y toolchains multilenguaje (Python/Node/TS/Go/Rust/C/C++); el agent puede probar, compilar y depurar código de forma aislada y fusionarlo en los archivos del proyecto mediante edit/write solo después de verificarlo
 
 ### ¿En qué se diferencia de la versión oficial de opencode?
 
-- Nuevo motor de flujo de trabajo Harness-DAG-Workflow (AGPL-3.0)
-- Depuración continua de problemas de compatibilidad en escenarios de uso del chino
+- **🪝 Superset de Hooks API + instrucciones Goal + TODO PreHook + Sandbox Workspace**: conserva todas las capacidades Hooks del upstream y añade integración de eventos DAG, seguimiento estructurado de tareas, reentrada a objetivos impulsada por hooks y un coding sandbox multilenguaje aislado
+- **🧩 Modo DAG WorkFlow (WIP · ~90%)**: motor [Harness-DAG-Workflow](./docs/harness-dag.md) desarrollado internamente que permite a un agent LLM orquestar tareas paralelas de varios nodos en una sola sesión. Las capacidades principales ya están implementadas (planificación / ciclo de vida / pause-resume-cancel-replan-step / sub-DAG / ramificación condicional / data flow / crash recovery / probes), el panel TUI está conectado y queda trabajo de pulido final
+- **🔧 Correcciones de compatibilidad con chino**: DEBUG continuo de tokenización CJK, puntuación de ancho completo, rutas chinas y casos límite de IME heredados del upstream
 - Mantenimiento independiente a largo plazo, desacoplado del ritmo de la versión original
 
 ## Comunidad

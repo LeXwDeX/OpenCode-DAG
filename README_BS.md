@@ -237,11 +237,16 @@ Funkcionalno su vrlo slični, ključne razlike:
 - Ugrađena LSP podrška
 - Fokus na terminalskom interfejsu (TUI)
 - Klijent/server arhitektura. Može se pokretati lokalno, a udaljeno upravljati pomoću mobilnih uređaja
+- **🪝 Hooks API superskup**: zasnovan na Claude Code-ovih 22 trigger događaja × 5 tipova izvršavanja; ovaj fork je **potpuno kompatibilan s Claude Code Hooks protokolom** i dodaje integraciju DAG event-bus-a (`workflow.*` / `node.*` događaji), TUI pretplate i prosljeđivanje preko HTTP API-ja. Puna specifikacija: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 Goal sistem instrukcija**: `todowrite` alat + strukturirano praćenje ciljeva čuvaju radni red agent-a tokom dugih višekorakih sesija i sprečavaju gubitak stanja zadataka pri promjeni kontekstnog prozora
+- **🪝 TODO PreHook**: podržava ubacivanje TODO liste u kontekst putem `PreToolUse` hookova; hooks-driven mehanizam povratka na ciljeve osigurava da agent uvijek vidi trenutni napredak
+- **🛡️ Sandbox Coding Workspace**: svaki sandbox ima zaseban privremeni direktorij, LSP dijagnostiku i višejezične toolchain-e (Python/Node/TS/Go/Rust/C/C++); agent može izolovano isprobavati, kompajlirati i debugovati kod, a nakon provjere ga spojiti u projektne fajlove putem edit/write
 
 ### Po čemu se razlikuje od službene verzije opencode-a?
 
-- Dodan Harness-DAG-Workflow radni tok engine (AGPL-3.0)
-- Stalno DEBUG-ovanje problema kompatibilnosti u scenarijima korištenja kineskog jezika
+- **🪝 Hooks API superskup + Goal instrukcije + TODO PreHook + Sandbox Workspace**: zadržava sve upstream Hooks mogućnosti i dodaje DAG event integraciju, strukturirano praćenje zadataka, hooks-driven povratak na ciljeve i izolovani višejezični coding sandbox
+- **🧩 DAG WorkFlow način (WIP · oko 90%)**: vlastiti [Harness-DAG-Workflow](./docs/harness-dag.md) engine koji omogućava LLM agent-u orkestraciju paralelnih zadataka s više čvorova u jednoj sesiji. Ključne mogućnosti su implementirane (scheduling / lifecycle / pause-resume-cancel-replan-step / sub-DAG / uslovno grananje / data flow / crash recovery / probes), TUI panel je povezan, a završno poliranje je u toku
+- **🔧 Ispravke kompatibilnosti za kineski jezik**: stalni DEBUG CJK tokenizacije, fullwidth interpunkcije, kineskih putanja i IME edge case-ova naslijeđenih iz upstream-a
 - Dugoročno samostalno održavanje, neovisno o razvojnom tempu originala
 
 ## Zajednica

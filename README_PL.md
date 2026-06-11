@@ -236,11 +236,16 @@ Funkcjonalnie dość podobne, z kluczowymi różnicami:
 - Wbudowana obsługa LSP
 - Fokus na interfejsie terminalowym (TUI)
 - Architektura klient/serwer. Może działać lokalnie, a jednocześnie być zdalnie sterowany z urządzenia mobilnego
+- **🪝 Nadzbiór Hooks API**: bazując na 22 zdarzeniach wyzwalających × 5 typach wykonania Claude Code, ten fork jest **w pełni zgodny z protokołem Claude Code Hooks** i dodatkowo oferuje integrację magistrali zdarzeń DAG (`workflow.*` / `node.*`), subskrypcje TUI oraz przekazywanie przez HTTP API. Pełna specyfikacja: [`hooks-reference.md`](./packages/opencode/src/session/prompt/hooks-reference.md)
+- **🎯 System instrukcji Goal**: narzędzie `todowrite` + strukturalne śledzenie celów utrzymują kolejkę pracy agent podczas długich, wieloetapowych sesji i zapobiegają utracie stanu zadań przy zmianach okna kontekstu
+- **🪝 TODO PreHook**: obsługuje wstrzykiwanie listy TODO do kontekstu przez hooki `PreToolUse`; mechanizm powrotu do celów oparty na hooks sprawia, że agent zawsze widzi bieżący postęp
+- **🛡️ Sandbox Coding Workspace**: każdy sandbox ma osobny katalog tymczasowy, diagnostykę LSP i wielojęzyczne toolchainy (Python/Node/TS/Go/Rust/C/C++); agent może izolowanie testować, kompilować i debugować kod, a po weryfikacji przenieść zmiany do projektu przez edit/write
 
 ### Jaka jest różnica w porównaniu z oficjalną wersją opencode?
 
-- Nowy silnik przepływu pracy Harness-DAG-Workflow (AGPL-3.0)
-- Ciągłe debugowanie problemów z kompatybilnością w chińskich scenariuszach użycia
+- **🪝 Nadzbiór Hooks API + instrukcje Goal + TODO PreHook + Sandbox Workspace**: zachowuje wszystkie upstreamowe możliwości Hooks oraz dodaje integrację zdarzeń DAG, strukturalne śledzenie zadań, powrót do celów sterowany hooks i izolowany wielojęzyczny coding sandbox
+- **🧩 Tryb DAG WorkFlow (WIP · około 90%)**: autorski silnik [Harness-DAG-Workflow](./docs/harness-dag.md), który pozwala LLM agent orkiestrwać wielowęzłowe zadania równoległe w jednej sesji. Główne możliwości są już wdrożone (planowanie / cykl życia / pause-resume-cancel-replan-step / sub-DAG / gałęzie warunkowe / data flow / crash recovery / probes), panel TUI jest podłączony, a końcowe dopracowanie trwa
+- **🔧 Poprawki kompatybilności z językiem chińskim**: ciągły DEBUG tokenizacji CJK, znaków pełnej szerokości, chińskich ścieżek i przypadków IME odziedziczonych z upstream
 - Długoterminowe niezależne utrzymanie, uniezależnione od tempa upstream
 
 ## Społeczność
