@@ -6,6 +6,7 @@ import { Effect } from 'effect';
 import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus } from '../types';
 import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
 import { validateWorkflowConfigLimits } from '../workflow-engine';
+import { getValidNextSessionWorkflowStatuses } from '../execution-core';
 
 // Helper to create a complete DAGNodeConfig
 function makeNodeConfig(
@@ -864,13 +865,11 @@ describe('Workflow Engine - P2: Pause/Resume Guard', () => {
   })
 
   it('pauseWorkflow: DAGWorkflowStatus is valid transition from running', () => {
-    const { getValidNextSessionWorkflowStatuses } = require('../session-service')
     const valid = getValidNextSessionWorkflowStatuses('running')
     expect(valid).toContain('paused')
   })
 
   it('resumeWorkflow: DAGWorkflowStatus is valid transition from paused', () => {
-    const { getValidNextSessionWorkflowStatuses } = require('../session-service')
     const valid = getValidNextSessionWorkflowStatuses('paused')
     expect(valid).toContain('running')
   })
