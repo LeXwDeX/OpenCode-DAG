@@ -21,7 +21,8 @@
 import { createMemo, Show, type JSX } from "solid-js"
 import type { DAGWorkflowStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
-import { t, workflowStatusLabel, type Lang } from "./i18n"
+import { t, workflowStatusLabel, type I18nKey, type Lang } from "./i18n"
+import { RGBA } from "@opentui/core"
 
 export type ControlAction = "start" | "pause" | "resume" | "cancel" | "replan" | "step"
 
@@ -64,47 +65,100 @@ export function parseReplanConcurrency(input: string): { ok: true; value: number
   return { ok: true, value: n }
 }
 
+/**
+ * ActionButton — WP4-A: internal helper for the 6 lifecycle buttons.
+ * When isDisabled (parent is executing an async action), the button renders dimmed
+ * (theme.textMuted) with a " ..." suffix and the onMouseUp handler is suppressed.
+ */
+function ActionButton(props: {
+  when: boolean
+  action: ControlAction
+  label: I18nKey
+  color: RGBA
+  lang: Lang
+  disabled: () => boolean
+  onAction: (a: ControlAction) => void
+}): JSX.Element {
+  const { theme } = useTheme()
+  return (
+    <Show when={props.when}>
+      <text
+        fg={props.disabled() ? theme.textMuted : props.color}
+        onMouseUp={() => !props.disabled() && props.onAction(props.action)}
+      >
+        {t(props.lang, props.label)}{props.disabled() ? " ..." : ""}
+      </text>
+    </Show>
+  )
+}
+
 export function ControlBar(props: {
   lang: Lang
   workflowId: string
   currentStatus: () => DAGWorkflowStatus
   onAction: (action: ControlAction) => void
+  actionLoading?: () => boolean
 }): JSX.Element {
   const { theme } = useTheme()
   const actions = createMemo(() => controlBarActions(props.currentStatus()))
+  const isDisabled = () => !!props.actionLoading?.()
 
   return (
     <box flexDirection="row" gap={2} paddingTop={1}>
-      <Show when={actions().start}>
-        <text fg={theme.primary} onMouseUp={() => props.onAction("start")}>
-          {t(props.lang, "ctrl_start")}
-        </text>
-      </Show>
-      <Show when={actions().pause}>
-        <text fg={theme.primary} onMouseUp={() => props.onAction("pause")}>
-          {t(props.lang, "ctrl_pause")}
-        </text>
-      </Show>
-      <Show when={actions().resume}>
-        <text fg={theme.primary} onMouseUp={() => props.onAction("resume")}>
-          {t(props.lang, "ctrl_resume")}
-        </text>
-      </Show>
-      <Show when={actions().step}>
-        <text fg={theme.primary} onMouseUp={() => props.onAction("step")}>
-          {t(props.lang, "ctrl_step")}
-        </text>
-      </Show>
-      <Show when={actions().cancel}>
-        <text fg={theme.error} onMouseUp={() => props.onAction("cancel")}>
-          {t(props.lang, "ctrl_cancel")}
-        </text>
-      </Show>
-      <Show when={actions().replan}>
-        <text fg={theme.text} onMouseUp={() => props.onAction("replan")}>
-          {t(props.lang, "ctrl_replan")}
-        </text>
-      </Show>
+      <ActionButton
+        when={actions().start}
+        action="start"
+        label="ctrl_start"
+        color={theme.primary}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
+      <ActionButton
+        when={actions().pause}
+        action="pause"
+        label="ctrl_pause"
+        color={theme.primary}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
+      <ActionButton
+        when={actions().resume}
+        action="resume"
+        label="ctrl_resume"
+        color={theme.primary}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
+      <ActionButton
+        when={actions().step}
+        action="step"
+        label="ctrl_step"
+        color={theme.primary}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
+      <ActionButton
+        when={actions().cancel}
+        action="cancel"
+        label="ctrl_cancel"
+        color={theme.error}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
+      <ActionButton
+        when={actions().replan}
+        action="replan"
+        label="ctrl_replan"
+        color={theme.text}
+        lang={props.lang}
+        disabled={isDisabled}
+        onAction={props.onAction}
+      />
       <text fg={theme.textMuted}>status:</text>
       <text fg={props.currentStatus() === "paused" ? theme.primary : theme.text}>
         {workflowStatusLabel(props.lang, props.currentStatus())}

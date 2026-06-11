@@ -115,8 +115,8 @@ describe("WP4 i18n — t() dict lookup", () => {
     node_enter_subsession: ["[Enter Sub-Session \u2192]", "[进入子会话 \u2192]"],
     action_close: ["[Close]", "[关闭]"],
     hint_hotkey_bar: [
-      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Esc] Back",
-      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [Leader+v] 切换视图  [Esc] 返回",
+      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
+      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     ],
     label_focus: ["Focus:", "焦点："],
     focus_history: ["History", "列表"],
@@ -196,7 +196,7 @@ describe("ControlBar i18n", () => {
   it("uses the ctrl_start key for the start label", async () => {
     const source = await Bun.file(new URL("./control-bar.tsx", import.meta.url)).text()
 
-    expect(source).toContain('t(props.lang, "ctrl_start")')
+    expect(source).toContain('label="ctrl_start"')
     expect(source).not.toContain("          [Start]")
   })
 })

@@ -105,3 +105,43 @@ describe("ControlBar — parseReplanConcurrency (replan range guard)", () => {
     expect(parseReplanConcurrency("  ")).toEqual({ ok: false })
   })
 })
+
+/**
+ * WP4-A: actionLoading is a render-only concern — the pure status → actions
+ * map is untouched by loading state. This test pins that invariant so a future
+ * refactor cannot accidentally couple controlBarActions to loading.
+ *
+ * (Render-level coverage — dimmed fg, "..." suffix, onMouseUp gated — requires
+ * an @opentui/solid test renderer and is deferred to the verify suite.)
+ */
+describe("WP4-A: ControlBar loading does not affect controlBarActions", () => {
+  it("running status still yields pause+cancel+replan regardless of loading", () => {
+    const actions = controlBarActions("running")
+    expect(actions.pause).toBe(true)
+    expect(actions.cancel).toBe(true)
+    expect(actions.replan).toBe(true)
+    expect(actions.start).toBe(false)
+    expect(actions.resume).toBe(false)
+    expect(actions.step).toBe(false)
+  })
+
+  it("paused status still yields resume+cancel+step regardless of loading", () => {
+    const actions = controlBarActions("paused")
+    expect(actions.resume).toBe(true)
+    expect(actions.cancel).toBe(true)
+    expect(actions.step).toBe(true)
+    expect(actions.pause).toBe(false)
+    expect(actions.replan).toBe(false)
+    expect(actions.start).toBe(false)
+  })
+
+  it("pending status still yields start regardless of loading", () => {
+    const actions = controlBarActions("pending")
+    expect(actions.start).toBe(true)
+    expect(actions.pause).toBe(false)
+    expect(actions.resume).toBe(false)
+    expect(actions.cancel).toBe(false)
+    expect(actions.replan).toBe(false)
+    expect(actions.step).toBe(false)
+  })
+})

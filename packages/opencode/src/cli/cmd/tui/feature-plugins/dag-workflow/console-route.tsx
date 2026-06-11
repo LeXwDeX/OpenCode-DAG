@@ -15,7 +15,7 @@
  * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createEffect, createMemo, createSignal, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, ErrorBoundary, Show, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
 import { calculateWorkflowProgress } from "@/dag/session/types"
@@ -102,6 +102,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
   const [actionError, setActionError] = createSignal<string | null>(null)
+  const [actionLoading, setActionLoading] = createSignal(false)
+
+  async function withLoading<T>(fn: () => Promise<T>): Promise<T> {
+    setActionLoading(true)
+    try {
+      return await fn()
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   // actionError toast: operation failures (pause/resume/cancel/replan/create) shown
   // as transient toast rather than occupying the middle-pane layout. Data-load
@@ -231,12 +241,14 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   async function pauseResume(action: "pause" | "resume", workflowId: string) {
     try {
-      setActionError(null)
-      if (action === "pause") {
-        await pauseWorkflow(props.api.client, workflowId)
-        return
-      }
-      await resumeWorkflow(props.api.client, workflowId)
+      await withLoading(async () => {
+        setActionError(null)
+        if (action === "pause") {
+          await pauseWorkflow(props.api.client, workflowId)
+          return
+        }
+        await resumeWorkflow(props.api.client, workflowId)
+      })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
@@ -245,8 +257,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   // P2-B: Step wrapper — runs the data.ts stepWorkflow and surfaces errors as toast.
   async function stepOne(workflowId: string) {
     try {
-      setActionError(null)
-      await stepWorkflow(props.api.client, workflowId)
+      await withLoading(async () => {
+        setActionError(null)
+        await stepWorkflow(props.api.client, workflowId)
+      })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
@@ -254,14 +268,17 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   async function startCurrent(workflowId: string) {
     try {
-      setActionError(null)
-      await startWorkflow(props.api.client, workflowId)
+      await withLoading(async () => {
+        setActionError(null)
+        await startWorkflow(props.api.client, workflowId)
+      })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
   }
 
   function togglePauseResume() {
+    if (actionLoading()) return
     const wf = currentWorkflow()
     if (!wf) return
     if (wf.status === "running") {
@@ -351,8 +368,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   async function cancelCurrent(workflowId: string) {
     try {
-      setActionError(null)
-      await cancelWorkflow(props.api.client, workflowId)
+      await withLoading(async () => {
+        setActionError(null)
+        await cancelWorkflow(props.api.client, workflowId)
+      })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
@@ -365,8 +384,10 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       return
     }
     try {
-      setActionError(null)
-      await replanWorkflow(props.api.client, workflowId, { new_max_concurrency: parsed.value })
+      await withLoading(async () => {
+        setActionError(null)
+        await replanWorkflow(props.api.client, workflowId, { new_max_concurrency: parsed.value })
+      })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
@@ -384,12 +405,14 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
 
   async function removeNodeReplan(workflowId: string, nodeId: string) {
     try {
-      setActionError(null)
-      await replanWorkflow(props.api.client, workflowId, {
-        remove_nodes: [nodeId],
-        changed_by: "tui-remove-node",
+      await withLoading(async () => {
+        setActionError(null)
+        await replanWorkflow(props.api.client, workflowId, {
+          remove_nodes: [nodeId],
+          changed_by: "tui-remove-node",
+        })
+        toast.show({ message: i18n().t("toast_node_removed"), variant: "success" })
       })
-      toast.show({ message: i18n().t("toast_node_removed"), variant: "success" })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
       toast.show({ message: i18n().t("toast_replan_error"), variant: "error" })
@@ -458,13 +481,15 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       return
     }
     try {
-      setActionError(null)
-      await createWorkflow(props.api.client, {
-        name: fields.goal.slice(0, 80),
-        chatSessionId: sessionID(),
-        config: result,
+      await withLoading(async () => {
+        setActionError(null)
+        await createWorkflow(props.api.client, {
+          name: fields.goal.slice(0, 80),
+          chatSessionId: sessionID(),
+          config: result,
+        })
+        toast.show({ message: i18n().t("toast_created_pending_start"), variant: "success" })
       })
-      toast.show({ message: i18n().t("toast_created_pending_start"), variant: "success" })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
       toast.show({ message: i18n().t("toast_create_error"), variant: "error" })
@@ -657,6 +682,17 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               }
             >
             {(wf) => (
+              <ErrorBoundary
+                fallback={(err) => (
+                  <box flexGrow={1} alignItems="center" justifyContent="center">
+                    <box gap={1} padding={2}>
+                      <text fg={theme.error}>⚠ UI Error</text>
+                      <text fg={theme.textMuted}>{err?.message ?? String(err)}</text>
+                      <text fg={theme.textMuted}>Refresh or switch views to recover.</text>
+                    </box>
+                  </box>
+                )}
+              >
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
                   lang={i18n().lang}
@@ -669,6 +705,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   workflowId={wf().id}
                   currentStatus={() => wf().status}
                   onAction={(action) => handleControlAction(action, wf().id)}
+                  actionLoading={actionLoading}
                 />
                 <scrollbox flexGrow={1} minHeight={0} stickyScroll={false} stickyStart="top">
                   <Show
@@ -701,6 +738,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   </Show>
                 </scrollbox>
               </box>
+              </ErrorBoundary>
             )}
             </Show>
           </Show>
