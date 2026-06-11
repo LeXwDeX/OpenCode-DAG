@@ -222,4 +222,32 @@ describe("DAG Template Registry", () => {
       }
     })
   })
+
+  describe("WP2-A: mkNode fallback to SAFE_BUILTIN_AGENTS", () => {
+    it("all template instances only use general or explore worker_types", () => {
+      for (const id of DAG_TEMPLATE_IDS) {
+        const templ = getDAGTemplate(id)
+        if (!templ) continue
+        const cfg = templ.create({ goal: "test" })
+        for (const node of cfg.nodes) {
+          expect(["general", "explore"]).toContain(node.worker_type)
+        }
+      }
+    })
+
+    it("all requiredAgents only contain general or explore", () => {
+      for (const templ of listDAGTemplates()) {
+        for (const agent of templ.requiredAgents) {
+          expect(["general", "explore"]).toContain(agent)
+        }
+      }
+    })
+
+    it("product-doc-analysis preserves explore worker_type", () => {
+      const templ = getDAGTemplate("product-doc-analysis")
+      if (!templ) throw new Error("template not found")
+      const cfg = templ.create({ goal: "test" })
+      expect(cfg.nodes[0].worker_type).toBe("explore")
+    })
+  })
 })

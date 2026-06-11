@@ -29,11 +29,6 @@ export interface WorkflowExecutor {
    * 获取当前工作流状态
    */
   getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never, never>
-  
-  /**
-   * 执行单个就绪节点（用于测试或手动控制）
-   */
-  executeReadyNode(workflowId: string, nodeId: string): Effect.Effect<unknown, Error, never>
 }
 
 /**
@@ -83,9 +78,5 @@ export function createWorkflowExecutor(
     getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never, never> {
       return engine.getWorkflowStatus(workflowId)
     },
-    
-    executeReadyNode(workflowId: string, nodeId: string): Effect.Effect<unknown, Error, never> {
-      return Effect.die(new Error("executeReadyNode not yet implemented"))
-    }
   }
 }

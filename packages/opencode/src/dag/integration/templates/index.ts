@@ -67,6 +67,8 @@ function brief(input: DAGTemplateInput): string {
   return parts.join(" | ")
 }
 
+const SAFE_BUILTIN_AGENTS: ReadonlySet<string> = new Set(["general", "explore"])
+
 function mkNode(
   id: string,
   workerType: string,
@@ -74,13 +76,14 @@ function mkNode(
   prompt: string,
   required = true,
 ): DAGNodeConfig {
+  const resolved = SAFE_BUILTIN_AGENTS.has(workerType) ? workerType : "general"
   return {
     id,
     name: id,
     dependencies: deps,
     required,
-    worker_type: workerType,
-    worker_config: { agent: workerType, prompt },
+    worker_type: resolved,
+    worker_config: { agent: resolved, prompt },
   }
 }
 
@@ -119,9 +122,9 @@ const productDocAnalysis: DAGTemplate = {
 const architectureDesign: DAGTemplate = {
   id: "architecture-design",
   name: "Architecture Design",
-  description: "Architecture gate review followed by implementation (archgate → implement).",
+  description: "Architecture gate review followed by implementation (general pipeline).",
   tags: ["arch", "design", "implement"],
-  requiredAgents: ["archgate", "implement"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "architecture-design",
@@ -147,9 +150,9 @@ const architectureDesign: DAGTemplate = {
 const interfaceDesign: DAGTemplate = {
   id: "interface-design",
   name: "Interface Design",
-  description: "Archgate → implement interfaces → verify (archgate → implement → verify).",
+  description: "Architecture gate, interface implementation, and verification (general pipeline).",
   tags: ["arch", "interfaces", "tdd"],
-  requiredAgents: ["archgate", "implement", "verify"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "interface-design",
@@ -181,9 +184,9 @@ const interfaceDesign: DAGTemplate = {
 const tddImplementationAndCoverage: DAGTemplate = {
   id: "tdd-implementation-and-coverage",
   name: "TDD Implementation & Coverage",
-  description: "Implement interfaces + tests, then implementation, then verify.",
+  description: "Implement interfaces + tests, then implementation, then verify (general pipeline).",
   tags: ["tdd", "implement", "verify"],
-  requiredAgents: ["implement", "verify"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "tdd-implementation-and-coverage",
@@ -215,9 +218,9 @@ const tddImplementationAndCoverage: DAGTemplate = {
 const designPatternReview: DAGTemplate = {
   id: "design-pattern-review",
   name: "Design Pattern Review",
-  description: "Architecture gate review followed by design-pattern review (archgate + review).",
+  description: "Architecture gate review followed by design-pattern review (general pipeline).",
   tags: ["arch", "review", "patterns"],
-  requiredAgents: ["archgate", "review"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "design-pattern-review",
@@ -245,7 +248,7 @@ const responsibilityReview: DAGTemplate = {
   name: "Responsibility Review",
   description: "Architecture gate review followed by responsibility/separation review.",
   tags: ["arch", "review", "srp"],
-  requiredAgents: ["archgate", "review"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "responsibility-review",
@@ -271,9 +274,9 @@ const responsibilityReview: DAGTemplate = {
 const patcherAssembly: DAGTemplate = {
   id: "patcher-assembly",
   name: "Patcher Assembly",
-  description: "Single-node patcher workflow producing a consolidated diff patch.",
+  description: "Single-node general workflow producing a consolidated diff patch.",
   tags: ["patcher", "diff"],
-  requiredAgents: ["patcher"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "patcher-assembly",
@@ -293,9 +296,9 @@ const patcherAssembly: DAGTemplate = {
 const comprehensiveReview: DAGTemplate = {
   id: "comprehensive-review",
   name: "Comprehensive Review",
-  description: "Verify → review → archgate chain for full-spectrum code review.",
+  description: "General pipeline for full-spectrum code review.",
   tags: ["verify", "review", "arch"],
-  requiredAgents: ["verify", "review", "archgate"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "comprehensive-review",
@@ -327,9 +330,9 @@ const comprehensiveReview: DAGTemplate = {
 const integrationTest: DAGTemplate = {
   id: "integration-test",
   name: "Integration Test",
-  description: "Single-node verify workflow that runs integration tests.",
+  description: "Single-node general workflow that runs integration tests.",
   tags: ["verify", "tests", "integration"],
-  requiredAgents: ["verify"],
+  requiredAgents: ["general"],
   create(input) {
     return {
       name: "integration-test",
