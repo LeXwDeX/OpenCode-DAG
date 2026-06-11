@@ -153,12 +153,12 @@ function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, 
 /**
  * Thin adapter (tool path) for `bootstrapWorkflowFromConfig` (WP-D1 core).
  *
- * Destructures Tool.Context → extracts chatSessionId / promptOps / abortSignal,
+ * Destructures Tool.Context → extracts chatSessionId / promptOps,
  * then delegates to the headless core function. Returns the new workflow id
  * and node count.
  *
- * All substantive startup logic (validation, DB rows, engine assembly, daemon,
- * abort listener) lives in core-start.ts (single source — architecture
+ * All substantive startup logic (validation, DB rows, engine assembly, daemon)
+ * lives in core-start.ts (single source — architecture
  * constraint 1). This adapter preserves the original startWorkflowFromConfig
  * external signature for backward compatibility with existing callers
  * (cases "start" and "template_start" in the DAGWorkerTool switch).
@@ -186,7 +186,6 @@ export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromCon
     dagConfig: workflowConfig,
     chatSessionId: ctx.sessionID,
     promptOps,
-    abortSignal: ctx.abort,
     dagSessionService,
     agentService,
   })
