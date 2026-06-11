@@ -343,7 +343,7 @@ export interface DAGNodeSession {
   /** 开始时间（毫秒时间戳，未开始时为 null） */
   start_time: number | null;
   /** 完成时间（毫秒时间戳，未完成时为 null） */
-  completed_at: string | null;
+  completed_at: number | null;
   /** 结束时间（毫秒时间戳，未完成时为 null） */
   end_time: number | null;
   /** 执行耗时（毫秒，未完成时为 null） */

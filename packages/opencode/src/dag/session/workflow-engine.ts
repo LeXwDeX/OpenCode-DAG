@@ -557,6 +557,7 @@ const make = Effect.gen(function* () {
             severity: "error",
             message: `recursion depth exceeded: ${childDepth} > ${MAX_SUB_DAG_DEPTH}`,
             details: { depth: childDepth, max: MAX_SUB_DAG_DEPTH },
+            chatSessionId: parentWf.chat_session_id,
           }).pipe(
             Effect.tapError((err) => Effect.logWarning(`[DAG] violation create failed: ${err}`)),
             Effect.ignore,
@@ -1175,6 +1176,7 @@ const make = Effect.gen(function* () {
             trigger: 'condition_false',
             condition: skipNode.config.condition,
           },
+          chatSessionId: wfForSkipLog?.chat_session_id,
         }).pipe(
           Effect.tapError((err) => Effect.logWarning(`[DAG] condition-skip violation failed for ${skipNode.node_id}: ${err}`)),
           Effect.ignore
@@ -1326,7 +1328,8 @@ const make = Effect.gen(function* () {
         nodeId,
         type: violationType,
         severity: 'error',
-        message: error.message
+        message: error.message,
+        chatSessionId: wfForLog?.chat_session_id,
       })
 
       // 3. Cascade skip downstream pending nodes BEFORE scheduleReadyNodes

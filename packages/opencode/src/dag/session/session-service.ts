@@ -201,6 +201,7 @@ export interface CreateViolationInput {
   severity: DAGViolationSeverity
   message: string
   details?: Record<string, unknown>
+  chatSessionId?: string
 }
 
 export interface CreateHistoryInput {
@@ -543,7 +544,7 @@ const make = Effect.gen(function* () {
         dependencies: row.dependencies ?? [],
         metadata: row.metadata ?? {},
         start_time: row.start_time,
-        completed_at: row.completed_at?.toString() ?? null,
+        completed_at: row.completed_at ?? null,
         end_time: row.end_time,
         duration_ms: row.duration_ms,
         parent_node: row.parent_node,
@@ -577,7 +578,7 @@ const make = Effect.gen(function* () {
         dependencies: row.dependencies ?? [],
         metadata: row.metadata ?? {},
         start_time: row.start_time,
-        completed_at: row.completed_at?.toString() ?? null,
+        completed_at: row.completed_at ?? null,
         end_time: row.end_time,
         duration_ms: row.duration_ms,
         parent_node: row.parent_node,
@@ -609,7 +610,7 @@ const make = Effect.gen(function* () {
         if (rows.length > 0) {
           currentStatus = rows[0].status as DAGNodeStatus
           nodeWorkflowId = rows[0].workflow_id
-          const cfg = rows[0].config as any
+          const cfg = rows[0].config as DAGNodeConfig | undefined
           if (cfg?.name) nodeName = cfg.name
         }
       })
@@ -690,7 +691,7 @@ const make = Effect.gen(function* () {
         db.insert(dagViolations).values({
           violation_id: violationId,
           workflow_id: input.workflowId,
-          chat_session_id: "",
+          chat_session_id: input.chatSessionId ?? "",
           node_id: input.nodeId ?? null,
           violation_type: input.type,
           severity: input.severity,
@@ -879,7 +880,7 @@ const make = Effect.gen(function* () {
         }
         // 3. INSERT newly added nodes (namespaced, status=pending)
         for (const n of input.newNodes) {
-          const nodeId = n.nodeId ?? `${input.workflowId}::${(n.config as any)?.id ?? 'anon'}`
+          const nodeId = n.nodeId ?? `${input.workflowId}::${(n.config as DAGNodeConfig | undefined)?.id ?? 'anon'}`
           tx.insert(dagNodes).values({
             node_id: nodeId,
             workflow_id: input.workflowId,

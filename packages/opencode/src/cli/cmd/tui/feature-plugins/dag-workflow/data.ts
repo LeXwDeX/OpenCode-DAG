@@ -162,7 +162,7 @@ export function mapNode(n: {
   dependencies: ReadonlyArray<string>
   metadata: Record<string, unknown>
   start_time: SdkNumber | null
-  completed_at: string | null
+  completed_at: SdkNumber | null
   end_time: SdkNumber | null
   duration_ms: SdkNumber | null
   parent_node: string | null
@@ -190,7 +190,7 @@ export function mapNode(n: {
     dependencies: [...n.dependencies],
     metadata: { ...n.metadata },
     start_time: numOrNull(n.start_time),
-    completed_at: n.completed_at ? String(n.completed_at) : null,
+    completed_at: numOrNull(n.completed_at),
     end_time: numOrNull(n.end_time),
     duration_ms: numOrNull(n.duration_ms),
     parent_node: n.parent_node ?? null,

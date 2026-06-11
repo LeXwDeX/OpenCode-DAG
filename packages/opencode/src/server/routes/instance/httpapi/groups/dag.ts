@@ -65,7 +65,7 @@ export const DagNode = Schema.Struct({
   dependencies: Schema.Array(Schema.String),
   metadata: Schema.Record(Schema.String, Schema.Unknown),
   start_time: Schema.NullOr(Schema.Number),
-  completed_at: Schema.NullOr(Schema.String),
+  completed_at: Schema.NullOr(Schema.Number),
   end_time: Schema.NullOr(Schema.Number),
   duration_ms: Schema.NullOr(Schema.Number),
   parent_node: Schema.NullOr(Schema.String),

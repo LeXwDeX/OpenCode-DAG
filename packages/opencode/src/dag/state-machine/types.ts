@@ -362,7 +362,7 @@ export interface NodeStateData {
   /** 节点开始执行时间（仅 running/completed/failed 有值） */
   started_at: string | null;
   /** 节点完成时间（仅 completed 有值） */
-  completed_at: string | null;
+  completed_at: number | null;
   /** push 机制计数器（记录被 push 的次数） */
   pushed_count: number;
   /** fallback 链深度（记录 fallback 重试次数） */
@@ -406,7 +406,7 @@ export interface WorkflowStateData {
   /** 暂停时间（仅 paused 状态有值） */
   paused_at: string | null;
   /** 完成时间（仅 completed/failed/cancelled 状态有值） */
-  completed_at: string | null;
+  completed_at: number | null;
   /** 所有分支的状态 */
   branches: Record<string, BranchStateData>;
   /** 累积的 diff 文件路径（仅 completed 状态有值） */

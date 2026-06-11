@@ -69,7 +69,7 @@ export class RequiredNodesMonitor {
       const allNodes = await Effect.runPromise(
         this.sessionService.listNodes(workflowId)
       )
-      const node = allNodes.find(n => (n.config as any)?.name === nodeName)
+      const node = allNodes.find(n => n.config.name === nodeName)
       
       if (!node) {
         console.error(`Node "${nodeName}" not found in workflow ${workflowId}`)

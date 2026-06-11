@@ -152,7 +152,7 @@ describe("WP4 data.ts — mapNode", () => {
     expect(n.node_id).toBe("n1")
     expect(n.status).toBe("failed")
     expect(n.dependencies).toEqual(["dep0"])
-    expect(n.completed_at).toBe("1500")
+    expect(n.completed_at).toBe(1500)
     expect(n.duration_ms).toBe(500)
   })
 

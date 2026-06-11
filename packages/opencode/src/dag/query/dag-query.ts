@@ -76,7 +76,7 @@ export class DAGQuery implements IDAGQuery {
 
     for (const node of nodes) {
       const startTime = node.start_time;
-      const endTime = node.end_time ?? (node.completed_at ? Number(node.completed_at) : null);
+      const endTime = node.end_time ?? (node.completed_at ?? null);
 
       if (startTime != null) {
         events.push({
@@ -182,7 +182,7 @@ export class DAGQuery implements IDAGQuery {
     const avgNodeTime = completedNodes.length > 0
       ? completedNodes.reduce((acc, n) => {
           const start = n.start_time ?? 0;
-          const end = n.completed_at ? Number(n.completed_at) : 0;
+          const end = n.completed_at ?? 0;
           return acc + (end - start);
         }, 0) / completedNodes.length
       : 0;
@@ -216,7 +216,7 @@ export class DAGQuery implements IDAGQuery {
         dependencies: node.dependencies,
         dependents: dependents.map(d => d.node_id),
         status: node.status,
-        completedAt: node.completed_at != null ? Number(node.completed_at) : undefined
+        completedAt: node.completed_at ?? undefined
       });
     }
 
@@ -240,11 +240,11 @@ export class DAGQuery implements IDAGQuery {
     const failedNodes = nodes.filter(n => n.status === 'failed').length;
     const currentRunning = nodes.filter(n => n.status === 'running').length;
 
-    const completedNodesWithTime = nodes.filter(n => n.completed_at != null && Number(n.completed_at) > 0);
+    const completedNodesWithTime = nodes.filter(n => n.completed_at != null && n.completed_at > 0);
     const averageNodeDuration = completedNodesWithTime.length > 0
       ? completedNodesWithTime.reduce((acc, n) => {
           const start = n.start_time ?? 0;
-          const end = n.completed_at ? Number(n.completed_at) : 0;
+          const end = n.completed_at ?? 0;
           return acc + (end - start);
         }, 0) / completedNodesWithTime.length
       : 0;
@@ -298,7 +298,7 @@ export class DAGQuery implements IDAGQuery {
 
       if (node.dependencies.length === 0) {
         const start = node.start_time ?? 0;
-        const end = node.completed_at ? Number(node.completed_at) : 0;
+        const end = node.completed_at ?? 0;
         const duration = node.completed_at ? end - start : 0;
         memo.set(nodeId, duration);
         return duration;
@@ -311,7 +311,7 @@ export class DAGQuery implements IDAGQuery {
       }
 
       const start = node.start_time ?? 0;
-      const end = node.completed_at ? Number(node.completed_at) : 0;
+      const end = node.completed_at ?? 0;
       const nodeDuration = node.completed_at ? end - start : 0;
       const totalLength = maxLength + nodeDuration;
 

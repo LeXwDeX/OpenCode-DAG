@@ -91,7 +91,7 @@ function makeNodeSession(
     metadata: {},
     start_time: status !== 'pending' ? Date.now() - 10000 : null,
     completed_at: (status === 'completed' || status === 'failed' || status === 'skipped')
-      ? Date.now().toString()
+      ? Date.now()
       : null,
     end_time: (status === 'completed' || status === 'failed') ? Date.now() : null,
     duration_ms: durationMs,

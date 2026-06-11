@@ -12,6 +12,7 @@ import type {
   IWorktreePersister,
 } from './types';
 import { TERMINAL_WORKTREE_STATUSES, AUTO_CLEANUP_STATUSES } from './types';
+import type { TerminalWorktreeStatus } from './types';
 import type { IWorktreeManager } from './IWorktreeManager';
 import type { IEventBus } from '../state-machine/IStateMachine';
 import type { WorkflowEvent, NodeEvent } from '../state-machine/types';
@@ -241,7 +242,7 @@ export class WorktreeManager implements IWorktreeManager {
     if ((TERMINAL_WORKTREE_STATUSES as ReadonlyArray<WorktreeStatus>).includes(worktree.status)) {
       throw new WorktreeTerminalViolationError(
         worktreeId,
-        worktree.status as any,
+        worktree.status as TerminalWorktreeStatus,
       );
     }
 
@@ -295,7 +296,7 @@ export class WorktreeManager implements IWorktreeManager {
     if ((TERMINAL_WORKTREE_STATUSES as ReadonlyArray<WorktreeStatus>).includes(worktree.status)) {
       throw new WorktreeTerminalViolationError(
         worktreeId,
-        worktree.status as any,
+        worktree.status as TerminalWorktreeStatus,
       );
     }
 
