@@ -1408,6 +1408,25 @@ const make = Effect.gen(function* () {
         }
       }
 
+      // WP3: Best-effort worktree cleanup for running/queued nodes with use_worktree.
+      // Uses Effect.forkDetach (fire-and-forget) — cleanup never blocks cancel.
+      // Mirrors the spawnReadyNode worktree pattern (§2.5, line 730-768).
+      for (const node of nodes) {
+        if (node.status !== "running" && node.status !== "queued") continue
+        const workerConfig = node.config.worker_config as { use_worktree?: boolean } | undefined
+        if (workerConfig?.use_worktree !== true) continue
+        yield* Effect.gen(function* () {
+          const wtManager = yield* WorktreeManagerTag.pipe(
+            Effect.catchCause(() => Effect.succeed(undefined as IWorktreeManager | undefined))
+          )
+          if (wtManager) {
+            yield* Effect.promise(() => wtManager.cleanup(node.node_id)).pipe(
+              Effect.catchCause(() => Effect.void)
+            )
+          }
+        }).pipe(Effect.forkDetach)
+      }
+
       return { success: true }
     }) as Effect.Effect<{ success: boolean }, never>
 

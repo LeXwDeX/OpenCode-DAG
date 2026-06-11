@@ -21,13 +21,11 @@ import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
-import { WorkflowEngine } from "../dag/session/workflow-engine"
+import { WorkflowEngine, getReadyNodes } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
-import type { WorkflowExecutor } from "../dag/session/workflow-executor"
-import { createWorkflowExecutor } from "../dag/session/workflow-executor"
 import { DAGSessionService } from "../dag/session/session-service"
 import type { IDAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
+import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
 import {
   bootstrapWorkflowFromConfig,
   type WorkerTypeAgentRegistry,
@@ -279,10 +277,38 @@ export const DAGWorkerTool = Tool.define(
             return yield* Effect.fail(new Error(`Workflow not found: ${workflowId}`))
           }
           
-          const workflowEngine = yield* WorkflowEngine.make
-          const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, workflow.config)
+          // WP3: Read-only path via sessionService (no orphan WorkflowEngine.make).
+          // Mirrors getWorkflowStatus in workflow-engine.ts for the snapshot shape.
+          const allNodes = yield* dagSessionService.listNodes(workflowId).pipe(
+            Effect.catchCause(() => Effect.succeed([] as DAGNodeSession[])),
+          )
+          const violations = yield* dagSessionService.listViolations(workflowId).pipe(
+            Effect.catchCause(() => Effect.succeed([] as DAGViolation[])),
+          )
           
-          const status = yield* executor.getStatus(workflowId)
+          const completedNodeIds = new Set<string>(
+            allNodes.filter((n: DAGNodeSession) => n.status === "completed").map((n: DAGNodeSession) => n.node_id)
+          )
+          const failedNodeIds = new Set<string>(
+            allNodes.filter((n: DAGNodeSession) => n.status === "failed").map((n: DAGNodeSession) => n.node_id)
+          )
+          const runningNodeIds = new Set<string>(
+            allNodes.filter((n: DAGNodeSession) => n.status === "running").map((n: DAGNodeSession) => n.node_id)
+          )
+          const readyNodeList = getReadyNodes(allNodes, completedNodeIds, failedNodeIds, runningNodeIds)
+          
+          const status: WorkflowStatusSnapshot = {
+            workflowId,
+            status: workflow.status,
+            totalNodes: allNodes.length,
+            completedNodes: completedNodeIds.size,
+            failedNodes: failedNodeIds.size,
+            runningNodes: runningNodeIds.size,
+            readyNodes: readyNodeList.length,
+            violations,
+            violations_count: violations.length,
+            timestamp: Date.now(),
+          }
           const statusText = formatWorkflowStatus(workflowId, workflow, status)
           
           return {
@@ -311,8 +337,18 @@ export const DAGWorkerTool = Tool.define(
             return yield* Effect.fail(new Error(`Workflow not found: ${workflowId}`))
           }
           
-          const workflowEngine = yield* WorkflowEngine.make
-          yield* workflowEngine.cancelWorkflow(workflowId)
+          // WP3: Registry-first pattern (aligns with dag-mutation.ts:56-89 HTTP handler).
+          // No orphan WorkflowEngine.make — lookup by runtime registry, fallback to DB write.
+          const engine = WorkflowEngine.get(workflowId)
+          if (engine) {
+            // Idempotent: swallow cause if workflow is already terminal (aligns with dag-mutation.ts:56-75).
+            yield* engine.cancelWorkflow(workflowId).pipe(Effect.catchCause(() => Effect.void))
+          } else {
+            // Fallback: direct DB status update (best-effort, never fails).
+            yield* dagSessionService.updateWorkflowStatus(workflowId, "cancelled").pipe(
+              Effect.catchCause(() => Effect.void)
+            )
+          }
           
           return {
             title: `Workflow Cancelled: ${workflowId}`,
@@ -383,8 +419,15 @@ export const DAGWorkerTool = Tool.define(
             return yield* Effect.fail(new Error("patch.workflow_id is required"))
           }
 
-          const workflowEngine = yield* WorkflowEngine.make
-          const result = yield* workflowEngine.replanWorkflow(parsedPatch.workflow_id, parsedPatch)
+          // WP3: Registry-required pattern (aligns with dag-mutation.ts:142-154 HTTP handler).
+          // No orphan WorkflowEngine.make — replan requires a live in-memory engine.
+          const engine = WorkflowEngine.get(parsedPatch.workflow_id)
+          if (!engine) {
+            return yield* Effect.fail(
+              new Error(`No registered engine for workflow '${parsedPatch.workflow_id}'. Replan requires a live running workflow.`)
+            )
+          }
+          const result = yield* engine.replanWorkflow(parsedPatch.workflow_id, parsedPatch)
 
           if (!result.ok) {
             return {

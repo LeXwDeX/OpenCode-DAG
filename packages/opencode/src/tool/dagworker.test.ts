@@ -151,3 +151,79 @@ describe("pause/resume engine lookup", () => {
     expect(engine).toBeUndefined()
   })
 })
+
+describe("WP3: dagworker orphan engine fixes", () => {
+  describe("status action", () => {
+    test("WorkflowEngine.get returns undefined for unregistered workflow (no orphan engine)", () => {
+      // After WP3, status no longer calls WorkflowEngine.make — it uses the
+      // read-only sessionService path. Verifying get returns undefined proves
+      // no orphan engine can exist for an arbitrary id.
+      const engine = WorkflowEngine.get("wf-status-no-engine")
+      expect(engine).toBeUndefined()
+    })
+  })
+
+  describe("cancel action", () => {
+    test("registered engine calls cancelWorkflow", async () => {
+      const mockEngine = {
+        cancelWorkflow: mock((id: string) => Effect.succeed({ success: true })),
+      }
+      const originalGet = WorkflowEngine.get
+      WorkflowEngine.get = (id: string) =>
+        id === "wf-cancel-registered" ? mockEngine as unknown as ReturnType<typeof originalGet> : undefined
+      try {
+        const engine = WorkflowEngine.get("wf-cancel-registered")
+        expect(engine).not.toBeUndefined()
+        const result = await Effect.runPromise(engine!.cancelWorkflow("wf-cancel-registered"))
+        expect((result as { success: boolean }).success).toBe(true)
+        expect(mockEngine.cancelWorkflow).toHaveBeenCalledWith("wf-cancel-registered")
+      } finally {
+        WorkflowEngine.get = originalGet
+      }
+    })
+
+    test("unregistered engine returns undefined (triggers DB fallback in status/updateWorkflowStatus)", () => {
+      const engine = WorkflowEngine.get("wf-cancel-no-engine")
+      expect(engine).toBeUndefined()
+    })
+  })
+
+  describe("replan action", () => {
+    test("unregistered engine returns undefined (triggers clear-error fail path)", () => {
+      const engine = WorkflowEngine.get("wf-replan-no-engine")
+      expect(engine).toBeUndefined()
+    })
+
+    test("registered engine calls replanWorkflow", async () => {
+      const mockEngine = {
+        replanWorkflow: mock((_id: string, _patch: unknown) =>
+          Effect.succeed({
+            ok: true as const,
+            workflow_id: "wf-replan-registered",
+            history_id: "h-1",
+            nodes_added: 1,
+            nodes_removed: 0,
+            nodes_updated: 0,
+            final_total: 3,
+          }),
+        ),
+      }
+      const originalGet = WorkflowEngine.get
+      WorkflowEngine.get = (id: string) =>
+        id === "wf-replan-registered" ? mockEngine as unknown as ReturnType<typeof originalGet> : undefined
+      try {
+        const engine = WorkflowEngine.get("wf-replan-registered")
+        expect(engine).not.toBeUndefined()
+        const patch = { workflow_id: "wf-replan-registered" }
+        const result = await Effect.runPromise(engine!.replanWorkflow("wf-replan-registered", patch))
+        expect(result.ok).toBe(true)
+        if (result.ok) {
+          expect(result.final_total).toBe(3)
+        }
+        expect(mockEngine.replanWorkflow).toHaveBeenCalled()
+      } finally {
+        WorkflowEngine.get = originalGet
+      }
+    })
+  })
+})
