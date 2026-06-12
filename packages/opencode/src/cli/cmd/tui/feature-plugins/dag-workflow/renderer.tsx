@@ -16,12 +16,13 @@ import type {
 import type { GraphStats } from "./data"
 import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
+import { GLYPH } from "./glyphs"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
 import type { Lang } from "./i18n"
 import { t, nodeStatusLabel, workflowStatusLabel } from "./i18n"
 
 function formatDuration(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined) return "\u2014"
+  if (ms === null || ms === undefined) return GLYPH.emDash
   if (ms < 1000) return `${ms}ms`
   const seconds = ms / 1000
   if (seconds < 60) return `${seconds.toFixed(1)}s`
@@ -39,7 +40,7 @@ function DagNodeRow(props: {
   onSelect: () => void
 }) {
   const { theme } = useTheme()
-  const connector = () => (props.isLast ? "\u2514\u2500" : "\u251c\u2500")
+  const connector = () => (props.isLast ? GLYPH.treeLast : GLYPH.treeBranch)
   const iconColor = createMemo(() => nodeStatusColor(props.node.status, theme))
   const icon = createMemo(() => nodeStatusIconChar(props.node.status))
   const statusLabel = createMemo(() => nodeStatusLabel(props.lang, props.node.status))
@@ -152,16 +153,16 @@ export function DagWorkflowRenderer(props: {
  * formatProgressSummary — 从 DAGWorkflowProgress 生成紧凑文本摘要
  *
  * 输出示例：
- * - null → "—"
+ * - null → "-"
  * - "0/0 nodes"（无节点）
- * - "required: 3/5 · failed: 1 · 2/3 running · ETA: 2m 30s"
+ * - "required: 3/5 | failed: 1 | 2/3 running | ETA: 2m 30s"
  * - "5/5 nodes"（全完成，无 required/concurrency/ETA）
  */
 export function formatProgressSummary(
   progress: DAGWorkflowProgress | null | undefined,
   lang: Lang,
 ): string {
-  if (!progress) return "\u2014"
+  if (!progress) return GLYPH.emDash
   const all = progress.all_nodes
   if (all.total === 0) {
     return "0/0 " + (lang === "zh" ? "节点" : "nodes")
@@ -183,16 +184,19 @@ export function formatProgressSummary(
   if (parts.length === 0) {
     return `${all.completed}/${all.total} ${lang === "zh" ? "节点" : "nodes"}`
   }
-  return parts.join(" \u00b7 ")
+  return parts.join(` ${GLYPH.separator} `)
 }
 
 /**
  * DagProgressBar — workflow 进度条（rich progress 版本）
  *
  * 渲染：
- * - 进度条可视化 [■■■■□□□□□□] XX%
+ * - 进度条可视化 [####......] XX%
  * - 下方摘要行：required / failed / running / ETA
  * - （WP-TUI-4 可选）第三行：Critical / Parallel / ETA（来自 GraphStats）
+ *
+ * 布局约束（BUG-4）：bar 行、summary 行、stats 行各自包在独立 <box> 中，
+ * 防止 <text> 在 bar 行后内联续排（曾出现 `failed: 1[###` 重叠）。
  */
 export function DagProgressBar(props: {
   lang: Lang
@@ -218,7 +222,7 @@ export function DagProgressBar(props: {
       `${t(props.lang, "label_critical_path")}: ${formatDuration(s.criticalPathLength)}`,
       `${t(props.lang, "label_parallelism")}: ${s.parallelismDegree}`,
       `${t(props.lang, "label_eta")}: ${formatDuration(s.estimatedCompletionTime)}`,
-    ].join(" | ")
+    ].join(` ${GLYPH.separator} `)
   })
 
   return (
@@ -227,15 +231,19 @@ export function DagProgressBar(props: {
         <text fg={theme.textMuted}>{t(props.lang, "label_progress")}:</text>
         <text fg={barColor()}>
           {"["}
-          <span style={{ fg: barColor() }}>{"\u25a0".repeat(filled())}</span>
-          <span style={{ fg: theme.textMuted }}>{"\u25a1".repeat(empty())}</span>
+          <span style={{ fg: barColor() }}>{GLYPH.barFill.repeat(filled())}</span>
+          <span style={{ fg: theme.textMuted }}>{GLYPH.barEmpty.repeat(empty())}</span>
           {"]"}
         </text>
         <text fg={barColor()}>{percent()}%</text>
       </box>
-      <text fg={theme.textMuted}>{summary()}</text>
+      <box>
+        <text fg={theme.textMuted}>{summary()}</text>
+      </box>
       <Show when={statsLine() !== ""}>
-        <text fg={theme.textMuted}>{statsLine()}</text>
+        <box>
+          <text fg={theme.textMuted}>{statsLine()}</text>
+        </box>
       </Show>
     </box>
   )

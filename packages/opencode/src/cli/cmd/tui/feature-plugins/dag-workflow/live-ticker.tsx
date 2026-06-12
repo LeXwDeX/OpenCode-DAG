@@ -15,6 +15,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import type { DAGNodeSession } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
+import { GLYPH } from "./glyphs"
 import type { Lang } from "./i18n"
 import { t as translate } from "./i18n"
 
@@ -31,7 +32,7 @@ export function summarizePart(
   if (part.type === "text") {
     const text = String(part.text ?? "")
     if (!text) return null
-    return text.length > MAX_SUMMARY ? text.slice(0, MAX_SUMMARY) + "\u2026" : text
+    return text.length > MAX_SUMMARY ? text.slice(0, MAX_SUMMARY) + GLYPH.ellipsis : text
   }
   if (part.type === "tool") {
     const tool = String(part.tool ?? "")

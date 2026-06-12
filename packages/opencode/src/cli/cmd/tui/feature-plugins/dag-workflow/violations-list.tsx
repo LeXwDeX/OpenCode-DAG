@@ -13,6 +13,7 @@
 import { For, Show, type JSX } from "solid-js"
 import type { DAGViolation } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
+import { GLYPH } from "./glyphs"
 import type { Lang } from "./i18n"
 import { t, violationSeverityLabel, violationTypeLabel } from "./i18n"
 
@@ -33,7 +34,7 @@ export function ViolationsList(props: {
         <For each={props.violations}>
           {(v) => (
             <box flexDirection="row" gap={1} paddingLeft={1}>
-              <text fg={theme.error}>{"\u26a0"}</text>
+              <text fg={theme.error}>{GLYPH.warning}</text>
               <text fg={severityColor(v.severity, theme)}>
                 [{violationSeverityLabel(props.lang, v.severity)}]
               </text>

@@ -15,6 +15,7 @@ import type { Timeline, TimelineEvent } from "./data"
 import { useTheme } from "@tui/context/theme"
 import type { Lang } from "./i18n"
 import { t } from "./i18n"
+import { GLYPH } from "./glyphs"
 
 interface TimelinePanelProps {
   lang: Lang
@@ -102,11 +103,11 @@ function eventTypeLabel(
   return type
 }
 
-/** Format epoch ms → HH:MM:SS (UTC). Returns "—" for invalid values. */
+/** Format epoch ms → HH:MM:SS (UTC). Returns "-" for invalid values. */
 export function formatTime(ms: number | null | undefined): string {
-  if (ms === null || ms === undefined || !Number.isFinite(ms)) return "\u2014"
+  if (ms === null || ms === undefined || !Number.isFinite(ms)) return GLYPH.emDash
   const d = new Date(ms)
-  if (Number.isNaN(d.getTime())) return "\u2014"
+  if (Number.isNaN(d.getTime())) return GLYPH.emDash
   const pad = (n: number) => String(n).padStart(2, "0")
   return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`
 }

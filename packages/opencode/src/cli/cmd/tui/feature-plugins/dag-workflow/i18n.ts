@@ -19,7 +19,9 @@ export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "c
 
 export type NodeStatus = "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
 
-const DICT = {
+// Exported for the glyph robustness guard (glyphs.test.ts) which scans every
+// dict value: en must be pure ASCII, zh must avoid EA-Ambiguous punctuation.
+export const DICT = {
   en: {
     tab_dialogue: "Chat",
     tab_workflow: "DAG Workflow",
@@ -32,7 +34,7 @@ const DICT = {
     label_no_nodes: "No nodes in this workflow",
     label_no_workflows: "No workflows",
     label_select_workflow: "Select a workflow from the list",
-    label_loading: "Loading\u2026",
+    label_loading: "Loading...",
     label_load_error: "Failed to load",
     label_search: "Search:",
     label_retries: "Retries",
@@ -53,16 +55,16 @@ const DICT = {
     cmd_open_title: "Open DAG Workflow",
     node_select_hint: "Select a node",
     node_subsession_unavailable: "[Sub-session not available]",
-    node_enter_subsession: "[Enter Sub-Session \u2192]",
+    node_enter_subsession: "[Enter Sub-Session ->]",
     action_close: "[Close]",
-    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
+    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
     label_focus: "Focus:",
     focus_history: "History",
     focus_graph: "Graph",
     label_node: "Node:",
     ticker_live: "Live:",
     ticker_idle: "Idle",
-    ticker_reasoning: "reasoning\u2026",
+    ticker_reasoning: "reasoning...",
     title_timeline: "Timeline",
     label_timeline: "Timeline",
     label_stats: "Stats",
@@ -130,7 +132,7 @@ const DICT = {
     label_no_nodes: "当前工作流没有节点",
     label_no_workflows: "没有工作流",
     label_select_workflow: "请从左侧列表选择一个工作流",
-    label_loading: "加载中\u2026",
+    label_loading: "加载中...",
     label_load_error: "加载失败",
     label_search: "搜索：",
     label_retries: "重试",
@@ -151,16 +153,16 @@ const DICT = {
     cmd_open_title: "打开 DAG 工作流面板",
     node_select_hint: "请选择一个节点",
     node_subsession_unavailable: "[暂不可进入子会话]",
-    node_enter_subsession: "[进入子会话 \u2192]",
+    node_enter_subsession: "[进入子会话 ->]",
     action_close: "[关闭]",
-    hint_hotkey_bar: "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
+    hint_hotkey_bar: "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     label_focus: "焦点：",
     focus_history: "列表",
     focus_graph: "图形",
     label_node: "节点：",
     ticker_live: "实时：",
     ticker_idle: "空闲",
-    ticker_reasoning: "推理中\u2026",
+    ticker_reasoning: "推理中...",
     title_timeline: "时间线",
     label_timeline: "时间线",
     label_stats: "统计",

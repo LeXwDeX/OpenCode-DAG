@@ -31,27 +31,27 @@ describe("WP4 sidebar — WORKFLOW_STATUSES", () => {
 })
 
 describe("WP4 sidebar — workflowStatusIcon", () => {
-  it("returns ● for running", () => {
-    expect(workflowStatusIcon("running")).toBe("\u25cf")
+  it("returns * for running", () => {
+    expect(workflowStatusIcon("running")).toBe("*")
   })
 
-  it("returns ✓ for completed", () => {
-    expect(workflowStatusIcon("completed")).toBe("\u2713")
+  it("returns + for completed", () => {
+    expect(workflowStatusIcon("completed")).toBe("+")
   })
 
-  it("returns ✗ for failed", () => {
-    expect(workflowStatusIcon("failed")).toBe("\u2717")
+  it("returns x for failed", () => {
+    expect(workflowStatusIcon("failed")).toBe("x")
   })
 
-  it("returns ⊘ for cancelled", () => {
-    expect(workflowStatusIcon("cancelled")).toBe("\u2298")
+  it("returns - for cancelled", () => {
+    expect(workflowStatusIcon("cancelled")).toBe("-")
   })
 
-  it("returns ○ for pending", () => {
-    expect(workflowStatusIcon("pending")).toBe("\u25cb")
+  it("returns o for pending", () => {
+    expect(workflowStatusIcon("pending")).toBe("o")
   })
 
-  it("covers all workflow statuses", () => {
+  it("covers all workflow statuses with pure-ASCII icons", () => {
     const allStatuses: DAGWorkflowStatus[] = [
       "pending",
       "running",
@@ -64,10 +64,14 @@ describe("WP4 sidebar — workflowStatusIcon", () => {
       const icon = workflowStatusIcon(s)
       expect(typeof icon).toBe("string")
       expect(icon.length).toBeGreaterThan(0)
+      // WP-1 BUG-3: EA-Ambiguous glyphs garble in CJK terminals; icons must stay ASCII
+      for (const ch of icon) {
+        expect(ch.codePointAt(0)!).toBeLessThan(0x80)
+      }
     }
   })
 
-  it("returns ⏸ for paused", () => {
-    expect(workflowStatusIcon("paused")).toBe("\u23f8")
+  it("returns = for paused", () => {
+    expect(workflowStatusIcon("paused")).toBe("=")
   })
 })

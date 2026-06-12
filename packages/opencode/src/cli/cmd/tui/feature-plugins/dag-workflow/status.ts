@@ -8,6 +8,7 @@
  * - Pure functions, no hooks (callers pass theme colors).
  */
 import type { DAGNodeStatus, DAGWorkflowStatus } from "@/dag/session/types"
+import { GLYPH } from "./glyphs"
 
 /**
  * Subset of theme colors needed for status rendering.
@@ -21,21 +22,21 @@ export type StatusThemeColors<C = unknown> = {
 }
 
 export const NODE_STATUS_ICON: Record<DAGNodeStatus, string> = {
-  completed: "\u2713", // ✓
-  running: "\u25cf", // ●
-  queued: "\u25ce", // ◎
-  pending: "\u25cb", // ○
-  failed: "\u2717", // ✗
-  skipped: "\u2298", // ⊘
+  completed: GLYPH.iconCompleted,
+  running: GLYPH.iconRunning,
+  queued: GLYPH.iconQueued,
+  pending: GLYPH.iconPending,
+  failed: GLYPH.iconFailed,
+  skipped: GLYPH.iconSkipped,
 }
 
 export const WORKFLOW_STATUS_ICON: Record<DAGWorkflowStatus, string> = {
-  running: "\u25cf", // ●
-  completed: "\u2713", // ✓
-  failed: "\u2717", // ✗
-  cancelled: "\u2298", // ⊘
-  pending: "\u25cb", // ○
-  paused: "\u23f8", // ⏸
+  running: GLYPH.iconRunning,
+  completed: GLYPH.iconCompleted,
+  failed: GLYPH.iconFailed,
+  cancelled: GLYPH.iconSkipped,
+  pending: GLYPH.iconPending,
+  paused: GLYPH.iconPaused,
 }
 
 /** Icon character for a node status (falls back to "?"). */
@@ -43,9 +44,9 @@ export function nodeStatusIconChar(status: DAGNodeStatus): string {
   return NODE_STATUS_ICON[status] ?? "?"
 }
 
-/** Icon character for a workflow status (falls back to ○). */
+/** Icon character for a workflow status (falls back to the pending icon). */
 export function workflowStatusIconChar(status: DAGWorkflowStatus): string {
-  return WORKFLOW_STATUS_ICON[status] ?? "\u25cb"
+  return WORKFLOW_STATUS_ICON[status] ?? GLYPH.iconPending
 }
 
 /** Theme color for a node status. */

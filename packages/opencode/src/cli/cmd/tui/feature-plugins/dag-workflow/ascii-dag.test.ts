@@ -151,28 +151,28 @@ describe("WP4 ascii-dag — topologicalLayers", () => {
 })
 
 describe("WP4 ascii-dag — nodeStatusIcon", () => {
-  it("returns ✓ for completed", () => {
-    expect(nodeStatusIcon("completed").icon).toBe("\u2713")
+  it("returns + for completed", () => {
+    expect(nodeStatusIcon("completed").icon).toBe("+")
   })
 
-  it("returns ● for running", () => {
-    expect(nodeStatusIcon("running").icon).toBe("\u25cf")
+  it("returns * for running", () => {
+    expect(nodeStatusIcon("running").icon).toBe("*")
   })
 
-  it("returns ◌ for pending", () => {
-    expect(nodeStatusIcon("pending").icon).toBe("\u25cb")
+  it("returns o for pending", () => {
+    expect(nodeStatusIcon("pending").icon).toBe("o")
   })
 
-  it("returns ✗ for failed", () => {
-    expect(nodeStatusIcon("failed").icon).toBe("\u2717")
+  it("returns x for failed", () => {
+    expect(nodeStatusIcon("failed").icon).toBe("x")
   })
 
-  it("returns ⊘ for skipped", () => {
-    expect(nodeStatusIcon("skipped").icon).toBe("\u2298")
+  it("returns - for skipped", () => {
+    expect(nodeStatusIcon("skipped").icon).toBe("-")
   })
 
-  it("returns ◍ for queued", () => {
-    expect(nodeStatusIcon("queued").icon).toBe("\u25ce")
+  it("returns @ for queued", () => {
+    expect(nodeStatusIcon("queued").icon).toBe("@")
   })
 })
 

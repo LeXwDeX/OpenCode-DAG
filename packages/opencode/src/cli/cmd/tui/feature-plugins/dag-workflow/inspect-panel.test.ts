@@ -31,7 +31,8 @@ describe("WP-C InspectPanel", () => {
     expect(inspectPanelSummary({ block: [], topology: null, snapshot: null, cascade: null })).toContain("No diagnostics")
   })
 
-  it("formats empty lists as an em dash", () => {
-    expect(formatInspectList([])).toBe("—")
+  it("formats empty lists as an ASCII dash placeholder", () => {
+    // WP-1 BUG-3: was EA-Ambiguous — (U+2014), garbles in CJK terminals
+    expect(formatInspectList([])).toBe("-")
   })
 })

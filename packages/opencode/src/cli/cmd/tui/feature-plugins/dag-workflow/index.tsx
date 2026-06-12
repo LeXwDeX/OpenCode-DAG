@@ -10,6 +10,7 @@ import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { InternalTuiPlugin } from "../../plugin/internal"
 import type { JSX } from "solid-js"
 import { ConsoleRoute } from "./console-route"
+import { GLYPH } from "./glyphs"
 import { resolveLang, t, useLang } from "./i18n"
 
 const id = "internal:dag-workflow"
@@ -99,7 +100,7 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
       >
         {!isDagRoute() ? <b>{i18n().t("tab_dialogue")}</b> : i18n().t("tab_dialogue")}
       </text>
-      <text fg={theme().textMuted}>│</text>
+      <text fg={theme().textMuted}>{GLYPH.vbar}</text>
       <text
         fg={isDagRoute() ? theme().text : theme().textMuted}
         onMouseUp={isDagRoute() ? undefined : navigateToDagWorkflow}

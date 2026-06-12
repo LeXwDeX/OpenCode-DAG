@@ -13,6 +13,7 @@
 import { describe, it, expect } from "bun:test"
 import type { DAGWorkflowProgress } from "@/dag/session/types"
 import { formatProgressSummary } from "./renderer"
+import { GLYPH } from "./glyphs"
 
 function makeProgress(overrides: Partial<DAGWorkflowProgress> = {}): DAGWorkflowProgress {
   return {
@@ -25,12 +26,12 @@ function makeProgress(overrides: Partial<DAGWorkflowProgress> = {}): DAGWorkflow
 }
 
 describe("formatProgressSummary", () => {
-  it("null → em-dash", () => {
-    expect(formatProgressSummary(null, "en")).toBe("\u2014")
+  it("null → ASCII dash placeholder", () => {
+    expect(formatProgressSummary(null, "en")).toBe(GLYPH.emDash)
   })
 
-  it("undefined → em-dash", () => {
-    expect(formatProgressSummary(undefined, "en")).toBe("\u2014")
+  it("undefined → ASCII dash placeholder", () => {
+    expect(formatProgressSummary(undefined, "en")).toBe(GLYPH.emDash)
   })
 
   it("0 total nodes → '0/0 nodes'", () => {
@@ -109,7 +110,7 @@ describe("formatProgressSummary", () => {
     expect(out).toContain("必需: 2/4")
   })
 
-  it("parts are joined by middle dot", () => {
+  it("parts are joined by an ASCII pipe separator (no EA-Ambiguous middle dot)", () => {
     const p = makeProgress({
       required: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1 },
       all_nodes: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1 },
@@ -117,6 +118,43 @@ describe("formatProgressSummary", () => {
       max_concurrency: 2,
     })
     const out = formatProgressSummary(p, "en")
-    expect(out.split(" \u00b7 ").length).toBeGreaterThanOrEqual(2)
+    expect(out.split(` ${GLYPH.separator} `).length).toBeGreaterThanOrEqual(2)
+    expect(out).not.toContain("\u00b7")
+  })
+})
+
+/**
+ * WP-1 BUG-4 regression guard: DagProgressBar's summary and stats lines used
+ * to flow INLINE after the bar row (`failed: 1[###` overlap). Bar row, summary
+ * and statsLine must each be their own block row, and the bar must use the
+ * ASCII fills from glyphs.ts.
+ *
+ * DagProgressBar requires the useTheme provider chain, so (following the
+ * established pattern of console-route.test.ts source assertions) the block
+ * structure is pinned on the component source.
+ */
+describe("WP-1 DagProgressBar — block layout + ASCII bar fills", () => {
+  async function rendererSource(): Promise<string> {
+    return Bun.file(new URL("./renderer.tsx", import.meta.url)).text()
+  }
+
+  it("renders bar fills from glyphs.ts (no inline ■/□ literals)", async () => {
+    const source = await rendererSource()
+    expect(source).toContain("GLYPH.barFill.repeat")
+    expect(source).toContain("GLYPH.barEmpty.repeat")
+    expect(source).not.toContain("\\u25a0")
+    expect(source).not.toContain("\\u25a1")
+    expect(source).not.toContain("\u25a0")
+    expect(source).not.toContain("\u25a1")
+  })
+
+  it("wraps the summary line in its own block box (cannot flow inline after the bar row)", async () => {
+    const source = await rendererSource()
+    expect(source).toMatch(/<box>\s*<text fg=\{theme\.textMuted\}>\{summary\(\)\}<\/text>\s*<\/box>/)
+  })
+
+  it("wraps the stats line in its own block box (cannot flow inline after the bar row)", async () => {
+    const source = await rendererSource()
+    expect(source).toMatch(/<box>\s*<text fg=\{theme\.textMuted\}>\{statsLine\(\)\}<\/text>\s*<\/box>/)
   })
 })

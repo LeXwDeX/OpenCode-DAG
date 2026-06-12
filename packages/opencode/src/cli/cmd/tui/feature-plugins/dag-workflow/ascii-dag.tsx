@@ -3,7 +3,7 @@
  * ASCII DAG Topology Renderer
  *
  * Kahn's algorithm for topological layering + flexbox column layout.
- * Each column is a topological level laid out left→right; arrows (──▶)
+ * Each column is a topological level laid out left→right; arrows (-->)
  * connect each column to the next, matching the left-to-right flow.
  *
  * Architecture constraints:
@@ -13,6 +13,7 @@
 import { createMemo, For, Show, type JSX } from "solid-js"
 import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
+import { GLYPH } from "./glyphs"
 import { NODE_STATUS_ICON, nodeStatusColor } from "./status"
 import { nodeStatusLabel, type Lang } from "./i18n"
 
@@ -94,7 +95,7 @@ export function calculateAsciiDagNodeWidth(input: AsciiDagWidthInput): number {
 }
 
 /**
- * AsciiDag — renders topological columns (left→right) with node boxes and ──▶ arrows.
+ * AsciiDag — renders topological columns (left→right) with node boxes and --> arrows.
  */
 export function AsciiDag(props: {
   lang: Lang
@@ -128,7 +129,7 @@ export function AsciiDag(props: {
             {/* Arrow connector from previous column */}
             <Show when={layerIndex() > 0}>
               <box flexShrink={0} alignItems="center" justifyContent="center">
-                <text fg={theme.textMuted}>{"\u2500\u2500\u25b6"}</text>
+                <text fg={theme.textMuted}>{GLYPH.hbar.repeat(2) + GLYPH.triangle}</text>
               </box>
             </Show>
             {/* Column: all nodes at this topological level, stacked vertically */}

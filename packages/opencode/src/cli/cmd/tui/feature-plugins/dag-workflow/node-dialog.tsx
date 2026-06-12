@@ -13,6 +13,7 @@ import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createMemo, Show, type JSX } from "solid-js"
 import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
+import { GLYPH } from "./glyphs"
 import type { Lang } from "./i18n"
 import { t, nodeStatusLabel } from "./i18n"
 
@@ -150,6 +151,6 @@ function stringifyUnknown(value: unknown): string {
 
 function truncateText(value: string): string {
   const byLines = value.split("\n")
-  const lineLimited = byLines.length > 20 ? `${byLines.slice(0, 20).join("\n")}\n…` : value
-  return lineLimited.length > 2000 ? `${lineLimited.slice(0, 2000)}…` : lineLimited
+  const lineLimited = byLines.length > 20 ? `${byLines.slice(0, 20).join("\n")}\n${GLYPH.ellipsis}` : value
+  return lineLimited.length > 2000 ? `${lineLimited.slice(0, 2000)}${GLYPH.ellipsis}` : lineLimited
 }

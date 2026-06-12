@@ -91,7 +91,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_no_nodes: ["No nodes in this workflow", "当前工作流没有节点"],
     label_no_workflows: ["No workflows", "没有工作流"],
     label_select_workflow: ["Select a workflow from the list", "请从左侧列表选择一个工作流"],
-    label_loading: ["Loading\u2026", "加载中\u2026"],
+    label_loading: ["Loading...", "加载中..."],
     label_load_error: ["Failed to load", "加载失败"],
     label_search: ["Search:", "搜索："],
     label_retries: ["Retries", "重试"],
@@ -112,11 +112,11 @@ describe("WP4 i18n — t() dict lookup", () => {
     cmd_open_title: ["Open DAG Workflow", "打开 DAG 工作流面板"],
     node_select_hint: ["Select a node", "请选择一个节点"],
     node_subsession_unavailable: ["[Sub-session not available]", "[暂不可进入子会话]"],
-    node_enter_subsession: ["[Enter Sub-Session \u2192]", "[进入子会话 \u2192]"],
+    node_enter_subsession: ["[Enter Sub-Session ->]", "[进入子会话 ->]"],
     action_close: ["[Close]", "[关闭]"],
     hint_hotkey_bar: [
-      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
-      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
+      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
+      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     ],
     label_focus: ["Focus:", "焦点："],
     focus_history: ["History", "列表"],
@@ -124,7 +124,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     label_node: ["Node:", "节点："],
     ticker_live: ["Live:", "实时："],
     ticker_idle: ["Idle", "空闲"],
-    ticker_reasoning: ["reasoning\u2026", "推理中\u2026"],
+    ticker_reasoning: ["reasoning...", "推理中..."],
     title_timeline: ["Timeline", "时间线"],
     label_timeline: ["Timeline", "时间线"],
     label_stats: ["Stats", "统计"],
@@ -219,13 +219,15 @@ describe("WP4 NodeDialog — output and timing helpers", () => {
 
   it("truncates long output deterministically", () => {
     const result = truncateNodeText("x".repeat(2_100))
-    expect(result.length).toBeLessThanOrEqual(2_001)
-    expect(result.endsWith("…")).toBe(true)
+    // 2000 chars + ASCII "..." marker (WP-1 BUG-3: was EA-Ambiguous …)
+    expect(result.length).toBeLessThanOrEqual(2_003)
+    expect(result.endsWith("...")).toBe(true)
+    expect(result).not.toContain("\u2026")
   })
 
   it("truncates output to twenty lines", () => {
     const result = truncateNodeText(Array.from({ length: 25 }, (_, i) => `line-${i}`).join("\n"))
     expect(result.split("\n")).toHaveLength(21)
-    expect(result.endsWith("…")).toBe(true)
+    expect(result.endsWith("...")).toBe(true)
   })
 })

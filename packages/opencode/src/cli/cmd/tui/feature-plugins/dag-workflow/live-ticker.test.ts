@@ -40,7 +40,9 @@ describe("WP4 live-ticker — summarizePart", () => {
     const result = summarizePart({ type: "text", text: longText })
     expect(result).toBeString()
     expect(result!.length).toBeLessThan(200)
-    expect(result).toContain("…")
+    // WP-1 BUG-3: ASCII truncation marker (was EA-Ambiguous …)
+    expect(result!.endsWith("...")).toBe(true)
+    expect(result).not.toContain("\u2026")
   })
 
   it("handles tool part with in-progress state", () => {

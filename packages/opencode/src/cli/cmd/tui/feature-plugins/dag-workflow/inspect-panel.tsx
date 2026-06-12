@@ -6,6 +6,7 @@ import type {
   NodeBlockReason,
   TopologySnapshot,
 } from "@/dag/query/probe-types"
+import { GLYPH } from "./glyphs"
 import type { Lang } from "./i18n"
 import { useTheme } from "@tui/context/theme"
 
@@ -24,7 +25,7 @@ export function InspectPanel(props: {
     <box gap={1}>
       <text fg={theme.text}><b>{props.lang === "zh" ? "诊断" : "Inspect"}</b></text>
       <Show when={!props.error} fallback={<text fg={theme.error}>Error: {props.error}</text>}>
-        <Show when={!props.loading} fallback={<text fg={theme.textMuted}>Loading…</text>}>
+        <Show when={!props.loading} fallback={<text fg={theme.textMuted}>Loading...</text>}>
           <Show
             when={props.block.length > 0 || props.topology || props.snapshot || props.cascade}
             fallback={<text fg={theme.textMuted}>No diagnostics</text>}
@@ -35,7 +36,7 @@ export function InspectPanel(props: {
             </box>
             <box gap={0}>
               <text fg={theme.textMuted}>Topology</text>
-              <Show when={props.topology} fallback={<text fg={theme.textMuted}>—</text>}>
+              <Show when={props.topology} fallback={<text fg={theme.textMuted}>{GLYPH.emDash}</text>}>
                 {(topology) => (
                   <>
                     <For each={topology().layers}>{(layer) => <text fg={theme.text}>depth {layer.depth}: {formatInspectList(layer.nodeIds)}</text>}</For>
@@ -46,13 +47,13 @@ export function InspectPanel(props: {
             </box>
             <box gap={0}>
               <text fg={theme.textMuted}>Snapshot</text>
-              <Show when={props.snapshot} fallback={<text fg={theme.textMuted}>—</text>}>
+              <Show when={props.snapshot} fallback={<text fg={theme.textMuted}>{GLYPH.emDash}</text>}>
                 {(snapshot) => <text fg={theme.text}>{formatSnapshot(snapshot())}</text>}
               </Show>
             </box>
             <box gap={0}>
               <text fg={theme.textMuted}>Cascade {props.selectedNodeId ? `(${props.selectedNodeId})` : ""}</text>
-              <Show when={props.cascade} fallback={<text fg={theme.textMuted}>{props.selectedNodeId ? "—" : "Select a node"}</text>}>
+              <Show when={props.cascade} fallback={<text fg={theme.textMuted}>{props.selectedNodeId ? GLYPH.emDash : "Select a node"}</text>}>
                 {(cascade) => <text fg={theme.text}>{cascade().originNodeId} -&gt; {formatInspectList(cascade().affectedPendingNodeIds)}</text>}
               </Show>
             </box>
@@ -75,15 +76,15 @@ export function inspectPanelSummary(input: {
   if (input.loading) return "Loading"
   if (input.block.length === 0 && !input.topology && !input.snapshot && !input.cascade) return "No diagnostics"
   return [
-    `Block: ${input.block.map((item) => `${item.nodeId} ${item.reason}${item.unsatisfiedDependencies.length ? ` [${formatInspectList(item.unsatisfiedDependencies)}]` : ""}`).join("; ") || "—"}`,
-    `Topology: ${input.topology ? `${input.topology.layers.map((layer) => `depth ${layer.depth}: ${formatInspectList(layer.nodeIds)}`).join(" | ")}; cycle: ${input.topology.hasCycle ? "yes" : "no"}` : "—"}`,
-    `Snapshot: ${input.snapshot ? formatSnapshot(input.snapshot) : "—"}`,
-    `Cascade: ${input.cascade ? `${input.cascade.originNodeId} -> ${formatInspectList(input.cascade.affectedPendingNodeIds)}` : "—"}`,
+    `Block: ${input.block.map((item) => `${item.nodeId} ${item.reason}${item.unsatisfiedDependencies.length ? ` [${formatInspectList(item.unsatisfiedDependencies)}]` : ""}`).join("; ") || GLYPH.emDash}`,
+    `Topology: ${input.topology ? `${input.topology.layers.map((layer) => `depth ${layer.depth}: ${formatInspectList(layer.nodeIds)}`).join(" | ")}; cycle: ${input.topology.hasCycle ? "yes" : "no"}` : GLYPH.emDash}`,
+    `Snapshot: ${input.snapshot ? formatSnapshot(input.snapshot) : GLYPH.emDash}`,
+    `Cascade: ${input.cascade ? `${input.cascade.originNodeId} ${GLYPH.arrow} ${formatInspectList(input.cascade.affectedPendingNodeIds)}` : GLYPH.emDash}`,
   ].join("\n")
 }
 
 export function formatInspectList(items: string[]): string {
-  return items.length ? items.join(",") : "—"
+  return items.length ? items.join(",") : GLYPH.emDash
 }
 
 function formatDeps(items: string[]): string {

@@ -17,7 +17,9 @@ describe("WP4 WorkflowHistoryPanel — helpers", () => {
 
   it("truncates long details", () => {
     const result = formatHistoryDetails("x".repeat(2_100))
-    expect(result.length).toBeLessThanOrEqual(2_001)
-    expect(result.endsWith("…")).toBe(true)
+    // 2000 chars + ASCII "..." marker (WP-1 BUG-3: was EA-Ambiguous …)
+    expect(result.length).toBeLessThanOrEqual(2_003)
+    expect(result.endsWith("...")).toBe(true)
+    expect(result).not.toContain("\u2026")
   })
 })

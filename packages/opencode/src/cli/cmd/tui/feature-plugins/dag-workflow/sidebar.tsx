@@ -42,6 +42,9 @@ export function workflowStatusIcon(status: DAGWorkflowStatus): string {
  * Controlled component: filter/search state is owned by the parent
  * (console-route) so keyboard navigation and the visible list stay in sync.
  * `workflows` is expected to be already filtered by the parent.
+ * Search input focus is also parent-owned: `searchFocused` drives the input's
+ * focus state declaratively; mouse clicks on the input report back through
+ * `onSearchFocus` so the parent signal stays the single source of truth.
  */
 export function Sidebar(props: {
   lang: Lang
@@ -49,9 +52,13 @@ export function Sidebar(props: {
   statusFilter: DAGWorkflowStatus | null
   search: string
   currentWorkflowID?: string
+  /** Parent-owned focus state for the search input (focus-request mechanism). */
+  searchFocused?: boolean
   onStatusFilter: (s: DAGWorkflowStatus | null) => void
   onSearch: (q: string) => void
   onSelect: (id: string) => void
+  /** Mouse click on the search input routes focus through the parent signal. */
+  onSearchFocus?: () => void
 }): JSX.Element {
   const { theme } = useTheme()
 
@@ -71,13 +78,16 @@ export function Sidebar(props: {
         </For>
       </box>
 
-      {/* Search input */}
+      {/* Search input — focus is parent-owned (declarative `focused` prop);
+          mouse clicks report back so the parent signal stays authoritative */}
       <box flexDirection="row" gap={1}>
         <text fg={theme.textMuted}>{t(props.lang, "label_search")}</text>
         <input
           flexGrow={1}
           value={props.search}
+          focused={props.searchFocused ?? false}
           onInput={(val) => props.onSearch(val)}
+          onMouseDown={() => props.onSearchFocus?.()}
         />
       </box>
 

@@ -15,7 +15,7 @@
  * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { createEffect, createMemo, createSignal, ErrorBoundary, Show, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, Show, type JSX } from "solid-js"
 import { useTerminalDimensions } from "@opentui/solid"
 import type { DAGNodeSession, DAGWorkflowStatus } from "@/dag/session/types"
 import { calculateWorkflowProgress } from "@/dag/session/types"
@@ -57,11 +57,19 @@ import { DetailPane } from "./detail-pane"
 import { ViolationsList } from "./violations-list"
 import { Sidebar } from "./sidebar"
 import { ControlBar, parseReplanConcurrency, type ControlAction } from "./control-bar"
-import { useBindings } from "../../keymap"
+import { GLYPH } from "./glyphs"
+import { useBindings, useOpencodeModeStack, OPENCODE_BASE_MODE } from "../../keymap"
 import { useLang } from "./i18n"
 import { useToast } from "@tui/ui/toast"
 
 const ROUTE = "dag-workflow"
+
+/**
+ * Keymap mode pushed while the sidebar search input is focused.
+ * Scopes console nav bindings (base mode) out and makes escape blur the
+ * search instead of navigating back to the session.
+ */
+export const DAG_SEARCH_MODE = "dag-search"
 
 type ViewMode = "tree" | "ascii-dag"
 
@@ -70,7 +78,7 @@ export function DagErrorFallback(props: { error: unknown }): JSX.Element {
   return (
     <box flexGrow={1} alignItems="center" justifyContent="center">
       <box gap={1} padding={2}>
-        <text fg={theme.error}>⚠ UI Error</text>
+        <text fg={theme.error}>{GLYPH.warning} UI Error</text>
         <text fg={theme.textMuted}>{props.error instanceof Error ? props.error.message : String(props.error)}</text>
         <text fg={theme.textMuted}>Refresh or switch views to recover.</text>
       </box>
@@ -119,8 +127,8 @@ export function buildPreviewMessage(preview: ReplanPreviewMessageInput): string 
   }
   return [
     `Preview for ${preview.workflow_id}:`,
-    `nodes: ${preview.pre.total_nodes} → ${preview.post.total_nodes}`,
-    `max concurrency: ${preview.pre.max_concurrency} → ${preview.post.max_concurrency}`,
+    `nodes: ${preview.pre.total_nodes} ${GLYPH.arrow} ${preview.post.total_nodes}`,
+    `max concurrency: ${preview.pre.max_concurrency} ${GLYPH.arrow} ${preview.post.max_concurrency}`,
     `added: ${preview.delta.nodes_added}, removed: ${preview.delta.nodes_removed}, updated: ${preview.delta.nodes_updated}`,
     `final total: ${preview.delta.final_total}`,
   ].join("\n")
@@ -187,6 +195,29 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   // navigation operates on the SAME filtered list the sidebar displays.
   const [statusFilter, setStatusFilter] = createSignal<DAGWorkflowStatus | null>(null)
   const [search, setSearch] = createSignal("")
+
+  // ── Search focus (BUG-2) ──────────────────────────────────────────────────
+  // Parent-owned focus signal for the sidebar search input. While focused, a
+  // dedicated keymap mode is pushed (dialog.tsx precedent) so the console nav
+  // bindings — scoped to base mode — stop firing and escape blurs instead of
+  // navigating back to the session.
+  const [searchFocused, setSearchFocused] = createSignal(false)
+  const modeStack = useOpencodeModeStack()
+  createEffect(() => {
+    if (!searchFocused()) return
+    const popMode = modeStack.push(DAG_SEARCH_MODE)
+    onCleanup(popMode)
+  })
+
+  function focusSearch() {
+    if (!wide()) setSidebarExpanded(true)
+    setSearchFocused(true)
+  }
+
+  function blurSearch() {
+    setSearchFocused(false)
+    if (!wide()) setSidebarExpanded(false)
+  }
 
   // ── Data hooks (declared before derived memos to avoid TDZ) ───────────────
   const { list: workflowList } = useWorkflowList({
@@ -625,17 +656,30 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     }
   }
 
+  // Console nav bindings are scoped to the base mode so they stop firing while
+  // the search input is focused (DAG_SEARCH_MODE pushed) or a dialog is open.
   useBindings(() => ({
+    mode: OPENCODE_BASE_MODE,
     bindings: [
       { key: "escape", desc: "Back to session", group: "DAG", cmd() { goToSessionTab() } },
-      { key: "tab", desc: "Switch pane (list ↔ graph)", group: "DAG", cmd() { setFocusPane((p) => (p === "list" ? "graph" : "list")) } },
+      { key: "tab", desc: "Switch pane (list/graph)", group: "DAG", cmd() { setFocusPane((p) => (p === "list" ? "graph" : "list")) } },
       { key: "j,down", desc: "Next", group: "DAG", cmd() { moveSelection(1) } },
       { key: "k,up", desc: "Previous", group: "DAG", cmd() { moveSelection(-1) } },
       { key: "return", desc: "Select / Enter sub-session", group: "DAG", cmd() { confirmSelection() } },
+      { key: "/", desc: "Search workflows", group: "DAG", cmd() { focusSearch() } },
       { key: "<leader>p", desc: "Pause / resume workflow", group: "DAG", cmd() { togglePauseResume() } },
-      { key: "<leader>v", desc: "Toggle DAG view (tree ↔ ASCII)", group: "DAG", cmd() { toggleView() } },
+      { key: "<leader>v", desc: "Toggle DAG view (tree/ASCII)", group: "DAG", cmd() { toggleView() } },
       { key: "[", desc: "Toggle sidebar (narrow)", group: "DAG", cmd() { if (!wide()) setSidebarExpanded((v) => !v) } },
       { key: "]", desc: "Toggle detail (narrow)", group: "DAG", cmd() { if (!wide()) setDetailExpanded((v) => !v) } },
+    ],
+  }))
+
+  // Escape dual semantics: while the search input is focused it blurs the
+  // search (and closes the narrow overlay) instead of navigating back.
+  useBindings(() => ({
+    mode: DAG_SEARCH_MODE,
+    bindings: [
+      { key: "escape", desc: "Close search", group: "DAG", cmd() { blurSearch() } },
     ],
   }))
 
@@ -673,10 +717,13 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   return (
     <ErrorBoundary fallback={(err) => <DagErrorFallback error={err} />}>
     <box flexDirection="column" flexGrow={1} minHeight={0}>
-      {/* TOP BAR: Tab 切换 */}
+      {/* TOP BAR: Tab 切换 — height/flexShrink 钉死高度，防止鼠标点击时
+          flex 重排导致背景被遮挡 + 内容抖动（BUG-1） */}
       <box
         flexDirection="row"
         justifyContent="space-between"
+        height={3}
+        flexShrink={0}
         paddingLeft={2}
         paddingRight={2}
         paddingTop={1}
@@ -687,11 +734,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
             {i18n().t("tab_dialogue")}
           </text>
-          <text fg={theme.textMuted}>│</text>
+          <text fg={theme.textMuted}>{GLYPH.vbar}</text>
           <text fg={theme.text}>
             <b>{i18n().t("tab_workflow")}</b>
           </text>
-          <text fg={theme.textMuted}>│</text>
+          <text fg={theme.textMuted}>{GLYPH.vbar}</text>
           <text fg={theme.primary} onMouseUp={handleCreate}>
             {i18n().t("ctrl_new")}
           </text>
@@ -735,12 +782,15 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 workflows={filteredWorkflows()}
                 statusFilter={statusFilter()}
                 search={search()}
+                searchFocused={searchFocused()}
                 currentWorkflowID={currentWorkflowID()}
                 onStatusFilter={(s) => setStatusFilter(s)}
                 onSearch={(q) => setSearch(q)}
+                onSearchFocus={() => setSearchFocused(true)}
                 onSelect={(id: string) => {
                   setCurrentWorkflowID(id)
                   setSelectedNodeID(null)
+                  setSearchFocused(false)
                 }}
               />
             </scrollbox>
@@ -784,7 +834,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   onAction={(action) => handleControlAction(action, wf().id)}
                   actionLoading={actionLoading}
                 />
-                <scrollbox flexGrow={1} minHeight={0} stickyScroll={false} stickyStart="top">
+                {/* 只保留 stickyScroll={false}：与 sticky 起始锚点同时声明会互相矛盾，曾致点击抖动（BUG-1） */}
+                <scrollbox flexGrow={1} minHeight={0} stickyScroll={false}>
                   <Show
                     when={viewMode() === "ascii-dag"}
                     fallback={
@@ -880,12 +931,15 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               workflows={filteredWorkflows()}
               statusFilter={statusFilter()}
               search={search()}
+              searchFocused={searchFocused()}
               currentWorkflowID={currentWorkflowID()}
               onStatusFilter={(s) => setStatusFilter(s)}
               onSearch={(q) => setSearch(q)}
+              onSearchFocus={() => setSearchFocused(true)}
               onSelect={(id: string) => {
                 setCurrentWorkflowID(id)
                 setSelectedNodeID(null)
+                setSearchFocused(false)
                 setSidebarExpanded(false)
               }}
             />
