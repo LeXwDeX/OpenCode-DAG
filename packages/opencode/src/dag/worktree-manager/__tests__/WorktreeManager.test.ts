@@ -98,15 +98,22 @@ describe('WorktreeManager', () => {
     it('should return all created worktrees', async () => {
       const worktreeName1 = `test-worktree-list-1-${counter}`;
       const worktreeName2 = `test-worktree-list-2-${counter}`;
-      const config: WorktreeConfig = {
+      const config1: WorktreeConfig = {
         basePath: '/tmp/worktree',
-        branch: `feature/test-list-${counter}`,
+        branch: `feature/test-list-${counter}-1`,
         groupId: 'group-list',
       };
 
-      const wt1 = await manager.create(worktreeName1, config);
-      const wt2 = await manager.create(worktreeName2, config);
-      createdWorktreeIds.push(wt1.id, wt2.id);
+      const config2: WorktreeConfig = {
+        basePath: '/tmp/worktree',
+        branch: `feature/test-list-${counter}-2`,
+        groupId: 'group-list',
+      };
+
+      const wt1 = await manager.create(worktreeName1, config1);
+      createdWorktreeIds.push(wt1.id);
+      const wt2 = await manager.create(worktreeName2, config2);
+      createdWorktreeIds.push(wt2.id);
 
       const worktrees = await manager.list();
       expect(worktrees.length).toBe(2);
@@ -208,14 +215,22 @@ describe('WorktreeManager', () => {
     it('should remove multiple worktrees', async () => {
       const worktreeName1 = `test-worktree-multi-1-${counter}`;
       const worktreeName2 = `test-worktree-multi-2-${counter}`;
-      const config: WorktreeConfig = {
+      const config1: WorktreeConfig = {
         basePath: '/tmp/worktree',
-        branch: `feature/test-multi-${counter}`,
+        branch: `feature/test-multi-${counter}-1`,
         groupId: 'group-multi',
       };
 
-      const worktree1 = await manager.create(worktreeName1, config);
-      const worktree2 = await manager.create(worktreeName2, config);
+      const config2: WorktreeConfig = {
+        basePath: '/tmp/worktree',
+        branch: `feature/test-multi-${counter}-2`,
+        groupId: 'group-multi',
+      };
+
+      const worktree1 = await manager.create(worktreeName1, config1);
+      createdWorktreeIds.push(worktree1.id);
+      const worktree2 = await manager.create(worktreeName2, config2);
+      createdWorktreeIds.push(worktree2.id);
 
       await manager.cleanupMany([worktree1.id, worktree2.id]);
 

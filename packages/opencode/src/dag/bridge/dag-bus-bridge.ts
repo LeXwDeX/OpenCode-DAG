@@ -16,8 +16,11 @@
  * - §10 字段名固定 chat_session_id
  */
 
+import * as Log from "@opencode-ai/core/util/log"
 import type { IEventBus, UnsubscribeFunction } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent } from "../state-machine/types"
+
+const log = Log.create({ service: "dag.bridge" })
 
 // ============================================================================
 // Types
@@ -143,7 +146,7 @@ export class DagEventBridge {
           timestamp: event.timestamp.toISOString(),
         })
       } catch (err) {
-        console.warn("[DagEventBridge] publish failed:", err)
+        log.warn("[DagEventBridge] publish failed", { err })
       }
       return
     }
@@ -159,7 +162,7 @@ export class DagEventBridge {
         timestamp: extractTimestamp(event),
       })
     } catch (err) {
-      console.warn("[DagEventBridge] publish failed:", err)
+      log.warn("[DagEventBridge] publish failed", { err })
     }
   }
 
@@ -179,7 +182,7 @@ export class DagEventBridge {
           timestamp: Date.now(),
         })
       } catch (err) {
-        console.warn("[DagEventBridge] publish failed:", err)
+        log.warn("[DagEventBridge] publish failed", { err })
       }
       return
     }
@@ -198,7 +201,7 @@ export class DagEventBridge {
       try {
         publishFn("dag.node.ask_main", props)
       } catch (err) {
-        console.warn("[DagEventBridge] publish failed:", err)
+        log.warn("[DagEventBridge] publish failed", { err })
       }
       return
     }
@@ -216,7 +219,7 @@ export class DagEventBridge {
         timestamp: extractNodeTimestamp(event),
       })
     } catch (err) {
-      console.warn("[DagEventBridge] publish failed:", err)
+      log.warn("[DagEventBridge] publish failed", { err })
     }
   }
 }

@@ -7,19 +7,18 @@
  *
  * Single source for the workflow bootstrap sequence:
  *   0. Recursion depth check (WP-D2: depth > MAX_SUB_DAG_DEPTH → fail, INFO-3)
- *   1. RequiredNodesValidator validation (+ warnings via console.warn, INFO-5)
+ *   1. RequiredNodesValidator validation (+ warnings via log.warn, INFO-5)
  *   2. validateWorkerTypes (agent registry resolution; "dag" skipped for WP-D2)
  *   3. DB createWorkflow row
  *   4. DB createNode rows (with namespaced IDs: `${workflowId}::${nodeId}`)
  *   5. WorkflowEngine.make + setPromptOps
  *   6. registerEngine + WorkflowEngine.startWorkflow (status→running + scheduleReadyNodes)
- *   7. forkDetach executor daemon (BEFORE abort listener) + abortSignal.addEventListener
+ *   7. forkDetach executor daemon
  *
  * Called by:
  * - dagworker.ts (tool path) — thin adapter that destructures Tool.Context
  * - WP-D2 sub-DAG spawn — spawnReadyNode dispatches "dag" nodes via this
  *
- * The abort listener MUST be registered AFTER forkDetach (architecture constraint 3).
  * The RequiredNodesValidator call migrates here (single source, INFO-3).
  *
  * Design decisions:
@@ -35,6 +34,7 @@
  */
 
 import { Effect } from "effect"
+import * as Log from "@opencode-ai/core/util/log"
 import type { Agent } from "@/agent/agent"
 import type { PromptOps } from "@/session/prompt-ops"
 import type { IDAGSessionService } from "./session-service"
@@ -44,6 +44,8 @@ import { createWorkflowExecutor } from "./workflow-executor"
 import type { DAGConfig, DAGNodeConfig } from "./types"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import { MAX_SUB_DAG_DEPTH } from "./limits"
+
+const log = Log.create({ service: "dag.core-start" })
 
 /**
  * Registry interface used to validate worker_type values against the active
@@ -150,14 +152,13 @@ export type BootstrapWorkflowResult = {
  *   Step 4 — DB createNode rows
  *   Step 5 — WorkflowEngine.make + setPromptOps
  *   Step 6 — registerEngine + startWorkflow
- *   Step 7a — forkDetach daemon; 7b — abortSignal listener (AFTER forkDetach, constraint 3)
+ *   Step 7 — forkDetach daemon
  *
  * @param dagConfig         The DAG workflow configuration.
  * @param chatSessionId     The chat session under which the workflow is scoped.
  *                          For sub-DAG (WP-D2, INFO-5): the child session ID
  *                          created by spawnReadyNode via sessions.create().
  * @param promptOps         Prompt operations reference.
- * @param abortSignal       AbortSignal for cooperative cancellation.
  * @param dagSessionService DB session service (state persistence — iron law #4).
  * @param agentService      Agent registry for worker_type validation.
  * @param parentWorkflowId  Optional (WP-D2): parent workflow ID for sub-DAG context.
@@ -169,7 +170,6 @@ export const bootstrapWorkflowFromConfig = (args: {
   dagConfig: DAGConfig
   chatSessionId: string
   promptOps: PromptOps
-  abortSignal: AbortSignal
   dagSessionService: IDAGSessionService
   agentService: WorkerTypeAgentRegistry
   parentWorkflowId?: string
@@ -181,7 +181,6 @@ export const bootstrapWorkflowFromConfig = (args: {
       dagConfig,
       chatSessionId,
       promptOps,
-      abortSignal,
       dagSessionService,
       agentService,
       parentWorkflowId,
@@ -199,7 +198,7 @@ export const bootstrapWorkflowFromConfig = (args: {
       )
     }
 
-    // Step 1: RequiredNodesValidator (+ console.warn for warnings, INFO-5 compliant).
+    // Step 1: RequiredNodesValidator (+ log.warn for warnings, INFO-5 compliant).
     // INFO-3: this validator call migrates with the core function (single source).
     const validator = new RequiredNodesValidator()
     const validationResult = validator.validate(dagConfig)
@@ -211,7 +210,7 @@ export const bootstrapWorkflowFromConfig = (args: {
 
     if (validationResult.warnings.length > 0) {
       const warningsText = validationResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
-      console.warn(`Workflow configuration warnings:\n${warningsText}`)
+      log.warn(`Workflow configuration warnings:\n${warningsText}`)
     }
 
     // Step 2: fail-fast worker_type validation (in core — single source).
@@ -251,16 +250,15 @@ export const bootstrapWorkflowFromConfig = (args: {
     registerEngine(workflow.id, workflowEngine)
     yield* workflowEngine.startWorkflow(workflow.id, dagConfig)
 
-    // Step 7a: Fork the executor daemon (BEFORE abort listener — constraint 3).
-    // Daemon is guaranteed reachable when cancelWorkflow is dispatched below.
+    // Step 7: Fork the executor daemon.
+    // NOTE: the step-scoped tool ctx.abort signal is NOT usable as a session
+    // cancel signal here — llm.ts runs each streaming step inside acquireRelease,
+    // so that signal fires on every step-scope release (cleanup), not on user
+    // abort. Wiring it to cancelWorkflow killed workflows ~100ms after start.
+    // User-initiated cascade cancellation is backlog; orphan workflows are
+    // covered by four guards: executor max-runtime timeout, kill switch,
+    // the dagworker/HTTP cancel action, and startup recovery.
     yield* executor.start(workflow.id).pipe(Effect.forkDetach)
-
-    // Step 7b: Abort listener (AFTER forkDetach — constraint 3).
-    // Triggers engine.cancelWorkflow via fire-and-forget Effect.runPromise.
-    const onAbort = () => {
-      Effect.runPromise(workflowEngine.cancelWorkflow(workflow.id).pipe(Effect.ignore))
-    }
-    abortSignal.addEventListener("abort", onAbort, { once: true })
 
     return { workflowId: workflow.id, nodeCount: dagConfig.nodes.length }
   })

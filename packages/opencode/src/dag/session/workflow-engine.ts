@@ -3,6 +3,7 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 import { Cause, Effect, Result } from "effect"
+import * as Log from "@opencode-ai/core/util/log"
 import { DAGSessionService, emitWorkflowReplannedEvent, getEventBus } from "./session-service"
 import type {
   AppendNodeLogInput,
@@ -53,6 +54,8 @@ import {
 import type {
   ReplanValidateResult,
 } from "./execution-core"
+
+const log = Log.create({ service: "dag.engine" })
 
 // Re-export execution-core symbols for backward compatibility.
 // All existing `from "./workflow-engine"` imports of these symbols continue to work.
@@ -604,7 +607,6 @@ const make = Effect.gen(function* () {
           dagConfig: subDagConfig,
           chatSessionId: subChildSession.id,
           promptOps: _promptOps!,
-          abortSignal: new AbortController().signal,
           dagSessionService: sessionService,
           agentService: subAgentService,
           parentWorkflowId: workflowId,
@@ -994,7 +996,7 @@ const make = Effect.gen(function* () {
           if (nodeTimeoutId !== undefined) clearTimeout(nodeTimeoutId)
           nodeSettledRegistry.delete(node.node_id)
           if (worktreeCleanup) {
-            worktreeCleanup().catch((err) => console.warn(`[DAG] worktree cleanup failed: ${err}`))
+            worktreeCleanup().catch((err) => log.warn("[DAG] worktree cleanup failed", { err }))
           }
         }),
       ),

@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll } from 'bun:test';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { generateText } from 'ai';
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
@@ -22,6 +22,13 @@ import * as os from 'os';
 // 默认超时：30 秒（LLM API 调用需要更长时间）
 // ============================================================================
 const DEFAULT_TIMEOUT = 30000;
+
+// ============================================================================
+// E2E 跳过守卫：CI 环境没有用户级 opencode.json，也不应依赖外部真实 LLM 服务；
+// 配置文件缺失或处于 CI 时跳过整个 e2e describe（retry helper 单测不受影响）。
+// ============================================================================
+const CONFIG_PATH = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
+const SKIP_E2E = !existsSync(CONFIG_PATH) || !!process.env.CI;
 
 // ============================================================================
 // 重试辅助函数：应对外部 LLM API 不稳定
@@ -47,8 +54,7 @@ async function retry<T>(fn: () => Promise<T>, maxRetries: number = 2, delayMs: n
 // ============================================================================
 
 async function loadDeepSeekConfig() {
-  const configPath = path.join(os.homedir(), '.config', 'opencode', 'opencode.json');
-  const configContent = await fs.readFile(configPath, 'utf-8');
+  const configContent = await fs.readFile(CONFIG_PATH, 'utf-8');
   const config = JSON.parse(configContent);
   
   const provider = config.provider['local-proxy-compatible'];
@@ -107,7 +113,7 @@ describe('retry helper', () => {
 // 端到端测试
 // ============================================================================
 
-describe('DAG End-to-End Test with deepseek-v4-pro', () => {
+describe.skipIf(SKIP_E2E)('DAG End-to-End Test with deepseek-v4-pro', () => {
   let deepseekClient: any;
   let config: any;
 

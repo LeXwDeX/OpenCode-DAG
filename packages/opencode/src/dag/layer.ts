@@ -82,19 +82,19 @@ const dagQueryLayer = Layer.effect(
 )
 
 /**
- * `defaultLayer` composes 3 sub-layers via `Layer.provideMerge`:
+ * `defaultLayer` composes 3 sub-layers via `Layer.provideMerge` (inner → outer):
  *
- * 1. `sharedEventBusLayer` — creates the singleton EventBus (Iron Law #3)
- *    shared across all DAG modules.
+ * 1. `dagQueryLayer` — creates DAGQuery and runs the crash recovery scan (B3)
+ *    on initialization. Recovery runs here (not in app-runtime.ts CoreLayer)
+ *    because DAG is HTTP-server-scoped while CoreLayer is process-wide.
+ *    See B3 commit message for rationale.
  * 2. `worktreeManagerLayer` — creates a single WorktreeManager instance (uses
  *    the shared EventBus). Consumed by `spawnReadyNode` when
  *    `worker_config.use_worktree: true` (B4-WP1). No persister is provided:
  *    an in-memory Map is adequate for DAG node lifetime (per §0.3 architecture
  *    rule — node lifetime is bounded by workflow lifetime).
- * 3. `dagQueryLayer` — creates DAGQuery and runs the crash recovery scan (B3)
- *    on initialization. Recovery runs here (not in app-runtime.ts CoreLayer)
- *    because DAG is HTTP-server-scoped while CoreLayer is process-wide.
- *    See B3 commit message for rationale.
+ * 3. `sharedEventBusLayer` — the OUTERMOST provider: creates the singleton
+ *    EventBus (Iron Law #3) and feeds it to BOTH layers above as a whole.
  *
  * WP-A1 requirement (009-dag-capability-expansion.md §7): `dagQueryLayer`
  * additionally yields `SessionPrompt.Service` so recovery can hand headless
@@ -109,9 +109,15 @@ const dagQueryLayer = Layer.effect(
  * the HTTP server (e.g., `opencode run`) obtain `DAGSessionService` directly
  * but lose recovery, bridge, and WorktreeManager availability.
  */
-// Self-contained composite: provideMerge feeds the shared bus INTO dagQueryLayer
-// and re-exposes it, so the result outputs BOTH tags with zero residual
-// requirement. `Layer.mergeAll` does not cross-wire siblings, which previously
+// Self-contained composite: `sharedEventBusLayer` sits at the OUTERMOST
+// provider position, so the singleton bus feeds dagQueryLayer AND
+// worktreeManagerLayer as a whole — the result outputs all tags with zero
+// residual requirement. Lesson (CI fix): a layer in provider position is
+// never back-fed by the outputs of the composite it provides to (the previous
+// order left worktreeManagerLayer's bus requirement dangling), and the
+// terminal cast in server.ts erases residual exposure from the type — the
+// compile-time anchor in layer-session-prompt.test.ts guards this order.
+// `Layer.mergeAll` does not cross-wire siblings either, which previously
 // left SharedEventBusTag unsatisfied at runtime ("Service not found").
 //
 // WP-A1 (INFO 2 resolution): SessionPrompt.Service is satisfied explicitly via
@@ -123,8 +129,8 @@ const dagQueryLayer = Layer.effect(
 // around the smallest DAG layer boundary; use leaf tag extraction only when an
 // eagerly accessed Context.Service/tag causes the cycle.
 export const defaultLayer = dagQueryLayer.pipe(
-  Layer.provideMerge(sharedEventBusLayer),
   Layer.provideMerge(worktreeManagerLayer),
+  Layer.provideMerge(sharedEventBusLayer),
   // WP-A1: explicitly satisfy SessionPrompt.Service requirement. Must be
   // `Layer.provide` (consumes the requirement) so defaultLayer remains
   // self-contained with zero residual requirement.

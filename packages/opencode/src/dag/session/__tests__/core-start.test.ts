@@ -11,10 +11,12 @@
  *
  * Acceptance criteria (009-dag-capability-expansion.md §7 WP-D1):
  * - Bootstrap can be called without Tool.Context (only promptOps/sessionId/
- *   abortSignal/dagConfig/agentService/dagSessionService required)
+ *   dagConfig/agentService/dagSessionService required)
  * - DB rows created (workflow + nodes) — iron law #4
  * - Engine registered in module-level registry
- * - Abort listener attached AFTER forkDetach daemon (constraint 3)
+ * - External abort signals do NOT cancel a started workflow (step-scoped
+ *   ctx.abort is a cleanup signal, not a user-cancel signal — regression
+ *   anchor for the removed Step 7b abort listener)
  * - validateWorkerTypes (in core) rejects unknown agent
  * - RequiredNodesValidator (in core) rejects invalid config
  *
@@ -130,7 +132,7 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
   })
 
   describe("bootstrap happy path (headless, no Tool.Context)", () => {
-    it("creates DB workflow + node rows, registers engine, and wires abort listener", async () => {
+    it("creates DB workflow + node rows, registers engine, and ignores external abort signals", async () => {
       const dagSessionService = Effect.runSync(DAGSessionService.make)
       const agentService = makeAgentService(["general"])
 
@@ -143,6 +145,9 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
         max_concurrency: 2,
       }
 
+      // Simulates the step-scoped ctx.abort signal that previously wired
+      // a cancel listener (removed Step 7b). It is no longer accepted by
+      // bootstrapWorkflowFromConfig.
       const controller = new AbortController()
 
       const result = await Effect.runPromise(
@@ -150,7 +155,6 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
           dagConfig,
           chatSessionId: "test-session-headless",
           promptOps: mockPromptOps(),
-          abortSignal: controller.signal,
           dagSessionService,
           agentService,
         }),
@@ -177,11 +181,14 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
       // Engine registered
       expect(WorkflowEngine.get(result.workflowId)).not.toBeUndefined()
 
-      // Abort listener is wired — triggering abort does not throw and
-      // should eventually cancel the workflow (verify via engine state).
-      // Note: actual cancelWorkflow is async via Effect.runPromise fire-and-forget,
-      // so we only verify that abort() does not throw.
-      expect(() => controller.abort()).not.toThrow()
+      // Negative assertion (regression anchor): firing the step-scoped abort
+      // signal after bootstrap must NOT cancel the workflow. Previously a
+      // Step 7b listener mapped this to engine.cancelWorkflow, which killed
+      // workflows ~100ms after start when the tool step scope was released.
+      controller.abort()
+      await new Promise((resolve) => setTimeout(resolve, 100))
+      const afterAbort = Effect.runSync(dagSessionService.getWorkflow(result.workflowId))
+      expect(afterAbort?.status).toBe("running")
 
       // Cleanup
       unregisterEngine(result.workflowId)
@@ -221,7 +228,6 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
           dagConfig: invalidConfig,
           chatSessionId: "test-invalid",
           promptOps: mockPromptOps(),
-          abortSignal: new AbortController().signal,
           dagSessionService,
           agentService,
         }),
