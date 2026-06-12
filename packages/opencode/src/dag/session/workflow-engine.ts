@@ -23,6 +23,7 @@ import type {
   DAGViolationType,
   DAGWorkflowStatus,
   ReplanPatch,
+  ReplanPreviewResult,
   ReplanResult,
   StepResult,
 } from "./types"
@@ -120,6 +121,7 @@ export interface WorkflowEngine {
   handleNodeFailure(workflowId: string, nodeId: string, error: Error): Effect.Effect<unknown>
   cancelWorkflow(workflowId: string): Effect.Effect<unknown>
   getWorkflowStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot>
+  previewReplanWorkflow?: (workflowId: string, patch: ReplanPatch) => Effect.Effect<ReplanPreviewResult>
   replanWorkflow(workflowId: string, patch: ReplanPatch): Effect.Effect<ReplanResult>
   pauseWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
   resumeWorkflow(workflowId: string): Effect.Effect<DAGWorkflowStatus, never>
@@ -1592,6 +1594,63 @@ const make = Effect.gen(function* () {
   // Replan — atomically restructure the tail of a running workflow
   // ============================================================================
 
+  const previewReplanWorkflow: NonNullable<WorkflowEngine['previewReplanWorkflow']> = (workflowId, patch) =>
+    Effect.gen(function* () {
+      const workflow = yield* sessionService.getWorkflow(workflowId)
+      if (!workflow) return yield* Effect.fail(new Error(`Workflow ${workflowId} not found`))
+      const currentNodes = yield* sessionService.listNodes(workflowId)
+      const preResult = validateReplanPreconditions(workflow, patch)
+      if (!preResult.ok) return yield* Effect.fail(new Error(preResult.reason))
+      const { frozenIds } = classifyReplanNodes(currentNodes)
+      const frozenExistResult = validateFrozenAndExistence(
+        patch,
+        frozenIds,
+        new Set(currentNodes.map((n: DAGNodeSession) => n.node_id)),
+      )
+      if (!frozenExistResult.ok) return yield* Effect.fail(new Error(frozenExistResult.reason))
+      const applyResult = applyReplanPatchToConfig(workflowId, workflow.config.nodes, patch)
+      if (!applyResult.ok) return yield* Effect.fail(new Error(applyResult.reason))
+      const postResult = validateReplanPostConfig(applyResult.newConfigNodes, patch, workflow)
+      if (!postResult.ok) return yield* Effect.fail(new Error(postResult.reason))
+      const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
+      const addedNodeIds = (patch.add_nodes ?? []).map((n) => `${workflowId}::${n.id}`)
+      const postNodeIds = currentNodes
+        .filter((n: DAGNodeSession) => !(patch.remove_nodes ?? []).includes(n.node_id))
+        .map((n: DAGNodeSession) => n.node_id)
+        .concat(addedNodeIds)
+      return {
+        ok: true as const,
+        workflow_id: workflowId,
+        pre: {
+          config: workflow.config,
+          node_ids: currentNodes.map((n: DAGNodeSession) => n.node_id),
+          max_concurrency: workflow.config.max_concurrency,
+          total_nodes: currentNodes.length,
+        },
+        post: {
+          config: { ...workflow.config, nodes: applyResult.newConfigNodes, max_concurrency: newMaxConcurrency },
+          node_ids: postNodeIds,
+          max_concurrency: newMaxConcurrency,
+          total_nodes: postNodeIds.length,
+        },
+        delta: {
+          nodes_added: addedNodeIds.length,
+          nodes_removed: (patch.remove_nodes ?? []).length,
+          nodes_updated: (patch.update_nodes ?? []).length,
+          final_total: applyResult.newConfigNodes.length,
+          max_concurrency_changed: patch.new_max_concurrency !== undefined && patch.new_max_concurrency !== workflow.config.max_concurrency,
+        },
+      }
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.succeed({
+          ok: false as const,
+          reason: String(Cause.squash(cause)),
+          detail: Cause.squash(cause),
+        }),
+      ),
+    ) as Effect.Effect<ReplanPreviewResult, never, never>
+
   const replanWorkflow: WorkflowEngine['replanWorkflow'] = (workflowId, patch) =>
     Effect.gen(function* () {
       // 0. Freeze out concurrent spawn for the duration of this replan
@@ -1723,6 +1782,7 @@ const make = Effect.gen(function* () {
     handleNodeFailure,
     cancelWorkflow,
     getWorkflowStatus,
+    previewReplanWorkflow,
     replanWorkflow,
     pauseWorkflow,
     resumeWorkflow,

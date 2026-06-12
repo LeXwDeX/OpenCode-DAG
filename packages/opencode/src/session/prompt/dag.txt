@@ -53,6 +53,32 @@ One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fai
 | `logs` | Query node execution logs: `dagworker { action: "logs", node_id: "<nodeId>", limit?: number }`. Returns structured log entries. |
 | `step` | Execute exactly one ready node while a workflow remains paused. |
 
+## Templates — where they live, how to use them
+
+DAG templates are reusable `DAGConfig` factories. They are not stored in chat state.
+
+| Question | Answer |
+|---|---|
+| Where are built-in DAG templates written? | In code: `packages/opencode/src/dag/integration/templates/index.ts`. Add a new template there, append its id to `DAG_TEMPLATE_IDS`, and register it in the `registry` map. |
+| How does an agent discover available templates? | Call `dagworker` with `action: "template_list"`. It returns ids, names, descriptions, tags, and required agent names. |
+| How does an agent read one template's generated DAGConfig? | Call `dagworker` with `action: "template_show"`, `template_id`, and optional JSON-stringified `template_input`. This renders the template into a `DAGConfig` and does not start a workflow. |
+| How does an agent start from a template? | Call `dagworker` with `action: "template_start"`, `template_id`, and required JSON-stringified `template_input` containing at least `{ "goal": "..." }`. |
+| Where can an agent see a DAG it created by hand? | A hand-written JSON `workflow` passed to `dagworker start` is a workflow instance, not a named template. After start, use `dagworker list`, `dagworker status`, `dagworker node_detail`, `dagworker history`, and `dagworker logs` to inspect it. It will not appear in `template_list` unless added to `templates/index.ts`. |
+
+Minimal template commands:
+
+```json
+{ "action": "template_list" }
+```
+
+```json
+{ "action": "template_show", "template_id": "product-doc-analysis", "template_input": "{\"goal\":\"audit DAG docs\",\"scope\":\"packages/opencode/src/dag\"}" }
+```
+
+```json
+{ "action": "template_start", "template_id": "product-doc-analysis", "template_input": "{\"goal\":\"audit DAG docs\"}" }
+```
+
 ## The Config Schema
 
 `dagworker start` takes a single `workflow` argument: a **JSON string** of this shape:

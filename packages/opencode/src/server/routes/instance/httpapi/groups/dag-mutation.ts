@@ -88,6 +88,37 @@ const ReplanResultResponse = Schema.Union([
   }),
 ]).annotate({ identifier: "DagReplanResultResponse" })
 
+const ReplanPreviewResponse = Schema.Union([
+  Schema.Struct({
+    ok: Schema.Literal(true),
+    workflow_id: Schema.String,
+    pre: Schema.Struct({
+      config: Schema.Unknown,
+      node_ids: Schema.Array(Schema.String),
+      max_concurrency: Schema.Number,
+      total_nodes: Schema.Number,
+    }),
+    post: Schema.Struct({
+      config: Schema.Unknown,
+      node_ids: Schema.Array(Schema.String),
+      max_concurrency: Schema.Number,
+      total_nodes: Schema.Number,
+    }),
+    delta: Schema.Struct({
+      nodes_added: Schema.Number,
+      nodes_removed: Schema.Number,
+      nodes_updated: Schema.Number,
+      final_total: Schema.Number,
+      max_concurrency_changed: Schema.Boolean,
+    }),
+  }),
+  Schema.Struct({
+    ok: Schema.Literal(false),
+    reason: Schema.String,
+    detail: Schema.optional(Schema.Unknown),
+  }),
+]).annotate({ identifier: "DagReplanPreviewResponse" })
+
 // config is kept permissive — session-service createWorkflow runs
 // validateWorkflowConfigLimits + RequiredNodesValidator at the entry point.
 const CreateWorkflowBody = Schema.Struct({
@@ -183,6 +214,19 @@ const dagMutationGroup = HttpApiGroup.make("dag-mutation")
         summary: "Replan a running DAG workflow",
         description:
           "Mutates a running DAG workflow's node set. When no in-memory engine exists, returns {ok:false, reason:'not_running'} without touching persistence.",
+      }),
+    ),
+    HttpApiEndpoint.post("replanPreview", `${root}/workflows/:workflowId/replan/preview`, {
+      params: WorkflowIdParams,
+      query: WorkflowIdQuery,
+      payload: ReplanPatchBody,
+      success: described(ReplanPreviewResponse, "Workflow replan preview result"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag-mutation.replanPreview",
+        summary: "Preview a DAG workflow replan",
+        description:
+          "Dry-runs a running DAG workflow replan and returns pre/post/delta without touching persistence, history, runtime registries, or events.",
       }),
     ),
     HttpApiEndpoint.post("create", `${root}/workflows/create`, {

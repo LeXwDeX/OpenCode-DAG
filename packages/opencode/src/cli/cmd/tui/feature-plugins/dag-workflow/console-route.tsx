@@ -29,6 +29,7 @@ import {
   useNodeAskMain,
   useWorkflowTimeline,
   useWorkflowStats,
+  useInspectDiagnostics,
   useNodeToolCounts,
   filterWorkflows,
   nextIndex,
@@ -37,8 +38,10 @@ import {
   cancelWorkflow,
   startWorkflow,
   replanWorkflow,
+  replanPreview,
   createWorkflow,
   stepWorkflow,
+  type ReplanPatchInput,
 } from "./data"
 import {
   listDAGTemplates,
@@ -62,6 +65,23 @@ const ROUTE = "dag-workflow"
 
 type ViewMode = "tree" | "ascii-dag"
 
+export function DagErrorFallback(props: { error: unknown }): JSX.Element {
+  const { theme } = useTheme()
+  return (
+    <box flexGrow={1} alignItems="center" justifyContent="center">
+      <box gap={1} padding={2}>
+        <text fg={theme.error}>⚠ UI Error</text>
+        <text fg={theme.textMuted}>{props.error instanceof Error ? props.error.message : String(props.error)}</text>
+        <text fg={theme.textMuted}>Refresh or switch views to recover.</text>
+      </box>
+    </box>
+  )
+}
+
+function asciiDagAvailableWidth(width: number, wide: boolean): number {
+  return Math.max(8, width - (wide ? 80 : 4))
+}
+
 // ── Pure utility: convert raw dialog fields to a template input ──────────
 // Empty/whitespace-only scope and context become undefined (omitted from input).
 export function buildTemplateInput(fields: {
@@ -75,6 +95,35 @@ export function buildTemplateInput(fields: {
   if (scopeTrimmed) input.scope = scopeTrimmed
   if (contextTrimmed) input.context = contextTrimmed
   return input
+}
+
+type ReplanPreviewMessageInput =
+  | {
+      ok: true
+      workflow_id: string
+      pre: { config?: unknown; node_ids?: string[]; max_concurrency: number; total_nodes: number }
+      post: { config?: unknown; node_ids?: string[]; max_concurrency: number; total_nodes: number }
+      delta: {
+        nodes_added: number
+        nodes_removed: number
+        nodes_updated: number
+        final_total: number
+        max_concurrency_changed?: boolean
+      }
+    }
+  | { ok: false; reason: string; detail?: unknown }
+
+export function buildPreviewMessage(preview: ReplanPreviewMessageInput): string {
+  if (!preview.ok) {
+    return `Preview rejected:\nreason: ${preview.reason}${preview.detail ? `\ndetail: ${JSON.stringify(preview.detail)}` : ""}`
+  }
+  return [
+    `Preview for ${preview.workflow_id}:`,
+    `nodes: ${preview.pre.total_nodes} → ${preview.post.total_nodes}`,
+    `max concurrency: ${preview.pre.max_concurrency} → ${preview.post.max_concurrency}`,
+    `added: ${preview.delta.nodes_added}, removed: ${preview.delta.nodes_removed}, updated: ${preview.delta.nodes_updated}`,
+    `final total: ${preview.delta.final_total}`,
+  ].join("\n")
 }
 
 export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
@@ -202,6 +251,13 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     client: props.api.client,
     event: props.api.event,
     workflowId: currentWorkflowID,
+  })
+
+  const inspectDiagnostics = useInspectDiagnostics({
+    client: props.api.client,
+    event: props.api.event,
+    workflowId: currentWorkflowID,
+    selectedNodeId: selectedNodeID,
   })
 
   // ── WP-TUI-2: node ask_main subscription ─────────────────────────────────
@@ -340,7 +396,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         props.api.ui.DialogPrompt({
           title: i18n().t("dlg_concurrency_title"),
           placeholder: i18n().t("dlg_concurrency_ph"),
-          onConfirm: (value) => void replanCurrent(workflowId, value),
+          onConfirm: (value) => void previewConcurrencyReplan(workflowId, value),
         }),
       )
       return
@@ -377,29 +433,60 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     }
   }
 
-  async function replanCurrent(workflowId: string, value: string) {
+  async function previewConcurrencyReplan(workflowId: string, value: string) {
     const parsed = parseReplanConcurrency(value)
     if (!parsed.ok) {
       toast.show({ message: i18n().t("toast_replan_range"), variant: "error" })
       return
     }
+    await previewReplanThenConfirm(workflowId, { new_max_concurrency: parsed.value }, () =>
+      applyReplan(workflowId, { new_max_concurrency: parsed.value }),
+    )
+  }
+
+  async function applyReplan(workflowId: string, patch: ReplanPatchInput) {
     try {
       await withLoading(async () => {
         setActionError(null)
-        await replanWorkflow(props.api.client, workflowId, { new_max_concurrency: parsed.value })
+        await replanWorkflow(props.api.client, workflowId, patch)
       })
     } catch (e) {
       setActionError(e instanceof Error ? e.message : String(e))
     }
   }
 
+  async function previewReplanThenConfirm(
+    workflowId: string,
+    patch: ReplanPatchInput,
+    apply: () => Promise<void>,
+  ) {
+    try {
+      const preview = await withLoading(async () => {
+        setActionError(null)
+        return replanPreview(props.api.client, workflowId, patch)
+      })
+      const data = preview.data as ReplanPreviewMessageInput | undefined
+      if (!data?.ok) {
+        setActionError(data ? buildPreviewMessage(data) : "Replan preview failed")
+        return
+      }
+      props.api.ui.dialog.replace(() =>
+        props.api.ui.DialogConfirm({
+          title: i18n().t("dlg_replan_title"),
+          message: buildPreviewMessage(data),
+          onConfirm: () => void apply(),
+        }),
+      )
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : String(e))
+    }
+  }
+
   function confirmRemoveNode(workflowId: string, nodeId: string) {
-    props.api.ui.dialog.replace(() =>
-      props.api.ui.DialogConfirm({
-        title: i18n().t("dlg_confirm_remove_title"),
-        message: i18n().t("dlg_confirm_remove_msg").replace("{node}", nodeId),
-        onConfirm: () => void removeNodeReplan(workflowId, nodeId),
-      }),
+    void previewReplanThenConfirm(
+      workflowId,
+      { remove_nodes: [nodeId], changed_by: "tui-remove-node" },
+      () => removeNodeReplan(workflowId, nodeId),
     )
   }
 
@@ -584,6 +671,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   }
 
   return (
+    <ErrorBoundary fallback={(err) => <DagErrorFallback error={err} />}>
     <box flexDirection="column" flexGrow={1} minHeight={0}>
       {/* TOP BAR: Tab 切换 */}
       <box
@@ -682,17 +770,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               }
             >
             {(wf) => (
-              <ErrorBoundary
-                fallback={(err) => (
-                  <box flexGrow={1} alignItems="center" justifyContent="center">
-                    <box gap={1} padding={2}>
-                      <text fg={theme.error}>⚠ UI Error</text>
-                      <text fg={theme.textMuted}>{err?.message ?? String(err)}</text>
-                      <text fg={theme.textMuted}>Refresh or switch views to recover.</text>
-                    </box>
-                  </box>
-                )}
-              >
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
                   lang={i18n().lang}
@@ -727,6 +804,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                       lang={i18n().lang}
                       nodes={nodes()}
                       selectedNodeID={selectedNodeID() ?? undefined}
+                      availableWidth={asciiDagAvailableWidth(dimensions().width, wide())}
                       onSelect={(id) => {
                         setSelectedNodeID(id)
                         if (!wide()) setDetailExpanded(true)
@@ -738,7 +816,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   </Show>
                 </scrollbox>
               </box>
-              </ErrorBoundary>
             )}
             </Show>
           </Show>
@@ -773,6 +850,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               timeline={workflowTimeline()}
               timelineError={timelineError()}
               timelineLoading={timelineLoading()}
+              inspect={inspectDiagnostics}
               event={props.api.event}
               nodes={nodes()}
             />
@@ -849,6 +927,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
             timeline={workflowTimeline()}
             timelineError={timelineError()}
             timelineLoading={timelineLoading()}
+            inspect={inspectDiagnostics}
             event={props.api.event}
             nodes={nodes()}
           />
@@ -874,5 +953,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         </box>
       </box>
     </box>
+    </ErrorBoundary>
   )
 }

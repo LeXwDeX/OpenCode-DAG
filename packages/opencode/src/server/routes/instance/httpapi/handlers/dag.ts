@@ -4,6 +4,8 @@
 
 import type { DAGNodeSession } from "@/dag/session/types"
 import { DAGQueryTag } from "@/dag/layer"
+import { DAGProbe } from "@/dag/query/dag-probe"
+import { DAGSessionService } from "@/dag/session/session-service"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
@@ -11,6 +13,7 @@ import { InstanceHttpApi } from "../api"
 export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handlers) =>
   Effect.gen(function* () {
     const dagQuery = yield* DAGQueryTag
+    const dagProbe = new DAGProbe(yield* DAGSessionService.make)
 
     const listWorkflows = Effect.fn("DagHttpApi.listWorkflows")(
       function* (ctx: { query: { chatSessionId?: string } }) {
@@ -60,6 +63,30 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       },
     )
 
+    const diagnoseBlock = Effect.fn("DagHttpApi.diagnoseBlock")(
+      function* (ctx: { params: { workflowId: string } }) {
+        return yield* Effect.promise(() => dagProbe.explainBlock(ctx.params.workflowId))
+      },
+    )
+
+    const diagnoseTopology = Effect.fn("DagHttpApi.diagnoseTopology")(
+      function* (ctx: { params: { workflowId: string } }) {
+        return yield* Effect.promise(() => dagProbe.getTopology(ctx.params.workflowId))
+      },
+    )
+
+    const diagnoseSnapshot = Effect.fn("DagHttpApi.diagnoseSnapshot")(
+      function* (ctx: { params: { workflowId: string } }) {
+        return yield* Effect.promise(() => dagProbe.getExecutionSnapshot(ctx.params.workflowId))
+      },
+    )
+
+    const diagnoseCascade = Effect.fn("DagHttpApi.diagnoseCascade")(
+      function* (ctx: { params: { workflowId: string; nodeId: string } }) {
+        return yield* Effect.promise(() => dagProbe.predictCascade(ctx.params.workflowId, ctx.params.nodeId))
+      },
+    )
+
     return handlers
       .handle("listWorkflows", listWorkflows)
       .handle("getWorkflow", getWorkflow)
@@ -68,5 +95,9 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       .handle("getViolations", getViolations)
       .handle("getWorkflowHistory", getWorkflowHistory)
       .handle("getNodeLogs", getNodeLogs)
+      .handle("diagnoseBlock", diagnoseBlock)
+      .handle("diagnoseTopology", diagnoseTopology)
+      .handle("diagnoseSnapshot", diagnoseSnapshot)
+      .handle("diagnoseCascade", diagnoseCascade)
   }),
 )

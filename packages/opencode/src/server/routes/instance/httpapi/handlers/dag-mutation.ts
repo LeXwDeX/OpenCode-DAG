@@ -154,6 +154,31 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       },
     )
 
+    const replanPreview = Effect.fn("DagMutationHttpApi.replanPreview")(
+      function* (ctx: {
+        params: { workflowId: string }
+        payload: {
+          add_nodes?: ReadonlyArray<unknown>
+          remove_nodes?: ReadonlyArray<string>
+          update_nodes?: ReadonlyArray<unknown>
+          new_max_concurrency?: number
+          changed_by?: string
+        }
+      }) {
+        const engine = WorkflowEngine.get(ctx.params.workflowId)
+        if (!engine?.previewReplanWorkflow) return { ok: false as const, reason: "not_running" }
+        const patch: ReplanPatch = {
+          workflow_id: ctx.params.workflowId,
+          add_nodes: ctx.payload.add_nodes as ReplanPatch["add_nodes"],
+          remove_nodes: ctx.payload.remove_nodes as ReplanPatch["remove_nodes"],
+          update_nodes: ctx.payload.update_nodes as ReplanPatch["update_nodes"],
+          new_max_concurrency: ctx.payload.new_max_concurrency,
+          changed_by: ctx.payload.changed_by,
+        }
+        return yield* engine.previewReplanWorkflow(ctx.params.workflowId, patch)
+      },
+    )
+
     const create = Effect.fn("DagMutationHttpApi.create")(
       function* (ctx: { payload: { name: string; chatSessionId: string; config: unknown } }) {
         const config = ctx.payload.config as {
@@ -204,6 +229,7 @@ export const dagMutationHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag-mu
       .handle("step", step)
       .handle("start", start)
       .handle("replan", replan)
+      .handle("replanPreview", replanPreview)
       .handle("create", create)
   }),
 )

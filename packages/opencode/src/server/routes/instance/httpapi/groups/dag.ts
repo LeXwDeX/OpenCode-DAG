@@ -148,6 +148,40 @@ export const DagNodeLogResponse = Schema.Struct({
   created_at: Schema.String,
 }).annotate({ identifier: "DagNodeLogResponse" })
 
+export const DagNodeBlockReason = Schema.Struct({
+  nodeId: Schema.String,
+  blocked: Schema.Boolean,
+  unsatisfiedDependencies: Schema.Array(Schema.String),
+  reason: Schema.Literals(["deps_unsatisfied", "concurrency_saturated", "condition_pending", "ready", "terminal"]),
+}).annotate({ identifier: "DagNodeBlockReason" })
+
+export const DagTopologyLayer = Schema.Struct({
+  depth: Schema.Number,
+  nodeIds: Schema.Array(Schema.String),
+}).annotate({ identifier: "DagTopologyLayer" })
+
+export const DagTopologySnapshot = Schema.Struct({
+  workflowId: Schema.String,
+  layers: Schema.Array(DagTopologyLayer),
+  hasCycle: Schema.Boolean,
+  totalDepth: Schema.Number,
+}).annotate({ identifier: "DagTopologySnapshot" })
+
+export const DagExecutionSnapshot = Schema.Struct({
+  workflowId: Schema.String,
+  running: Schema.Array(Schema.String),
+  queued: Schema.Array(Schema.String),
+  ready: Schema.Array(Schema.String),
+  pending: Schema.Array(Schema.String),
+  blocked: Schema.Array(DagNodeBlockReason),
+  spawnBudget: Schema.Number,
+}).annotate({ identifier: "DagExecutionSnapshot" })
+
+export const DagCascadeImpact = Schema.Struct({
+  originNodeId: Schema.String,
+  affectedPendingNodeIds: Schema.Array(Schema.String),
+}).annotate({ identifier: "DagCascadeImpact" })
+
 // ============================================================================
 // Queries
 // ============================================================================
@@ -243,6 +277,50 @@ const dagGroup = HttpApiGroup.make("dag")
         identifier: "dag.getNodeLogs",
         summary: "Get DAG node logs",
         description: "Retrieve structured execution logs for a DAG node.",
+      }),
+    ),
+    HttpApiEndpoint.get("diagnoseBlock", `${root}/workflows/:workflowId/diagnose/block`, {
+      params: { workflowId: Schema.String },
+      query: WorkflowIdQuery,
+      success: described(Schema.Array(DagNodeBlockReason), "DAG node block diagnostics"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.diagnoseBlock",
+        summary: "Diagnose DAG node blocking",
+        description: "Read-only diagnostics for blocked/ready nodes in a DAG workflow.",
+      }),
+    ),
+    HttpApiEndpoint.get("diagnoseTopology", `${root}/workflows/:workflowId/diagnose/topology`, {
+      params: { workflowId: Schema.String },
+      query: WorkflowIdQuery,
+      success: described(DagTopologySnapshot, "DAG topology diagnostic snapshot"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.diagnoseTopology",
+        summary: "Diagnose DAG topology",
+        description: "Read-only topology layers and cycle status for a DAG workflow.",
+      }),
+    ),
+    HttpApiEndpoint.get("diagnoseSnapshot", `${root}/workflows/:workflowId/diagnose/snapshot`, {
+      params: { workflowId: Schema.String },
+      query: WorkflowIdQuery,
+      success: described(DagExecutionSnapshot, "DAG execution diagnostic snapshot"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.diagnoseSnapshot",
+        summary: "Diagnose DAG execution snapshot",
+        description: "Read-only node state distribution and spawn budget for a DAG workflow.",
+      }),
+    ),
+    HttpApiEndpoint.get("diagnoseCascade", `${root}/workflows/:workflowId/diagnose/cascade/:nodeId`, {
+      params: { workflowId: Schema.String, nodeId: Schema.String },
+      query: WorkflowIdQuery,
+      success: described(DagCascadeImpact, "DAG cascade impact diagnostic"),
+    }).annotateMerge(
+      OpenApi.annotations({
+        identifier: "dag.diagnoseCascade",
+        summary: "Diagnose DAG cascade impact",
+        description: "Read-only prediction of pending descendants affected by a node failure.",
       }),
     ),
   )

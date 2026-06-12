@@ -11,7 +11,11 @@
 // deferred to the integration test tier.
 // ============================================================================
 
-import { describe, it, expect, beforeEach } from 'bun:test'
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'bun:test'
+import { Effect } from 'effect'
+import { Flag } from '@opencode-ai/core/flag/flag'
+import * as Database from '@/storage/db'
+import { DAGSessionService } from '../session-service'
 import {
   validateReplanPreconditions,
   classifyReplanNodes,
@@ -19,11 +23,12 @@ import {
   applyReplanPatchToConfig,
   validateReplanPostConfig,
   buildReplanDbInputs,
+  WorkflowEngine,
   __internal_spawnedNodes,
   __internal_replanInFlight,
   __internal_concurrencyRegistry,
 } from '../workflow-engine'
-import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus, ReplanPatch } from '../types'
+import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus, ReplanPatch, ReplanPreviewResult } from '../types'
 
 // ---------------------------------------------------------------------------
 // Test helpers (mirror src/dag/session/__tests__/workflow-engine.test.ts)
@@ -597,6 +602,158 @@ describe('replan: DB input construction', () => {
       5,
     )
     expect(r.newMaxConcurrency).toBe(5)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Preview dry-run contract
+// ---------------------------------------------------------------------------
+
+describe('replan: preview dry-run contract', () => {
+  it('preview success result returns pre/post/delta and does not include history_id', () => {
+    const before = makeConfig([makeNodeConfig({ id: 'n1' })], 3)
+    const after = makeConfig([makeNodeConfig({ id: 'n1' }), makeNodeConfig({ id: 'n2' })], 5)
+    const result: ReplanPreviewResult = {
+      ok: true,
+      workflow_id: WID,
+      pre: {
+        config: before,
+        node_ids: [`${WID}::n1`],
+        max_concurrency: 3,
+        total_nodes: 1,
+      },
+      post: {
+        config: after,
+        node_ids: [`${WID}::n1`, `${WID}::n2`],
+        max_concurrency: 5,
+        total_nodes: 2,
+      },
+      delta: {
+        nodes_added: 1,
+        nodes_removed: 0,
+        nodes_updated: 0,
+        final_total: 2,
+        max_concurrency_changed: true,
+      },
+    }
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.pre.config.nodes.map((n) => n.id)).toEqual(['n1'])
+      expect(result.post.config.nodes.map((n) => n.id)).toEqual(['n1', 'n2'])
+      expect(result.delta).toEqual({
+        nodes_added: 1,
+        nodes_removed: 0,
+        nodes_updated: 0,
+        final_total: 2,
+        max_concurrency_changed: true,
+      })
+      expect('history_id' in result).toBe(false)
+    }
+  })
+
+  it('preview failure result returns reason/detail without history_id', () => {
+    const result: ReplanPreviewResult = {
+      ok: false,
+      reason: 'Cannot remove frozen nodes: wf::running',
+      detail: new Error('Cannot remove frozen nodes: wf::running'),
+    }
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toMatch(/frozen/)
+      expect(result.detail).toBeInstanceOf(Error)
+      expect('history_id' in result).toBe(false)
+    }
+  })
+})
+
+describe('replan: previewReplanWorkflow dry-run integration', () => {
+  const originalDb = Flag.OPENCODE_DB
+
+  beforeAll(() => {
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+  })
+
+  afterAll(() => {
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb
+    Database.Client.reset()
+  })
+
+  it('preview success returns pre/post/delta and leaves workflow, nodes, and history unchanged', () => {
+    const sessionService = Effect.runSync(DAGSessionService.make)
+    const engine = Effect.runSync(WorkflowEngine.make)
+    const n1 = makeNodeConfig({ id: 'n1', required: false })
+    const n2 = makeNodeConfig({ id: 'n2', required: false, dependencies: ['n1'] })
+    const workflow = Effect.runSync(sessionService.createWorkflow({
+      name: 'preview-success',
+      chatSessionId: 'chat-preview-success',
+      config: makeConfig([n1], 2),
+    }))
+    Effect.runSync(sessionService.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::n1`,
+      name: 'n1',
+      nodeName: 'n1',
+      nodeType: 'mock',
+      config: n1,
+    }))
+
+    const result = Effect.runSync(engine.previewReplanWorkflow!(workflow.id, {
+      workflow_id: workflow.id,
+      add_nodes: [n2],
+      new_max_concurrency: 4,
+    }))
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.pre.total_nodes).toBe(1)
+      expect(result.post.total_nodes).toBe(2)
+      expect(result.delta).toEqual({
+        nodes_added: 1,
+        nodes_removed: 0,
+        nodes_updated: 0,
+        final_total: 2,
+        max_concurrency_changed: true,
+      })
+    }
+    expect(Effect.runSync(sessionService.getWorkflow(workflow.id))!.config.max_concurrency).toBe(2)
+    expect(Effect.runSync(sessionService.listNodes(workflow.id)).map((n) => n.node_id)).toEqual([`${workflow.id}::n1`])
+    expect(Effect.runSync(sessionService.listHistory(workflow.id))).toEqual([])
+  })
+
+  it('preview failure returns reason/detail and leaves history unchanged', () => {
+    const sessionService = Effect.runSync(DAGSessionService.make)
+    const engine = Effect.runSync(WorkflowEngine.make)
+    const n1 = makeNodeConfig({ id: 'n1', required: false })
+    const workflow = Effect.runSync(sessionService.createWorkflow({
+      name: 'preview-failure',
+      chatSessionId: 'chat-preview-failure',
+      config: makeConfig([n1], 2),
+    }))
+    Effect.runSync(sessionService.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::n1`,
+      name: 'n1',
+      nodeName: 'n1',
+      nodeType: 'mock',
+      config: n1,
+    }))
+    Effect.runSync(sessionService.updateNodeStatus({ sessionId: `${workflow.id}::n1`, status: 'running' }))
+
+    const result = Effect.runSync(engine.previewReplanWorkflow!(workflow.id, {
+      workflow_id: workflow.id,
+      remove_nodes: [`${workflow.id}::n1`],
+    }))
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toMatch(/frozen/)
+      expect(result.detail).toBeTruthy()
+    }
+    expect(Effect.runSync(sessionService.listHistory(workflow.id))).toEqual([])
   })
 })
 

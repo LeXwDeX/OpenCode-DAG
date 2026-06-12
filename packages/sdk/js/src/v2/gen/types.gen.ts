@@ -1495,7 +1495,7 @@ export type DagNode = {
     [key: string]: unknown
   }
   start_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-  completed_at: string
+  completed_at: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN" | null
   end_time: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   duration_ms: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   parent_node: string
@@ -1592,6 +1592,40 @@ export type DagNodeLogResponse = {
   created_at: string
 }
 
+export type DagNodeBlockReason = {
+  nodeId: string
+  blocked: boolean
+  unsatisfiedDependencies: Array<string>
+  reason: "deps_unsatisfied" | "concurrency_saturated" | "condition_pending" | "ready" | "terminal"
+}
+
+export type DagTopologyLayer = {
+  depth: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  nodeIds: Array<string>
+}
+
+export type DagTopologySnapshot = {
+  workflowId: string
+  layers: Array<DagTopologyLayer>
+  hasCycle: boolean
+  totalDepth: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagExecutionSnapshot = {
+  workflowId: string
+  running: Array<string>
+  queued: Array<string>
+  ready: Array<string>
+  pending: Array<string>
+  blocked: Array<DagNodeBlockReason>
+  spawnBudget: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagCascadeImpact = {
+  originNodeId: string
+  affectedPendingNodeIds: Array<string>
+}
+
 export type DagPauseResponse = {
   status: string
 }
@@ -1601,10 +1635,6 @@ export type DagResumeResponse = {
 }
 
 export type DagCancelResponse = {
-  status: string
-}
-
-export type DagStartResponse = {
   status: string
 }
 
@@ -1623,6 +1653,10 @@ export type DagStepResponse =
       error?: string
     }
 
+export type DagStartResponse = {
+  status: string
+}
+
 export type DagReplanPatchBody = {
   add_nodes?: Array<unknown>
   remove_nodes?: Array<string>
@@ -1640,6 +1674,36 @@ export type DagReplanResultResponse =
       nodes_removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       nodes_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
       final_total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+    }
+  | {
+      ok: false
+      reason: string
+      detail?: unknown
+    }
+
+export type DagReplanPreviewResponse =
+  | {
+      ok: true
+      workflow_id: string
+      pre: {
+        config: unknown
+        node_ids: Array<string>
+        max_concurrency: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        total_nodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      post: {
+        config: unknown
+        node_ids: Array<string>
+        max_concurrency: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        total_nodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      }
+      delta: {
+        nodes_added: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        nodes_removed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        nodes_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        final_total: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        max_concurrency_changed: boolean
+      }
     }
   | {
       ok: false
@@ -4887,6 +4951,127 @@ export type DagGetNodeLogsResponses = {
 
 export type DagGetNodeLogsResponse = DagGetNodeLogsResponses[keyof DagGetNodeLogsResponses]
 
+export type DagDiagnoseBlockData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/diagnose/block"
+}
+
+export type DagDiagnoseBlockErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagDiagnoseBlockError = DagDiagnoseBlockErrors[keyof DagDiagnoseBlockErrors]
+
+export type DagDiagnoseBlockResponses = {
+  /**
+   * DAG node block diagnostics
+   */
+  200: Array<DagNodeBlockReason>
+}
+
+export type DagDiagnoseBlockResponse = DagDiagnoseBlockResponses[keyof DagDiagnoseBlockResponses]
+
+export type DagDiagnoseTopologyData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/diagnose/topology"
+}
+
+export type DagDiagnoseTopologyErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagDiagnoseTopologyError = DagDiagnoseTopologyErrors[keyof DagDiagnoseTopologyErrors]
+
+export type DagDiagnoseTopologyResponses = {
+  /**
+   * DAG topology diagnostic snapshot
+   */
+  200: DagTopologySnapshot
+}
+
+export type DagDiagnoseTopologyResponse = DagDiagnoseTopologyResponses[keyof DagDiagnoseTopologyResponses]
+
+export type DagDiagnoseSnapshotData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/diagnose/snapshot"
+}
+
+export type DagDiagnoseSnapshotErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagDiagnoseSnapshotError = DagDiagnoseSnapshotErrors[keyof DagDiagnoseSnapshotErrors]
+
+export type DagDiagnoseSnapshotResponses = {
+  /**
+   * DAG execution diagnostic snapshot
+   */
+  200: DagExecutionSnapshot
+}
+
+export type DagDiagnoseSnapshotResponse = DagDiagnoseSnapshotResponses[keyof DagDiagnoseSnapshotResponses]
+
+export type DagDiagnoseCascadeData = {
+  body?: never
+  path: {
+    workflowId: string
+    nodeId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/diagnose/cascade/{nodeId}"
+}
+
+export type DagDiagnoseCascadeErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagDiagnoseCascadeError = DagDiagnoseCascadeErrors[keyof DagDiagnoseCascadeErrors]
+
+export type DagDiagnoseCascadeResponses = {
+  /**
+   * DAG cascade impact diagnostic
+   */
+  200: DagCascadeImpact
+}
+
+export type DagDiagnoseCascadeResponse = DagDiagnoseCascadeResponses[keyof DagDiagnoseCascadeResponses]
+
 export type DagMutationPauseData = {
   body?: never
   path: {
@@ -4977,36 +5162,6 @@ export type DagMutationCancelResponses = {
 
 export type DagMutationCancelResponse = DagMutationCancelResponses[keyof DagMutationCancelResponses]
 
-export type DagMutationStartData = {
-  body?: never
-  path: {
-    workflowId: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/dag/workflows/{workflowId}/start"
-}
-
-export type DagMutationStartErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type DagMutationStartError = DagMutationStartErrors[keyof DagMutationStartErrors]
-
-export type DagMutationStartResponses = {
-  /**
-   * Workflow start confirmation
-   */
-  200: DagStartResponse
-}
-
-export type DagMutationStartResponse = DagMutationStartResponses[keyof DagMutationStartResponses]
-
 export type DagMutationStepData = {
   body?: never
   path: {
@@ -5037,6 +5192,36 @@ export type DagMutationStepResponses = {
 
 export type DagMutationStepResponse = DagMutationStepResponses[keyof DagMutationStepResponses]
 
+export type DagMutationStartData = {
+  body?: never
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/start"
+}
+
+export type DagMutationStartErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationStartError = DagMutationStartErrors[keyof DagMutationStartErrors]
+
+export type DagMutationStartResponses = {
+  /**
+   * Workflow start confirmation
+   */
+  200: DagStartResponse
+}
+
+export type DagMutationStartResponse = DagMutationStartResponses[keyof DagMutationStartResponses]
+
 export type DagMutationReplanData = {
   body?: DagReplanPatchBody
   path: {
@@ -5066,6 +5251,37 @@ export type DagMutationReplanResponses = {
 }
 
 export type DagMutationReplanResponse = DagMutationReplanResponses[keyof DagMutationReplanResponses]
+
+export type DagMutationReplanPreviewData = {
+  body?: DagReplanPatchBody
+  path: {
+    workflowId: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/workflows/{workflowId}/replan/preview"
+}
+
+export type DagMutationReplanPreviewErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+}
+
+export type DagMutationReplanPreviewError = DagMutationReplanPreviewErrors[keyof DagMutationReplanPreviewErrors]
+
+export type DagMutationReplanPreviewResponses = {
+  /**
+   * Workflow replan preview result
+   */
+  200: DagReplanPreviewResponse
+}
+
+export type DagMutationReplanPreviewResponse =
+  DagMutationReplanPreviewResponses[keyof DagMutationReplanPreviewResponses]
 
 export type DagMutationCreateData = {
   body?: DagCreateWorkflowBody

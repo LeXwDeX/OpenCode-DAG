@@ -5,7 +5,7 @@
 /**
  * DAG Template Registry — pure factory module
  *
- * 9 pre-built DAG workflow templates covering common multi-agent patterns.
+ * 10 pre-built DAG workflow templates covering common multi-agent patterns.
  *
  * Constraints:
  * - NO service, DB, or Effect-runtime imports. Only types from dag/session/types.ts.
@@ -32,6 +32,7 @@ export const DAG_TEMPLATE_IDS = [
   "patcher-assembly",
   "comprehensive-review",
   "integration-test",
+  "product-e2e-harness",
 ] as const
 
 export type DAGTemplateId = (typeof DAG_TEMPLATE_IDS)[number]
@@ -88,7 +89,7 @@ function mkNode(
 }
 
 // ---------------------------------------------------------------------------
-// 9 templates
+// 10 templates
 // ---------------------------------------------------------------------------
 
 const productDocAnalysis: DAGTemplate = {
@@ -349,6 +350,48 @@ const integrationTest: DAGTemplate = {
   },
 }
 
+const productE2EHarness: DAGTemplate = {
+  id: "product-e2e-harness",
+  name: "Product E2E Harness",
+  description: "Dogfood demo for DAG product UI create/start, inspect, replan, and complete flow.",
+  tags: ["product", "dogfood", "e2e"],
+  requiredAgents: ["general", "explore"],
+  create(input) {
+    return {
+      name: "product-e2e-harness",
+      nodes: [
+        mkNode(
+          "setup",
+          "explore",
+          [],
+          `用 explore 身份搜索目标相关的文档与代码证据。目标：${brief(input)}`,
+        ),
+        mkNode(
+          "optional-gate",
+          "general",
+          ["setup"],
+          `用 general 身份尝试执行可选分析步骤。此节点可能失败但不阻塞主线。目标：${brief(input)}`,
+          false,
+        ),
+        mkNode(
+          "blocked-leaf",
+          "general",
+          ["optional-gate"],
+          `等待 optional-gate 完成后执行。如果 optional-gate 失败此节点将被 cascade-skip。目标：${brief(input)}`,
+          false,
+        ),
+        mkNode(
+          "finalize",
+          "general",
+          ["setup"],
+          `用 general 身份综合 setup 的发现，输出最终结论。目标：${brief(input)}`,
+        ),
+      ],
+      max_concurrency: 3,
+    }
+  },
+}
+
 // ---------------------------------------------------------------------------
 // Registry
 // ---------------------------------------------------------------------------
@@ -363,6 +406,7 @@ const registry: Record<DAGTemplateId, DAGTemplate> = {
   "patcher-assembly": patcherAssembly,
   "comprehensive-review": comprehensiveReview,
   "integration-test": integrationTest,
+  "product-e2e-harness": productE2EHarness,
 }
 
 // ---------------------------------------------------------------------------

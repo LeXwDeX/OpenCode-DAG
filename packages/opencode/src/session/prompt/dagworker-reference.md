@@ -115,6 +115,58 @@ Found N workflow(s):
    Duration: 12345ms
 ```
 
+### Action: `template_list`
+
+**Purpose:** list the built-in reusable DAG templates available to the orchestrating agent.
+
+**Input:** `{ action: "template_list" }`
+
+**Output:** JSON array with `id`, `name`, `description`, `tags`, and `requiredAgents`.
+
+### Action: `template_show`
+
+**Purpose:** render one built-in template into a concrete `DAGConfig` without starting it.
+
+**Input:**
+```ts
+{
+  action: "template_show"
+  template_id: string
+  template_input?: string   // JSON-stringified DAGTemplateInput. Defaults to { goal: "" }.
+}
+```
+
+**Output:** template metadata plus `config`, the generated `DAGConfig`.
+
+### Action: `template_start`
+
+**Purpose:** render one built-in template and immediately start the generated workflow.
+
+**Input:**
+```ts
+{
+  action: "template_start"
+  template_id: string
+  template_input: string    // JSON-stringified DAGTemplateInput; requires at least { goal: string }.
+}
+```
+
+**Output:** `{ workflowId, templateId, message, nodes }`.
+
+### Template authoring, discovery, and inspection
+
+Templates are code-level factories, not chat-session records:
+
+| Need | Canonical path / action |
+|---|---|
+| Write or change a built-in template | Edit `packages/opencode/src/dag/integration/templates/index.ts`: add a `DAGTemplate`, append its id to `DAG_TEMPLATE_IDS`, and register it in `registry`. |
+| Discover templates as an agent | `dagworker { action: "template_list" }`. |
+| Read one template's generated `DAGConfig` | `dagworker { action: "template_show", template_id, template_input? }`. |
+| Start from a template | `dagworker { action: "template_start", template_id, template_input }`. |
+| Inspect a hand-written workflow created by an agent | It is not a named template. After `dagworker start`, inspect the workflow instance with `list` / `status` / `node_detail` / `history` / `logs`. |
+
+There is no runtime custom-template store. If an agent hand-writes a JSON `workflow` and calls `dagworker start`, the resulting object is a workflow instance persisted under its `workflowId`; it does not appear in `template_list`. To make that shape reusable as a named template, move it into `templates/index.ts` and register it.
+
 ## 3. Tool: `node_complete`
 
 This tool is visible to **child agent sessions** inside workflow nodes — not to the orchestrating agent. Each node MUST call it exactly once when its work is done.

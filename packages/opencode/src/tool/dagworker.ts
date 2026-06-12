@@ -25,7 +25,7 @@ import { WorkflowEngine, getReadyNodes } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import { DAGSessionService } from "../dag/session/session-service"
 import type { IDAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, ReplanPatch } from "../dag/session/types"
+import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, ReplanPatch, ReplanResult } from "../dag/session/types"
 import {
   bootstrapWorkflowFromConfig,
   type WorkerTypeAgentRegistry,
@@ -100,6 +100,9 @@ export const Parameters = Schema.Struct({
   }),
   patch: Schema.optional(Schema.String).annotate({
     description: "JSON-stringified ReplanPatch for 'replan' action. Shape: {workflow_id, add_nodes?, remove_nodes?, update_nodes?, new_max_concurrency?, changed_by?}",
+  }),
+  previewOnly: Schema.optional(Schema.Boolean).annotate({
+    description: "For 'replan' action: when true, validates and previews the patch without applying it.",
   }),
   template_id: Schema.optional(Schema.String).annotate({
     description: `Template id for 'template_show' / 'template_start'. One of: ${DAG_TEMPLATE_IDS.join(", ")}.`,
@@ -427,7 +430,41 @@ export const DAGWorkerTool = Tool.define(
               new Error(`No registered engine for workflow '${parsedPatch.workflow_id}'. Replan requires a live running workflow.`)
             )
           }
-          const result = yield* engine.replanWorkflow(parsedPatch.workflow_id, parsedPatch)
+          if (params.previewOnly === true) {
+            const preview = yield* (engine.previewReplanWorkflow
+              ? engine.previewReplanWorkflow(parsedPatch.workflow_id, parsedPatch)
+              : Effect.succeed({ ok: false as const, reason: "preview_unavailable" }))
+            if (!preview.ok) {
+              const previewDetail = "detail" in preview ? preview.detail : undefined
+              return {
+                title: `Replan preview rejected: ${parsedPatch.workflow_id}`,
+                output: formatOutput(
+                  `Replan preview rejected for ${parsedPatch.workflow_id}:\n  reason: ${preview.reason}${previewDetail ? `\n  detail: ${JSON.stringify(previewDetail)}` : ''}`
+                ),
+                metadata: {
+                  workflowId: parsedPatch.workflow_id,
+                  action: 'replan',
+                  previewOnly: true,
+                  ok: false,
+                  reason: preview.reason,
+                } as Record<string, unknown>,
+                attachments: [],
+              }
+            }
+            return {
+              title: `Replan preview: ${preview.workflow_id}`,
+              output: formatOutput(JSON.stringify(preview, null, 2)),
+              metadata: {
+                workflowId: preview.workflow_id,
+                action: 'replan',
+                previewOnly: true,
+                ok: true,
+              } as Record<string, unknown>,
+              attachments: [],
+            }
+          }
+
+          const result: ReplanResult = yield* engine.replanWorkflow(parsedPatch.workflow_id, parsedPatch)
 
           if (!result.ok) {
             return {

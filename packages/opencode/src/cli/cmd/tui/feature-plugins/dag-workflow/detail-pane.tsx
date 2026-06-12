@@ -18,12 +18,13 @@
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import type { JSX } from "solid-js"
 import type { DAGNodeSession } from "@/dag/session/types"
-import type { WorkflowHistory, NodeLog, Timeline } from "./data"
+import type { WorkflowHistory, NodeLog, Timeline, InspectDiagnosticsApi } from "./data"
 import { LiveTicker } from "./live-ticker"
 import { NodeDialog } from "./node-dialog"
 import { WorkflowHistoryPanel } from "./history-panel"
 import { NodeLogsPanel } from "./node-logs-panel"
 import { TimelinePanel } from "./timeline-panel"
+import { InspectPanel } from "./inspect-panel"
 import type { Lang } from "./i18n"
 
 export function DetailPane(props: {
@@ -41,6 +42,7 @@ export function DetailPane(props: {
   timeline: Timeline | null
   timelineError: string | null
   timelineLoading: boolean
+  inspect: InspectDiagnosticsApi
   event: TuiPluginApi["event"]
   nodes: DAGNodeSession[]
 }): JSX.Element {
@@ -71,6 +73,16 @@ export function DetailPane(props: {
           timeline={props.timeline}
           loading={props.timelineLoading}
           error={props.timelineError}
+        />
+        <InspectPanel
+          lang={props.lang}
+          block={props.inspect.block()}
+          topology={props.inspect.topology()}
+          snapshot={props.inspect.snapshot()}
+          cascade={props.inspect.cascade()}
+          selectedNodeId={props.node?.node_id ?? null}
+          loading={props.inspect.loading()}
+          error={props.inspect.error()}
         />
       </scrollbox>
       <LiveTicker lang={props.lang} event={props.event} nodes={props.nodes} />

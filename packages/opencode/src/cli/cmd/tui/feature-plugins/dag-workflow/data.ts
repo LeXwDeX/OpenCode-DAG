@@ -21,6 +21,12 @@ import type {
   DAGWorkflowSession,
   DAGWorkflowStatus,
 } from "@/dag/session/types"
+import type {
+  CascadeImpact,
+  ExecutionSnapshot,
+  NodeBlockReason,
+  TopologySnapshot,
+} from "@/dag/query/probe-types"
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 
 type Client = TuiPluginApi["client"]
@@ -421,6 +427,110 @@ export type WorkflowStatsApi = {
   refresh: () => void
 }
 
+export type InspectDiagnosticsApi = {
+  block: Accessor<NodeBlockReason[]>
+  topology: Accessor<TopologySnapshot | null>
+  snapshot: Accessor<ExecutionSnapshot | null>
+  cascade: Accessor<CascadeImpact | null>
+  error: Accessor<string | null>
+  loading: Accessor<boolean>
+  refresh: () => void
+}
+
+export async function diagnoseBlock(client: Client, workflowId: string): Promise<NodeBlockReason[]> {
+  const res = await client.dag.diagnoseBlock({ workflowId })
+  return [...(res.data ?? [])] as NodeBlockReason[]
+}
+
+export async function diagnoseTopology(client: Client, workflowId: string): Promise<TopologySnapshot | null> {
+  const res = await client.dag.diagnoseTopology({ workflowId })
+  return (res.data ?? null) as TopologySnapshot | null
+}
+
+export async function diagnoseSnapshot(client: Client, workflowId: string): Promise<ExecutionSnapshot | null> {
+  const res = await client.dag.diagnoseSnapshot({ workflowId })
+  return (res.data ?? null) as ExecutionSnapshot | null
+}
+
+export async function diagnoseCascade(
+  client: Client,
+  workflowId: string,
+  nodeId: string | null | undefined,
+): Promise<CascadeImpact | null> {
+  if (!nodeId) return null
+  const res = await client.dag.diagnoseCascade({ workflowId, nodeId })
+  return (res.data ?? null) as CascadeImpact | null
+}
+
+export function useInspectDiagnostics(props: {
+  client: Client
+  event: EventBus
+  workflowId: Accessor<string | undefined>
+  selectedNodeId: Accessor<string | null | undefined>
+}): InspectDiagnosticsApi {
+  const [block, setBlock] = createSignal<NodeBlockReason[]>([])
+  const [topology, setTopology] = createSignal<TopologySnapshot | null>(null)
+  const [snapshot, setSnapshot] = createSignal<ExecutionSnapshot | null>(null)
+  const [cascade, setCascade] = createSignal<CascadeImpact | null>(null)
+  const [error, setError] = createSignal<string | null>(null)
+  const [loading, setLoading] = createSignal(false)
+  let cancelled = false
+  let gen = 0
+
+  async function load() {
+    const workflowId = props.workflowId()
+    if (!workflowId) {
+      gen++
+      setBlock([])
+      setTopology(null)
+      setSnapshot(null)
+      setCascade(null)
+      setError(null)
+      setLoading(false)
+      return
+    }
+    const my = ++gen
+    setLoading(true)
+    try {
+      const [nextBlock, nextTopology, nextSnapshot, nextCascade] = await Promise.all([
+        diagnoseBlock(props.client, workflowId),
+        diagnoseTopology(props.client, workflowId),
+        diagnoseSnapshot(props.client, workflowId),
+        diagnoseCascade(props.client, workflowId, props.selectedNodeId()),
+      ])
+      if (cancelled || my !== gen) return
+      setBlock(nextBlock)
+      setTopology(nextTopology)
+      setSnapshot(nextSnapshot)
+      setCascade(nextCascade)
+      setError(null)
+    } catch (e) {
+      if (cancelled || my !== gen) return
+      setError(errMessage(e))
+    } finally {
+      if (!cancelled && my === gen) setLoading(false)
+    }
+  }
+
+  createEffect(() => {
+    props.workflowId()
+    props.selectedNodeId()
+    void load()
+  })
+
+  const offs = wfEvents(props.workflowId).map((sub) =>
+    props.event.on(sub.name as EventSubscription["name"] & Parameters<EventBus["on"]>[0], (e) => {
+      if (sub.filter?.(e.properties as Record<string, unknown>) ?? true) void load()
+    }),
+  )
+  onCleanup(() => {
+    cancelled = true
+    for (const off of offs) off()
+  })
+
+  return { block, topology, snapshot, cascade, error, loading, refresh: () => void load() }
+}
+
 export function mapWorkflowHistory(h: {
   history_id: string
   workflow_id: string
@@ -665,10 +775,8 @@ export function useWorkflowStats(props: {
 // SDK 读写分离：只读走 client.dag.*（Dag class），状态变更走
 // client.dagMutation.*（DagMutation class）。所有 wrapper 仅转发到 server
 // POST 路由，由 WorkflowEngine + sessionService 状态机校验，TUI 不直接改状态。
-// D-TUI-RESERVE (design-only): future inspect/probe wrappers may be added here only
-// after probe runtime / inspect is explicitly activated. Until then, do not add
-// SDK calls, routes, or client methods for inspect; TUI remains limited to the
-// existing read APIs and dagMutation controls.
+// Inspect/probe wrappers are read-only and stay on client.dag.*. They are for
+// the TUI inspect panel only; agent-facing actions remain outside this module.
 // ============================================================================
 
 export async function pauseWorkflow(client: Client, workflowId: string) {
@@ -706,6 +814,18 @@ export async function replanWorkflow(
   patch: ReplanPatchInput,
 ) {
   return client.dagMutation.replan({ workflowId, dagReplanPatchBody: patch })
+}
+
+export async function replanPreview(
+  client: Client,
+  workflowId: string,
+  patch: ReplanPatchInput,
+) {
+  return (
+    client.dagMutation as typeof client.dagMutation & {
+      replanPreview(input: { workflowId: string; dagReplanPatchBody: ReplanPatchInput }): Promise<{ data?: unknown }>
+    }
+  ).replanPreview({ workflowId, dagReplanPatchBody: patch })
 }
 
 export async function createWorkflow(

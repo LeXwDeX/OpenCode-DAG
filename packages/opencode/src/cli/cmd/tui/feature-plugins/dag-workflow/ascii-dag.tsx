@@ -77,6 +77,22 @@ export function nodeStatusIcon(status: DAGNodeStatus): { icon: string } {
   return { icon: NODE_STATUS_ICON[status] ?? "?" }
 }
 
+export type AsciiDagWidthInput = {
+  availableWidth?: number
+  layerCount: number
+  requestedNodeWidth?: number
+}
+
+export function calculateAsciiDagNodeWidth(input: AsciiDagWidthInput): number {
+  const requested = input.requestedNodeWidth ?? 20
+  if (input.availableWidth === undefined || input.layerCount === 0) return requested
+  if (input.layerCount === 1) return Math.min(requested, Math.max(8, input.availableWidth))
+  const connectorWidth = Math.max(0, input.layerCount - 1) * 5
+  const availableForNodes = input.availableWidth - connectorWidth
+  if (availableForNodes >= requested * input.layerCount) return requested
+  return Math.max(8, Math.floor(availableForNodes / input.layerCount))
+}
+
 /**
  * AsciiDag — renders topological columns (left→right) with node boxes and ──▶ arrows.
  */
@@ -85,14 +101,21 @@ export function AsciiDag(props: {
   nodes: DAGNodeSession[]
   selectedNodeID?: string
   onSelect: (id: string) => void
+  availableWidth?: number
   nodeWidth?: number
   nodeHeight?: number
 }): JSX.Element {
   const { theme } = useTheme()
-  const nodeWidth = () => props.nodeWidth ?? 20
   const nodeHeight = () => props.nodeHeight ?? 3
 
   const layers = createMemo(() => topologicalLayers(props.nodes))
+  const nodeWidth = createMemo(() =>
+    calculateAsciiDagNodeWidth({
+      availableWidth: props.availableWidth,
+      layerCount: layers().length,
+      requestedNodeWidth: props.nodeWidth,
+    }),
+  )
   const nodeMap = createMemo(() =>
     Object.fromEntries(props.nodes.map((n) => [n.node_id, n])),
   )

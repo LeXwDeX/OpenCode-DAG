@@ -144,6 +144,11 @@ const instanceApiRoutes = HttpApiBuilder.layer(InstanceHttpApi).pipe(
     v2Handlers,
     tuiHandlers,
     workspaceHandlers,
+    // DAG handler yield DAGQueryTag/DAGSessionService.make; the flat-array
+    // Layer.provide in createRoutes() does not cross-wire sibling outputs
+    // into inner handler scopes, so DAGQueryTag must be explicitly provided
+    // here to satisfy the DAG handler's Effect.gen requirements.
+    DAGLayer.defaultLayer,
   ]),
 )
 

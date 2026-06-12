@@ -6,7 +6,7 @@
  * - nodeStatusIcon: all statuses produce correct icons
  */
 import { describe, it, expect } from "bun:test"
-import { topologicalLayers, nodeStatusIcon } from "./ascii-dag"
+import { calculateAsciiDagNodeWidth, topologicalLayers, nodeStatusIcon } from "./ascii-dag"
 import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 
 /**
@@ -173,5 +173,46 @@ describe("WP4 ascii-dag — nodeStatusIcon", () => {
 
   it("returns ◍ for queued", () => {
     expect(nodeStatusIcon("queued").icon).toBe("\u25ce")
+  })
+})
+
+describe("WP-A ascii-dag — adaptive node width", () => {
+  it("preserves the default readable width when the available width can fit all layers", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 80, layerCount: 3 })).toBe(20)
+  })
+
+  it("compacts node width for narrow layouts instead of keeping the fixed default", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 36, layerCount: 3 })).toBe(8)
+  })
+
+  it("compacts a single narrow layer instead of keeping the fixed default", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 12, layerCount: 1 })).toBe(12)
+  })
+
+  it("preserves the minimum node width for a single layer narrower than the minimum", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 4, layerCount: 1 })).toBe(8)
+  })
+
+  it("preserves no-render width semantics for zero layers", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 4, layerCount: 0 })).toBe(20)
+  })
+
+  it("preserves the requested width for a single layer when the available width can fit it", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 80, layerCount: 1 })).toBe(20)
+  })
+
+  it("respects an explicit smaller node width without widening it", () => {
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 80, layerCount: 3, requestedNodeWidth: 12 })).toBe(12)
+  })
+
+  it("does not change topologicalLayers semantics while adding width adaptation", () => {
+    const nodes = [
+      makeNode("a", "completed", []),
+      makeNode("b", "running", ["a"]),
+      makeNode("c", "pending", ["b"]),
+    ]
+    const layers = topologicalLayers(nodes)
+    expect(calculateAsciiDagNodeWidth({ availableWidth: 36, layerCount: layers.length })).toBe(8)
+    expect(layers).toEqual([["a"], ["b"], ["c"]])
   })
 })

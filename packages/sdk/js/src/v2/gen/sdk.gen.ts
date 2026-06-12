@@ -25,6 +25,14 @@ import type {
   ConfigUpdateErrors,
   ConfigUpdateResponses,
   DagCreateWorkflowBody,
+  DagDiagnoseBlockErrors,
+  DagDiagnoseBlockResponses,
+  DagDiagnoseCascadeErrors,
+  DagDiagnoseCascadeResponses,
+  DagDiagnoseSnapshotErrors,
+  DagDiagnoseSnapshotResponses,
+  DagDiagnoseTopologyErrors,
+  DagDiagnoseTopologyResponses,
   DagGetNodeLogsErrors,
   DagGetNodeLogsResponses,
   DagGetStatsErrors,
@@ -46,6 +54,8 @@ import type {
   DagMutationPauseErrors,
   DagMutationPauseResponses,
   DagMutationReplanErrors,
+  DagMutationReplanPreviewErrors,
+  DagMutationReplanPreviewResponses,
   DagMutationReplanResponses,
   DagMutationResumeErrors,
   DagMutationResumeResponses,
@@ -983,6 +993,136 @@ export class Dag extends HeyApiClient {
       ...params,
     })
   }
+
+  /**
+   * Diagnose DAG node blocking
+   *
+   * Read-only diagnostics for blocked/ready nodes in a DAG workflow.
+   */
+  public diagnoseBlock<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDiagnoseBlockResponses, DagDiagnoseBlockErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/diagnose/block",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Diagnose DAG topology
+   *
+   * Read-only topology layers and cycle status for a DAG workflow.
+   */
+  public diagnoseTopology<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDiagnoseTopologyResponses, DagDiagnoseTopologyErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/diagnose/topology",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Diagnose DAG execution snapshot
+   *
+   * Read-only node state distribution and spawn budget for a DAG workflow.
+   */
+  public diagnoseSnapshot<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDiagnoseSnapshotResponses, DagDiagnoseSnapshotErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/diagnose/snapshot",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Diagnose DAG cascade impact
+   *
+   * Read-only prediction of pending descendants affected by a node failure.
+   */
+  public diagnoseCascade<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      nodeId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "path", key: "nodeId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDiagnoseCascadeResponses, DagDiagnoseCascadeErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/diagnose/cascade/{nodeId}",
+      ...options,
+      ...params,
+    })
+  }
 }
 
 export class DagMutation extends HeyApiClient {
@@ -1083,38 +1223,6 @@ export class DagMutation extends HeyApiClient {
   }
 
   /**
-   * Start an existing pending DAG workflow
-   *
-   * Starts an existing pending workflow without creating workflow or node rows. Non-pending workflows return their current status.
-   */
-  public start<ThrowOnError extends boolean = false>(
-    parameters: {
-      workflowId: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "workflowId" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<DagMutationStartResponses, DagMutationStartErrors, ThrowOnError>({
-      url: "/dag/workflows/{workflowId}/start",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
    * Step a paused DAG workflow (execute 1 ready node)
    *
    * Executes exactly one ready node to completion or failure while the workflow remains paused. Returns not_paused if the workflow isn't paused, or no_ready_nodes if no pending nodes with satisfied dependencies exist.
@@ -1141,6 +1249,38 @@ export class DagMutation extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<DagMutationStepResponses, DagMutationStepErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/step",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Start an existing pending DAG workflow
+   *
+   * Starts an existing pending workflow without creating workflow or node rows. Non-pending workflows return their current status.
+   */
+  public start<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagMutationStartResponses, DagMutationStartErrors, ThrowOnError>({
+      url: "/dag/workflows/{workflowId}/start",
       ...options,
       ...params,
     })
@@ -1175,6 +1315,49 @@ export class DagMutation extends HeyApiClient {
     )
     return (options?.client ?? this.client).post<DagMutationReplanResponses, DagMutationReplanErrors, ThrowOnError>({
       url: "/dag/workflows/{workflowId}/replan",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Preview a DAG workflow replan
+   *
+   * Dry-runs a running DAG workflow replan and returns pre/post/delta without touching persistence, history, runtime registries, or events.
+   */
+  public replanPreview<ThrowOnError extends boolean = false>(
+    parameters: {
+      workflowId: string
+      directory?: string
+      workspace?: string
+      dagReplanPatchBody?: DagReplanPatchBody
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "workflowId" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { key: "dagReplanPatchBody", map: "body" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      DagMutationReplanPreviewResponses,
+      DagMutationReplanPreviewErrors,
+      ThrowOnError
+    >({
+      url: "/dag/workflows/{workflowId}/replan/preview",
       ...options,
       ...params,
       headers: {

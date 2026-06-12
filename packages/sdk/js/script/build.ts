@@ -58,6 +58,22 @@ if (sseTypesPatched === sseTypesSource) {
 }
 await Bun.write(sseTypesPath, sseTypesPatched)
 
+// Patch a generated mismatch: the DAG HTTP schema allows `completed_at: null`
+// for pending/running nodes, but the generated v2 type drops that null arm.
+// Keep the SDK type aligned with the runtime wire shape.
+const dagTypesPath = "./src/v2/gen/types.gen.ts"
+const dagTypesSource = await Bun.file(dagTypesPath).text()
+const dagCompletedAt =
+  "    completed_at: number | 'NaN' | 'Infinity' | '-Infinity' | 'Infinity' | '-Infinity' | 'NaN';"
+const dagTypesPatched = dagTypesSource.replace(
+  `${dagCompletedAt}\n    end_time: number | 'NaN' | 'Infinity' | '-Infinity' | 'Infinity' | '-Infinity' | 'NaN';\n    duration_ms: number | 'NaN' | 'Infinity' | '-Infinity' | 'Infinity' | '-Infinity' | 'NaN';\n    parent_node: string;`,
+  `${dagCompletedAt.slice(0, -1)} | null;\n    end_time: number | 'NaN' | 'Infinity' | '-Infinity' | 'Infinity' | '-Infinity' | 'NaN';\n    duration_ms: number | 'NaN' | 'Infinity' | '-Infinity' | 'Infinity' | '-Infinity' | 'NaN';\n    parent_node: string;`,
+)
+if (dagTypesPatched === dagTypesSource) {
+  throw new Error(`DagNode completed_at nullability patch did not apply; generated output may have changed (${dagTypesPath})`)
+}
+await Bun.write(dagTypesPath, dagTypesPatched)
+
 await $`bun prettier --write src/gen`
 await $`bun prettier --write src/v2`
 await $`rm -rf dist`

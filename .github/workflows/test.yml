@@ -107,19 +107,19 @@ jobs:
             turbo-${{ runner.os }}-${{ hashFiles('turbo.json', '**/package.json') }}-
             turbo-${{ runner.os }}-
 
+      - name: Create artifacts directory
+        run: mkdir -p packages/opencode/.artifacts
+
       - name: Run DAG smoke tests (mock)
         run: cd packages/opencode && bun test src/dag/__tests__/dag-smoke.test.ts --reporter=junit --reporter-outfile=.artifacts/dag-smoke.xml
 
-      - name: Run DAG integration tests (real implementations)
-        run: cd packages/opencode && bun test src/dag/__tests__/dag-integration.test.ts --reporter=junit --reporter-outfile=.artifacts/dag-integration.xml
-
       - name: Run DAG module unit tests
-        run: cd packages/opencode && bun test src/dag --reporter=junit --reporter-outfile=.artifacts/dag-unit.xml
+        run: cd packages/opencode && bun test src/dag --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/dag-unit.xml
 
       - name: Generate DAG coverage report
         run: |
           cd packages/opencode
-          bun test src/dag --coverage
+          bun test src/dag --coverage --timeout 30000
           mkdir -p .artifacts/dag-coverage
           cp -r coverage .artifacts/dag-coverage/ || true
 

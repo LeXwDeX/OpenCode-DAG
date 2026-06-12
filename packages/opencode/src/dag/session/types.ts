@@ -686,6 +686,32 @@ export type ReplanResult =
     }
   | { ok: false; reason: string; detail?: unknown }
 
+export type ReplanPreviewResult =
+  | {
+      ok: true
+      workflow_id: string
+      pre: {
+        config: DAGConfig
+        node_ids: string[]
+        max_concurrency: number
+        total_nodes: number
+      }
+      post: {
+        config: DAGConfig
+        node_ids: string[]
+        max_concurrency: number
+        total_nodes: number
+      }
+      delta: {
+        nodes_added: number
+        nodes_removed: number
+        nodes_updated: number
+        final_total: number
+        max_concurrency_changed: boolean
+      }
+    }
+  | { ok: false; reason: string; detail?: unknown }
+
 // ============================================================================
 // 9. Service Input Types (decoupled from session-service to keep A-layer pure)
 // ============================================================================

@@ -8,7 +8,7 @@
  *
  * Acceptance:
  * - running  → pause + cancel + replan enabled; resume disabled
- * - paused   → resume + cancel enabled; pause + replan disabled
+ * - paused   → resume + cancel + replan + step enabled; pause disabled
  * - terminal (completed/failed/cancelled) + pending → every action disabled
  */
 import { describe, it, expect } from "bun:test"
@@ -27,13 +27,13 @@ describe("ControlBar — controlBarActions gating", () => {
     })
   })
 
-  it("paused enables resume, cancel, step (not pause, not replan)", () => {
+  it("paused enables resume, cancel, step, replan (not pause)", () => {
     expect(controlBarActions("paused")).toEqual({
       start: false,
       pause: false,
       resume: true,
       cancel: true,
-      replan: false,
+      replan: true,
       step: true,
     })
   })
@@ -131,7 +131,7 @@ describe("WP4-A: ControlBar loading does not affect controlBarActions", () => {
     expect(actions.cancel).toBe(true)
     expect(actions.step).toBe(true)
     expect(actions.pause).toBe(false)
-    expect(actions.replan).toBe(false)
+    expect(actions.replan).toBe(true)
     expect(actions.start).toBe(false)
   })
 

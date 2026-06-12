@@ -13,6 +13,14 @@ import {
 } from "../index"
 import type { DAGConfig } from "../../../session/types"
 import { RequiredNodesValidator } from "../../../session/required-nodes-validator"
+import {
+  applyReplanPatchToConfig,
+  buildReplanDbInputs,
+  classifyReplanNodes,
+  validateFrozenAndExistence,
+  validateReplanPreconditions,
+} from "../../../session/execution-core"
+import type { DAGNodeSession, DAGNodeStatus } from "../../../session/types"
 
 const ALLOWED_AGENTS = [
   "archgate",
@@ -35,6 +43,7 @@ const EXPECTED_IDS = [
   "patcher-assembly",
   "comprehensive-review",
   "integration-test",
+  "product-e2e-harness",
 ] as const
 
 const DEFAULT_INPUT: DAGTemplateInput = {
@@ -76,16 +85,16 @@ function hasCycle(nodes: { id: string; dependencies: string[] }[]): boolean {
 
 describe("DAG Template Registry", () => {
   describe("template catalogue", () => {
-    it("exposes exactly 9 template ids", () => {
-      expect(DAG_TEMPLATE_IDS.length).toBe(9)
+    it("exposes exactly 10 template ids", () => {
+      expect(DAG_TEMPLATE_IDS.length).toBe(10)
     })
 
     it("template ids match the expected set", () => {
       expect([...DAG_TEMPLATE_IDS].sort()).toEqual([...EXPECTED_IDS].sort())
     })
 
-    it("listDAGTemplates returns 9 templates", () => {
-      expect(listDAGTemplates()).toHaveLength(9)
+    it("listDAGTemplates returns 10 templates", () => {
+      expect(listDAGTemplates()).toHaveLength(10)
     })
 
     it("getDAGTemplate returns undefined for unknown ids", () => {
@@ -248,6 +257,66 @@ describe("DAG Template Registry", () => {
       if (!templ) throw new Error("template not found")
       const cfg = templ.create({ goal: "test" })
       expect(cfg.nodes[0].worker_type).toBe("explore")
+    })
+  })
+
+  describe("Product E2E Harness demo template", () => {
+    it("appears in the template list and instantiates the dogfood topology", () => {
+      expect(listDAGTemplates().some((t) => t.id === "product-e2e-harness")).toBe(true)
+      const cfg = instantiateDAGTemplate("product-e2e-harness", DEFAULT_INPUT)
+
+      expect("error" in cfg).toBe(false)
+      if ("error" in cfg) throw new Error(cfg.error)
+      expect(cfg.nodes.map((node) => node.id)).toEqual(["setup", "optional-gate", "blocked-leaf", "finalize"])
+      expect(cfg.nodes.find((node) => node.id === "setup")?.dependencies).toEqual([])
+      expect(cfg.nodes.find((node) => node.id === "optional-gate")?.dependencies).toEqual(["setup"])
+      expect(cfg.nodes.find((node) => node.id === "blocked-leaf")?.dependencies).toEqual(["optional-gate"])
+      expect(cfg.nodes.find((node) => node.id === "finalize")?.dependencies).toEqual(["setup"])
+      expect(cfg.nodes.find((node) => node.id === "blocked-leaf")?.required).toBe(false)
+    })
+
+    it("supports preview/apply removal of the pending optional blocked leaf", () => {
+      const cfg = instantiateDAGTemplate("product-e2e-harness", DEFAULT_INPUT)
+      if ("error" in cfg) throw new Error(cfg.error)
+      const workflowId = "wf-product-e2e"
+      const nodes = cfg.nodes.map((node) => ({
+        workflow_id: workflowId,
+        node_id: `${workflowId}::${node.id}`,
+        config: node,
+        status: (node.id === "setup" ? "completed" : "pending") as DAGNodeStatus,
+        output: null,
+        retry_count: 0,
+        max_retries: 0,
+        timeout_ms: 300000,
+        required_nodes: [],
+        dependencies: node.dependencies.map((dep) => `${workflowId}::${dep}`),
+        metadata: {},
+        start_time: null,
+        completed_at: null,
+        end_time: null,
+        duration_ms: null,
+        parent_node: null,
+        created_at: 1,
+        updated_at: 1,
+        logs: [],
+      })) as DAGNodeSession[]
+      const patch = {
+        workflow_id: workflowId,
+        remove_nodes: [`${workflowId}::blocked-leaf`],
+        changed_by: "product-e2e-harness-test",
+      }
+
+      expect(validateReplanPreconditions({ status: "paused" }, patch)).toEqual({ ok: true })
+      expect(validateFrozenAndExistence(patch, classifyReplanNodes(nodes).frozenIds, new Set(nodes.map((node) => node.node_id)))).toEqual({ ok: true })
+      const preview = applyReplanPatchToConfig(workflowId, cfg.nodes, patch)
+      expect(preview.ok).toBe(true)
+      if (!preview.ok) throw new Error(preview.reason)
+      expect(preview.newConfigNodes.map((node) => node.id)).toEqual(["setup", "optional-gate", "finalize"])
+
+      const dbInputs = buildReplanDbInputs(workflowId, patch, preview.newConfigNodes, nodes, cfg.max_concurrency)
+      expect(dbInputs.removeNodeIds).toEqual([`${workflowId}::blocked-leaf`])
+      expect(dbInputs.newNodes).toEqual([])
+      expect(dbInputs.updates).toEqual([])
     })
   })
 })

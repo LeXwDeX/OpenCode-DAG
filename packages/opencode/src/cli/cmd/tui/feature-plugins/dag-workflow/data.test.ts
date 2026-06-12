@@ -17,6 +17,10 @@ import {
   mapViolation,
   mapTimeline,
   mapGraphStats,
+  diagnoseBlock,
+  diagnoseTopology,
+  diagnoseSnapshot,
+  diagnoseCascade,
   filterWorkflows,
   nextIndex,
   pauseWorkflow,
@@ -24,6 +28,7 @@ import {
   cancelWorkflow,
   stepWorkflow,
   replanWorkflow,
+  replanPreview,
   createWorkflow,
   useWorkflowList,
   useWorkflowDetail,
@@ -38,6 +43,7 @@ import {
 } from "./data"
 import { countToolParts } from "./live-ticker"
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { DagNode as SdkDagNode } from "@opencode-ai/sdk/v2"
 import type { DAGNodeSession, DAGWorkflowSession } from "@/dag/session/types"
 
 // ── SDK 样本数据（含 number|"NaN"|"Infinity" 等序列化产物） ──────────────────
@@ -65,6 +71,10 @@ const sdkNode = {
   logs: ["line 1", "line 2"],
   metrics: { cpu_percent: 12, memory_mb: 256 },
 }
+
+type Assert<T extends true> = T
+type IncludesNull<T> = null extends T ? true : false
+type _DagNodeCompletedAtAllowsNull = Assert<IncludesNull<SdkDagNode["completed_at"]>>
 
 const sdkWorkflow = {
   id: "wf-1",
@@ -497,6 +507,27 @@ describe("WP1.1 data.ts — mutation wrappers", () => {
     ])
   })
 
+  it("replanPreview calls client.dagMutation.replanPreview with workflowId + body", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dagMutation: {
+        replanPreview: async (input: unknown) => {
+          calls.push(input)
+          return { data: { ok: true } }
+        },
+        replan: async () => {
+          throw new Error("apply must not be called for preview")
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    await replanPreview(client, "wf-1", { remove_nodes: ["wf-1::n2"], changed_by: "user" })
+
+    expect(calls).toEqual([
+      { workflowId: "wf-1", dagReplanPatchBody: { remove_nodes: ["wf-1::n2"], changed_by: "user" } },
+    ])
+  })
+
   it("createWorkflow calls client.dagMutation.create with body", async () => {
     const calls: unknown[] = []
     const client = {
@@ -513,6 +544,110 @@ describe("WP1.1 data.ts — mutation wrappers", () => {
     expect(calls).toEqual([
       { dagCreateWorkflowBody: { name: "Flow", chatSessionId: "sess-1", config: { nodes: [] } } },
     ])
+  })
+})
+
+describe("WP-C data.ts — diagnose wrappers", () => {
+  it("diagnoseBlock calls client.dag.diagnoseBlock with workflowId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dag: {
+        diagnoseBlock: async (input: unknown) => {
+          calls.push(input)
+          return { data: [{ nodeId: "n1", blocked: true, unsatisfiedDependencies: ["n0"], reason: "deps_unsatisfied" }] }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    const result = await diagnoseBlock(client, "wf-1")
+
+    expect(calls).toEqual([{ workflowId: "wf-1" }])
+    expect(result[0]!.nodeId).toBe("n1")
+  })
+
+  it("diagnoseTopology calls client.dag.diagnoseTopology with workflowId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dag: {
+        diagnoseTopology: async (input: unknown) => {
+          calls.push(input)
+          return { data: { workflowId: "wf-1", layers: [{ depth: 0, nodeIds: ["n1"] }], hasCycle: false, totalDepth: 1 } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    const result = await diagnoseTopology(client, "wf-1")
+
+    expect(calls).toEqual([{ workflowId: "wf-1" }])
+    expect(result!.layers[0]!.nodeIds).toEqual(["n1"])
+  })
+
+  it("diagnoseSnapshot calls client.dag.diagnoseSnapshot with workflowId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dag: {
+        diagnoseSnapshot: async (input: unknown) => {
+          calls.push(input)
+          return { data: { workflowId: "wf-1", running: ["n1"], queued: [], ready: ["n2"], pending: [], blocked: [], spawnBudget: 2 } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    const result = await diagnoseSnapshot(client, "wf-1")
+
+    expect(calls).toEqual([{ workflowId: "wf-1" }])
+    expect(result!.spawnBudget).toBe(2)
+  })
+
+  it("diagnoseCascade calls client.dag.diagnoseCascade with workflowId and nodeId", async () => {
+    const calls: unknown[] = []
+    const client = {
+      dag: {
+        diagnoseCascade: async (input: unknown) => {
+          calls.push(input)
+          return { data: { originNodeId: "n1", affectedPendingNodeIds: ["n2"] } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    const result = await diagnoseCascade(client, "wf-1", "n1")
+
+    expect(calls).toEqual([{ workflowId: "wf-1", nodeId: "n1" }])
+    expect(result!.affectedPendingNodeIds).toEqual(["n2"])
+  })
+
+  it("diagnoseCascade returns null and skips SDK call when no node is selected", async () => {
+    let calls = 0
+    const client = {
+      dag: {
+        diagnoseCascade: async () => {
+          calls++
+          return { data: { originNodeId: "n1", affectedPendingNodeIds: [] } }
+        },
+      },
+    } as unknown as TuiPluginApi["client"]
+
+    expect(await diagnoseCascade(client, "wf-1", null)).toBeNull()
+    expect(calls).toBe(0)
+  })
+
+  it("exposes diagnose endpoints only on read-only dag HTTP group, not mutation or dagworker", async () => {
+    const dagGroup = await Bun.file(new URL("../../../../../server/routes/instance/httpapi/groups/dag.ts", import.meta.url)).text()
+    const dagMutationGroup = await Bun.file(new URL("../../../../../server/routes/instance/httpapi/groups/dag-mutation.ts", import.meta.url)).text()
+    const dagworker = await Bun.file(new URL("../../../../../tool/dagworker.ts", import.meta.url)).text()
+
+    expect(dagGroup).toContain('HttpApiEndpoint.get("diagnoseBlock"')
+    expect(dagGroup).toContain('HttpApiEndpoint.get("diagnoseTopology"')
+    expect(dagGroup).toContain('HttpApiEndpoint.get("diagnoseSnapshot"')
+    expect(dagGroup).toContain('HttpApiEndpoint.get("diagnoseCascade"')
+    expect(dagMutationGroup).not.toContain("diagnoseBlock")
+    expect(dagMutationGroup).not.toContain("diagnoseTopology")
+    expect(dagMutationGroup).not.toContain("diagnoseSnapshot")
+    expect(dagMutationGroup).not.toContain("diagnoseCascade")
+    expect(dagworker).not.toContain("diagnoseBlock")
+    expect(dagworker).not.toContain("diagnoseTopology")
+    expect(dagworker).not.toContain("diagnoseSnapshot")
+    expect(dagworker).not.toContain("diagnoseCascade")
   })
 })
 
@@ -1422,4 +1557,3 @@ describe("data.ts — live-refresh subscriptions track id changes (P1 regression
     dispose()
   })
 })
-

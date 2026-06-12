@@ -13,7 +13,7 @@
  *
  * Status gating (terminal statuses disable every action — irreversible):
  * - running → [Pause] [Cancel] [Replan]
- * - paused  → [Resume] [Step] [Cancel]
+ * - paused  → [Resume] [Step] [Cancel] [Replan]
  * - pending → [Start]
  * - completed / failed / cancelled → all disabled
  */
@@ -39,14 +39,14 @@ export type ControlBarActions = {
  * controlBarActions — pure status → enabled-actions map.
  *
  * - running → pause + cancel + replan
- * - paused  → resume + step + cancel
+ * - paused  → resume + step + cancel + replan
  * - pending → start
  * - completed / failed / cancelled → all disabled (terminal is irreversible)
  */
 export function controlBarActions(status: DAGWorkflowStatus): ControlBarActions {
   if (status === "running") return { start: false, pause: true, resume: false, cancel: true, replan: true, step: false }
   // P2-B: step is enabled when paused (executes exactly 1 ready node)
-  if (status === "paused") return { start: false, pause: false, resume: true, cancel: true, replan: false, step: true }
+  if (status === "paused") return { start: false, pause: false, resume: true, cancel: true, replan: true, step: true }
   return { start: status === "pending", pause: false, resume: false, cancel: false, replan: false, step: false }
 }
 

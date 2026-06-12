@@ -85,21 +85,22 @@ DAG 所有状态变更模块必须遵守：
 
 ### 4.1 控制命令现状
 
-`pause`/`resume`/`cancel`/`replan`/`step` 已全栈贯通：`dagworker` tool（LLM 入口）→ HTTP Mutation API（`server/.../dag-mutation`）→ `WorkflowEngine` → `session-service`。TUI 控制台（`cli/.../dag-workflow/`）提供按钮 + create 多字段对话 + replan 节点编辑 + paused 态 step 单步。step 语义：paused 状态下单步触发 1 个 ready node 至完成/失败（workflow 始终保持 paused，通过 `stepMode` token 阻断自动调度链）。`inspect` 命令未实现（见 backlog WP-5 inspect）。
+`pause`/`resume`/`cancel`/`replan`/`step` 已全栈贯通：`dagworker` tool（LLM 入口）→ HTTP Mutation API（`server/.../dag-mutation`）→ `WorkflowEngine` → `session-service`。TUI 控制台（`cli/.../dag-workflow/`）提供按钮 + create 多字段对话 + replan 节点编辑 + paused 态 step 单步。step 语义：paused 状态下单步触发 1 个 ready node 至完成/失败（workflow 始终保持 paused，通过 `stepMode` token 阻断自动调度链）。`inspect` 仅作为 TUI/HTTP 只读诊断面进入实现范围；不新增 `dagworker inspect`。
 
 ---
 
-## 5. 诊断探针（运行时已激活，保持隐藏边界）
+## 5. 诊断探针（运行时已激活，TUI 只读暴露）
 
 `query/probe-types.ts`（`IDAGProbe`）+ `query/dag-probe.ts`（`DAGProbe`）是**只读诊断探针**，用于回答"节点为何阻塞 / 拓扑分层 / 运行快照 / 级联影响"。运行时逻辑于 2026-06-10 用户显式激活，复用 A 层纯函数（`execution-core.ts`）实现全部 4 个方法（`explainBlock` / `getTopology` / `getExecutionSnapshot` / `predictCascade`）。
 
-**激活后可被 import 调用**（如 TUI 内部、CLI inspect facade、内部诊断工具），但仍保持隐藏边界：
+**激活后可被 import 调用**（如 TUI 内部、内部诊断工具）。2026-06-11 用户授权后，探针允许通过 HTTP read API 暴露给 TUI inspect 面板；这不是 agent tool 暴露。
 
 **刻意约束（不可违反）**：
 - 探针**只读**（经 sessionService 取数，绝不写状态、不 emit、不绕状态机）。
 - 探针**代码层可见**（被 `query-types.ts` type re-export 锚定，非孤儿；禁止当 unused 删除）。
-- 探针**不暴露给 AGENT**：不进 `dagworker` action 枚举、不加 HTTP 路由、不进 layer 装配、不进 MCP 工具清单（隐藏边界不变，除非用户显式变更决策）。
-- 探针仍**只读**，不暴露给 agent。
+- 探针**只允许只读 UI 暴露**：可新增 `dag` read-only HTTP 路由供 TUI inspect panel 调用；不得放入 `dag-mutation`。
+- 探针**不暴露给 AGENT**：不进 `dagworker` action 枚举、不进 MCP 工具清单、不作为 LLM 可调用工具出现。
+- 若为 HTTP/TUI 装配需要引入服务层，只能装配只读 probe 服务；禁止新增写路径或事件广播。
 
 ---
 
@@ -123,7 +124,7 @@ DAG 工作流配置形状的**唯一权威定义** = `session/types.ts` 的 `DAG
 - 新增节点行为：扩 `worker_type` 路由（经 `Agent.Service.get`）或 `worker_config` 透传键。
 - 新增查询：加 `IDAGQuery` 方法（只读，经 sessionService）。
 - 新增控制命令：`dagworker` action + HTTP Mutation 路由 + `WorkflowEngine` 方法，三处对齐，**必经状态机落地**。
-- 新增观察：优先复用 query/bridge，或实现 §5 探针（保持隐藏边界）。
+- 新增观察：优先复用 query/bridge，或实现 §5 探针；probe 只能按 §5 的 TUI/HTTP 只读边界暴露。
 
 ### 6.3 禁止项（硬约束）
 

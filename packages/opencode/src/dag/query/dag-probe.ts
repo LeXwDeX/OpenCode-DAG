@@ -6,7 +6,7 @@
  * DAG Internal Diagnostic Probe — ACTIVE but HIDDEN (activated 2026-06-10)
  *
  * ┌──────────────────────────────────────────────────────────────────┐
- * │  ⚠️ ACTIVE but HIDDEN — do not wire to dagworker / HTTP / MCP  │
+ * │  ⚠️ ACTIVE; TUI HTTP READ-ONLY; hidden from dagworker / MCP    │
  * └──────────────────────────────────────────────────────────────────┘
  *
  * This class provides the runtime implementation of IDAGProbe (see
@@ -15,7 +15,7 @@
  *
  * HIDDEN BOUNDARY (不可违反):
  *   - 不进 dagworker action 枚举
- *   - 不加 HTTP 路由
+ *   - 仅允许 dag 只读 HTTP 路由供 TUI inspect；不进 dag-mutation
  *   - 不进 MCP 工具清单
  *   - 不进 layer.ts 装配
  *   - 不暴露给 AGENT
