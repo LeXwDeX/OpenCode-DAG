@@ -38,6 +38,7 @@ import type { WorktreeInfo } from "../worktree-manager/types"
 import { bootstrapWorkflowFromConfig } from "./core-start"
 import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
 import type { IEventBus } from "../state-machine/IStateMachine"
+import { ProviderID, ModelID } from "@/provider/schema"
 import {
   areDependenciesSatisfied,
   getReadyNodes,
@@ -674,30 +675,35 @@ const make = Effect.gen(function* () {
           if (nodeSettledFlag) return // Already settled, don't fire
           Effect.runPromise(
             Effect.gen(function* () {
-              yield* sessionService.createViolation({
-                workflowId,
-                nodeId: node.node_id,
-                type: "timeout_exceeded",
-                severity: "error",
-                message: `node exceeded timeout_ms=${nodeTimeoutMs}`,
-                details: { timeout_ms: nodeTimeoutMs },
-              }).pipe(
-                Effect.tapError((err) => Effect.logWarning(`[DAG] timeout violation create failed for ${node.node_id}: ${err}`)),
-                Effect.ignore,
-              )
-              // Mark node failed only if still in non-terminal state
+              // Check node state first
               const currentForTimeout = yield* sessionService.getNode(node.node_id).pipe(
                 Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
               )
               if (currentForTimeout && (currentForTimeout.status === "running" || currentForTimeout.status === "pending")) {
-                yield* sessionService.updateNodeStatus({
-                  sessionId: node.node_id,
-                  status: "failed",
-                  error: `node exceeded timeout_ms=${nodeTimeoutMs}`,
-                } satisfies UpdateNodeStatusInput).pipe(
-                  Effect.tapError((err) => Effect.logWarning(`[DAG] timeout status update failed for ${node.node_id}: ${err}`)),
+                // Node still active — handleNodeFailure creates the appropriate
+                // violation (execution_failed / required_node_failed) + cascade + finalize.
+                yield* handleNodeFailure(workflowId, node.node_id, new Error(`node exceeded timeout_ms=${nodeTimeoutMs}`))
+                  .pipe(
+                    Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] handleNodeFailure from timeout failed for ${node.node_id}: ${err}`)),
+                    Effect.ignore,
+                  )
+              } else if (currentForTimeout && (currentForTimeout.status === "failed" || currentForTimeout.status === "skipped")) {
+                // Node already failed/skipped (retry exhaustion handled it). Supplementary
+                // timeout_exceeded audit record only — no status change, no cascade.
+                yield* sessionService.createViolation({
+                  workflowId,
+                  nodeId: node.node_id,
+                  type: "timeout_exceeded",
+                  severity: "error",
+                  message: `node exceeded timeout_ms=${nodeTimeoutMs}`,
+                  details: { timeout_ms: nodeTimeoutMs },
+                }).pipe(
+                  Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] timeout violation create failed for ${node.node_id}: ${err}`)),
                   Effect.ignore,
                 )
+              } else {
+                // Node is 'completed' — stale timer after node_complete succeeded.
+                // Suppress the noise violation; no audit record needed.
               }
             }).pipe(Effect.ignore),
           )
@@ -876,7 +882,16 @@ const make = Effect.gen(function* () {
       ].join("\n")
 
       const parts = yield* _promptOps.resolvePromptParts(promptInstruction)
-      
+
+      // Resolve optional model override from worker_config.model ("providerID/modelID")
+      const modelOverride = (() => {
+        const raw = node.config.worker_config?.model
+        if (typeof raw !== "string") return undefined
+        const [provider, model] = raw.split("/")
+        if (!provider || !model) return undefined
+        return { providerID: ProviderID.make(provider), modelID: ModelID.make(model) }
+      })()
+
       // T1+T2: Retry loop with timeout enforcement
       const maxRetries = node.max_retries ?? 0
       let attempt = 0
@@ -916,6 +931,7 @@ const make = Effect.gen(function* () {
           sessionID: childSession.id,
           messageID: MessageID.ascending(),
           agent: agent.name,
+          ...(modelOverride ? { model: modelOverride } : {}),
           parts,
         }).pipe(
           Effect.timeoutOrElse({
@@ -944,14 +960,16 @@ const make = Effect.gen(function* () {
           })
           attempt++
           if (attempt > maxRetries) {
-            yield* sessionService.updateNodeStatus({
-              sessionId: node.node_id,
-              status: 'failed',
-              error: errMsg,
-            } satisfies UpdateNodeStatusInput).pipe(
-              Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
-              Effect.ignore
-            )
+            // BUGFIX: retry exhaustion must drive DAG convergence.
+            // handleNodeFailure is now idempotent (safe even if timer already marked
+            // failed): it skips updateNodeStatus + createViolation on already-terminal
+            // nodes, but still runs cascadeSkipDownstream + scheduleReadyNodes +
+            // maybeFinalizeWorkflow — exactly what we need.
+            yield* handleNodeFailure(workflowId, node.node_id, new Error(errMsg))
+              .pipe(
+                Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] handleNodeFailure on retry exhaustion failed for ${node.node_id}: ${err}`)),
+                Effect.ignore,
+              )
           }
         }
       }
@@ -1317,42 +1335,66 @@ const make = Effect.gen(function* () {
       // subscriptions before any state change (same pattern as handleNodeCompletion).
       cleanupSubscriptions(nodeId)
 
-      // 1. Mark node failed
-      yield* sessionService.updateNodeStatus({
-        sessionId: nodeId,
-        status: 'failed',
-        error: error.message
-      })
+      // Idempotency guard: if the node is already terminal (e.g. timeout fiber
+      // already marked failed before retry exhaustion / bridge callback fires),
+      // skip the updateNodeStatus (state machine rejects failed→failed) AND
+      // the duplicate violation, but still drive cascade/schedule/finalize so
+      // the DAG converges even on a redelivery. This is the fix for the
+      // "required-node time-out leaves downstream pending forever" bug.
+      //
+      // CRITICAL: only cascade if node actually failed (not if it completed).
+      // Stale timer on an already-completed node must NOT cascade its downstream.
+      const currentNode = yield* sessionService.getNode(nodeId).pipe(
+        Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
+      )
+      const wasAlreadyFailed = currentNode?.status === 'failed'
+      const wasAlreadyCompleted = currentNode?.status === 'completed'
+      const wasAlreadySkipped = currentNode?.status === 'skipped'
+      // If node was already completed or skipped, a redelivery of failure is a no-op
+      // — no status change, no cascade (would otherwise damage already-good state).
+      if (wasAlreadyCompleted || wasAlreadySkipped) {
+        return { success: true }
+      }
+      const alreadyTerminal = wasAlreadyFailed  // Only 'failed' terminal state continues
 
-      // #12 failed
-      const wfForLog = yield* sessionService.getWorkflow(workflowId)
-      if (wfForLog?.chat_session_id) {
-        yield* safeAppendLog({
-          nodeId,
+      if (!alreadyTerminal) {
+        // 1. Mark node failed
+        yield* sessionService.updateNodeStatus({
+          sessionId: nodeId,
+          status: 'failed',
+          error: error.message
+        })
+
+        // #12 failed
+        const wfForLog = yield* sessionService.getWorkflow(workflowId)
+        if (wfForLog?.chat_session_id) {
+          yield* safeAppendLog({
+            nodeId,
+            workflowId,
+            chatSessionId: wfForLog.chat_session_id,
+            logLevel: 'error',
+            logMessage: `Node failed: ${nodeId} — ${error.message}`,
+            executionPhase: 'failed',
+            logData: { error: error.message },
+          })
+        }
+
+        // 2. Conditional violation type (required vs optional)
+        const allNodesForViolation = yield* sessionService.listNodes(workflowId)
+        const failedNode = allNodesForViolation.find((n: DAGNodeSession) => n.node_id === nodeId)
+        const violationType: DAGViolationType = failedNode?.config?.required
+          ? 'required_node_failed'
+          : 'execution_failed'
+
+        yield* sessionService.createViolation({
           workflowId,
-          chatSessionId: wfForLog.chat_session_id,
-          logLevel: 'error',
-          logMessage: `Node failed: ${nodeId} — ${error.message}`,
-          executionPhase: 'failed',
-          logData: { error: error.message },
+          nodeId,
+          type: violationType,
+          severity: 'error',
+          message: error.message,
+          chatSessionId: wfForLog?.chat_session_id,
         })
       }
-
-      // 2. Conditional violation type (required vs optional)
-      const allNodesForViolation = yield* sessionService.listNodes(workflowId)
-      const failedNode = allNodesForViolation.find((n: DAGNodeSession) => n.node_id === nodeId)
-      const violationType: DAGViolationType = failedNode?.config?.required
-        ? 'required_node_failed'
-        : 'execution_failed'
-
-      yield* sessionService.createViolation({
-        workflowId,
-        nodeId,
-        type: violationType,
-        severity: 'error',
-        message: error.message,
-        chatSessionId: wfForLog?.chat_session_id,
-      })
 
       // 3. Cascade skip downstream pending nodes BEFORE scheduleReadyNodes
       yield* cascadeSkipDownstream(workflowId, nodeId)
