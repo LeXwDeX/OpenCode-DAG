@@ -71,10 +71,13 @@ export function LiveTicker(props: {
 
   function flushPending() {
     if (!pending) return
-    const s = summarizePart(pending, props.lang)
-    if (s) setSummary(s)
+    const part = pending
+    // Reset throttle state before writing the signal so a render-time throw
+    // cannot leave the ticker stuck with a stale pending/timeout.
     pending = null
     timeout = null
+    const s = summarizePart(part, props.lang)
+    if (s) setSummary(s)
   }
 
   onMount(() => {
@@ -102,8 +105,8 @@ export function LiveTicker(props: {
       <text fg={theme.textMuted}>
         {summary() ? (
           <span>
-            <text fg={theme.primary}>{translate(props.lang, "ticker_live")} </text>
-            <text>{summary() ?? ""}</text>
+            <span style={{ fg: theme.primary }}>{translate(props.lang, "ticker_live")} </span>
+            <span>{summary() ?? ""}</span>
           </span>
         ) : (
           <span>{translate(props.lang, "ticker_idle")}</span>
