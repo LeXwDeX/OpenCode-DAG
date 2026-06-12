@@ -66,8 +66,12 @@ export function areDependenciesSatisfied(
 
 /**
  * Return all nodes that are ready to execute: dependencies satisfied,
- * not running/completed/failed.
+ * not running/completed/failed/skipped.
  * Pure function — no DB, no Effect.
+ *
+ * WP1 fix: cascade-skipped nodes (status='skipped') must not re-enter the
+ * ready set. Previously the filter only excluded running/completed/failed,
+ * leaving skipped nodes with satisfied deps as "ready" (a logic gap).
  */
 export function getReadyNodes(
   nodes: DAGNodeSession[],
@@ -79,8 +83,9 @@ export function getReadyNodes(
     const isNotRunning = !runningNodeIds.has(node.node_id)
     const isNotCompleted = !completedNodeIds.has(node.node_id)
     const isNotFailed = !failedNodeIds.has(node.node_id)
+    const isNotSkipped = node.status !== 'skipped'
     const depsSatisfied = areDependenciesSatisfied(node, completedNodeIds)
-    return isNotRunning && isNotCompleted && isNotFailed && depsSatisfied
+    return isNotRunning && isNotCompleted && isNotFailed && isNotSkipped && depsSatisfied
   })
 }
 

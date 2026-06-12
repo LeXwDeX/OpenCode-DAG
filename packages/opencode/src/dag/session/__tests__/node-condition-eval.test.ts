@@ -461,3 +461,196 @@ describe("purity contract", () => {
     expect(nodes).toEqual(original)
   })
 })
+
+// =========================================================================
+// WP3E: ref_path sub-field extraction
+// =========================================================================
+
+describe("evaluateCondition — ref_path with plain object output", () => {
+  it("eq: ref_path resolves to matching value → true", () => {
+    const map = new Map<string, unknown>([
+      ["a", { result: { status: "done" } }],
+    ])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: "done", ref_path: "result.status" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("eq: ref_path resolves to non-matching value → false", () => {
+    const map = new Map<string, unknown>([
+      ["a", { result: { status: "pending" } }],
+    ])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: "done", ref_path: "result.status" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("exists: ref_path resolves → true", () => {
+    const map = new Map<string, unknown>([["a", { x: 0 }]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "x" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("PATH_NOT_FOUND: ref_path missing → null (exists=false, eq null=true)", () => {
+    const map = new Map<string, unknown>([["a", { x: 1 }]])
+    // PATH_NOT_FOUND → null → exists = false
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "missing" },
+        map,
+      ),
+    ).toBe(false)
+    // null === null → eq true (8-op table: null output eq null value = true)
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: null, ref_path: "missing" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("gt: ref_path resolves to number → comparison works", () => {
+    const map = new Map<string, unknown>([["a", { metrics: { count: 10 } }]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "gt", value: 5, ref_path: "metrics.count" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("gt: ref_path null (missing) → false (not comparable)", () => {
+    const map = new Map<string, unknown>([["a", { x: 1 }]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "gt", value: 5, ref_path: "missing" },
+        map,
+      ),
+    ).toBe(false)
+  })
+})
+
+describe("evaluateCondition — ref_path with string output (JSON.parse leniency)", () => {
+  it("valid JSON object string + ref_path → resolves sub-field", () => {
+    // node_complete output is always string; JSON.parse succeeds to object
+    const map = new Map<string, unknown>([["a", '{"result":{"id":"abc"}}']])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: "abc", ref_path: "result.id" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("valid JSON but non-object (array) string → treated as null", () => {
+    // JSON.parse("[1,2,3]") succeeds but result is array → non-object → null
+    const map = new Map<string, unknown>([["a", "[1,2,3]"]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "length" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("valid JSON but non-object (number) string → treated as null", () => {
+    const map = new Map<string, unknown>([["a", "42"]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: 42, ref_path: "value" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("valid JSON null string → treated as null", () => {
+    const map = new Map<string, unknown>([["a", "null"]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "not_exists", ref_path: "x" },
+        map,
+      ),
+    ).toBe(true)
+  })
+
+  it("malformed JSON string → parse failure → treated as null", () => {
+    const map = new Map<string, unknown>([["a", "{not valid json"]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "key" },
+        map,
+      ),
+    ).toBe(false)
+  })
+})
+
+describe("evaluateCondition — ref_path with non-object/non-string output", () => {
+  it("number output + ref_path → null", () => {
+    const map = new Map<string, unknown>([["a", 42]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "sub" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("boolean output + ref_path → null", () => {
+    const map = new Map<string, unknown>([["a", true]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "x" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("array output + ref_path → null (array excluded)", () => {
+    const map = new Map<string, unknown>([["a", [1, 2]]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "exists", ref_path: "0" },
+        map,
+      ),
+    ).toBe(false)
+  })
+
+  it("null output + ref_path → null", () => {
+    const map = new Map<string, unknown>([["a", null]])
+    expect(
+      evaluateCondition(
+        { ref_node: "a", op: "eq", value: null, ref_path: "x" },
+        map,
+      ),
+    ).toBe(true)
+  })
+})
+
+describe("evaluateCondition — ref_path absent (backward compatibility)", () => {
+  it("no ref_path: eq on raw output (unchanged behavior)", () => {
+    const map = new Map<string, unknown>([["a", 42]])
+    expect(evaluateCondition({ ref_node: "a", op: "eq", value: 42 }, map)).toBe(true)
+  })
+
+  it("no ref_path: exists on object output", () => {
+    const map = new Map<string, unknown>([["a", { nested: true }]])
+    expect(evaluateCondition({ ref_node: "a", op: "exists" }, map)).toBe(true)
+  })
+
+  it("no ref_path on string output: no JSON.parse → string compared directly", () => {
+    // Without ref_path, string output should NOT be JSON-parsed (ruling 2 preserved
+    // at the raw layer). string "42" === value "42" → true.
+    const map = new Map<string, unknown>([["a", "42"]])
+    expect(evaluateCondition({ ref_node: "a", op: "eq", value: "42" }, map)).toBe(true)
+  })
+})

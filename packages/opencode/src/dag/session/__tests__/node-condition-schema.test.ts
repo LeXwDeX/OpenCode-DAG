@@ -269,4 +269,69 @@ describe("validateNodeCondition (WP-B1 schema)", () => {
     })
     expect(validateNodeCondition(node)).toEqual({ ok: true })
   })
+
+  // -----------------------------------------------------------------
+  // Acceptance 6: WP3D — ref_path static validation
+  // -----------------------------------------------------------------
+  it("accepts condition with ref_path as string", () => {
+    const node = makeNode({
+      id: "step-b",
+      dependencies: ["step-a"],
+      required: false,
+      condition: { ref_node: "step-a", op: "eq", value: "done", ref_path: "result.status" },
+    })
+    expect(validateNodeCondition(node)).toEqual({ ok: true })
+  })
+
+  it("accepts condition with ref_path absent (undefined)", () => {
+    const node = makeNode({
+      id: "step-b",
+      dependencies: ["step-a"],
+      required: false,
+      condition: { ref_node: "step-a", op: "eq", value: 42 },
+    })
+    expect(validateNodeCondition(node)).toEqual({ ok: true })
+  })
+
+  it("rejects condition with ref_path as number", () => {
+    const node = makeNode({
+      id: "step-b",
+      dependencies: ["step-a"],
+      required: false,
+      condition: { ref_node: "step-a", op: "eq", value: "x", ref_path: 42 } as unknown as NonNullable<DAGNodeConfig["condition"]>,
+    })
+    const result = validateNodeCondition(node)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toContain("condition.ref_path must be string")
+    }
+  })
+
+  it("rejects condition with ref_path as null (typeof null = object, not string)", () => {
+    const node = makeNode({
+      id: "step-b",
+      dependencies: ["step-a"],
+      required: false,
+      condition: { ref_node: "step-a", op: "eq", value: "x", ref_path: null } as unknown as NonNullable<DAGNodeConfig["condition"]>,
+    })
+    const result = validateNodeCondition(node)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toContain("condition.ref_path must be string")
+    }
+  })
+
+  it("rejects condition with ref_path as boolean", () => {
+    const node = makeNode({
+      id: "step-b",
+      dependencies: ["step-a"],
+      required: false,
+      condition: { ref_node: "step-a", op: "eq", value: "x", ref_path: true } as unknown as NonNullable<DAGNodeConfig["condition"]>,
+    })
+    const result = validateNodeCondition(node)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toContain("condition.ref_path must be string")
+    }
+  })
 })

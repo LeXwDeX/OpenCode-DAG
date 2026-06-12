@@ -100,6 +100,18 @@ export interface DAGNodeCondition {
   op: DAGConditionOp;
   /** 比较基准值（exists/not_exists 运算符忽略此字段） */
   value?: unknown;
+  /**
+   * 可选 dot-notation 子字段路径（WP3）。
+   *
+   * **与 `DAGInputMappingEntry.ref_path` 的有意差异（WP3 裁定）**：
+   * - 两者同为 dot-notation 子字段提取，底层共享 `path-resolve.ts` 纯函数。
+   * - input_mapping **不允许** string output 自动 JSON.parse（ruling 2: 防止
+   *   隐式类型推断破坏 C2 的可审计契约）。
+   * - condition **允许** string→JSON.parse（因为 `node_complete` 输出恒为
+   *   string，否则生产不可用。parse 失败/结果非对象 → null → 既有 8-op null
+   *   语义表吸收）。
+   */
+  ref_path?: string;
 }
 
 /**

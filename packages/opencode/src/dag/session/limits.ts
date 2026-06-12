@@ -135,6 +135,14 @@ export function validateNodeCondition(
     }
   }
 
+  // ref_path: 可选，若提供必须是 string（null 亦拒绝：typeof null === "object" ≠ "string"）
+  if (c.ref_path !== undefined && typeof c.ref_path !== "string") {
+    return {
+      ok: false,
+      reason: `condition.ref_path must be string | undefined, got ${typeof c.ref_path}`,
+    }
+  }
+
   // ref_node ⊆ dependencies
   if (!node.dependencies.includes(c.ref_node)) {
     return {

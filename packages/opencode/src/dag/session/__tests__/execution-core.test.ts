@@ -130,6 +130,21 @@ describe("getReadyNodes", () => {
     expect(ready).toEqual([])
   })
 
+  it("excludes nodes that are skipped (WP1: cascade-skipped nodes must not re-enter ready set)", () => {
+    const a = makeNodeSession({ node_id: "a", status: "completed", dependencies: [] })
+    const b = makeNodeSession({ node_id: "b", status: "skipped", dependencies: ["a"] })
+    const ready = getReadyNodes([a, b], new Set(["a"]), new Set(), new Set())
+    expect(ready).toEqual([])
+  })
+
+  it("skipped node with all deps satisfied is still excluded", () => {
+    const a = makeNodeSession({ node_id: "a", status: "completed", dependencies: [] })
+    const b = makeNodeSession({ node_id: "b", status: "completed", dependencies: [] })
+    const c = makeNodeSession({ node_id: "c", status: "skipped", dependencies: ["a", "b"] })
+    const ready = getReadyNodes([a, b, c], new Set(["a", "b"]), new Set(), new Set())
+    expect(ready).toEqual([])
+  })
+
   it("returns empty array when no nodes are ready", () => {
     const a = makeNodeSession({ node_id: "a", status: "pending", dependencies: ["x"] })
     const ready = getReadyNodes([a], new Set(), new Set(), new Set())

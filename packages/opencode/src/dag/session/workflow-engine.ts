@@ -1066,6 +1066,24 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] cascade-skip status update failed for ${d.node_id}: ${err}`)),
           Effect.ignore
         )
+        // WP2 audit: if cascade-skipped descendant is required:true, record a
+        // required_node_skipped violation (severity=error). This is AUDIT-ONLY —
+        // computeFinalWorkflowStatus is unchanged (iron law #2: terminal-irreversibility;
+        // required SKIPPED is not a workflow-failure trigger, see required-nodes-monitor.ts:172-173).
+        if (d.config.required === true) {
+          yield* sessionService.createViolation({
+            workflowId,
+            nodeId: d.node_id,
+            type: 'required_node_skipped' as DAGViolationType,
+            severity: 'error',
+            message: `Required node ${d.node_id} cascade-skipped due to ${triggerLabel} of ${triggerNodeId}`,
+            details: { trigger_node_id: triggerNodeId, trigger_type: triggerType },
+            chatSessionId: wfForLog?.chat_session_id,
+          } satisfies CreateViolationInput).pipe(
+            Effect.tapError((err) => Effect.logWarning(`[DAG] required-skip violation record failed for ${d.node_id}: ${err}`)),
+            Effect.ignore
+          )
+        }
         // #13 cascade_skip
         if (wfForLog?.chat_session_id) {
           yield* safeAppendLog({

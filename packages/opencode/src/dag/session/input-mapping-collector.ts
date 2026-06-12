@@ -14,7 +14,9 @@
  * - No Effect usage
  * - No Logger / event emission
  * - No mutable module-level state
- * - Only `import type` from `./types` (DAGInputMapping)
+ * - Imports: `./types` (DAGInputMapping, type-only) + `./path-resolve`
+ *   (pure leaf — resolvePath + PATH_NOT_FOUND). No runtime DB/Effect/log
+ *   dependencies.
  *
  * **Caller provides outputMap** (INFO 1 scheme c):
  * The caller reuses `buildOutputMap()` from `condition-eval.ts` to prepare
@@ -45,6 +47,7 @@
  */
 
 import type { DAGInputMapping } from "./types"
+import { resolvePath, PATH_NOT_FOUND } from "./path-resolve"
 
 /**
  * Reason codes for missing/unresolvable entries during collection.
@@ -168,34 +171,9 @@ export function collectInputMapping(
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers (pure, no side effects)
+// resolvePath + PATH_NOT_FOUND are now imported from ./path-resolve (pure leaf).
+// Behavior-identical refactor (WP3F): algorithm unchanged from original at
+// lines 183-201 in input-mapping-collector.ts. Input-mapping retains its
+// "non_object_output" guard above — JSON.parse leniency is NOT applied here
+// (ruling 2: preserve C2 audit contract).
 // ---------------------------------------------------------------------------
-
-/** Sentinel value indicating path resolution failed. */
-const PATH_NOT_FOUND: unique symbol = Symbol('PATH_NOT_FOUND')
-
-/**
- * Navigate a dot-notation path into a plain object.
- *
- * @returns the resolved value, or `PATH_NOT_FOUND` if any segment is missing
- *          or a non-object intermediate is encountered before the last segment.
- */
-function resolvePath(
-  obj: Record<string, unknown>,
-  path: string,
-): unknown | typeof PATH_NOT_FOUND {
-  const segments = path.split('.')
-  let current: unknown = obj
-
-  for (const seg of segments) {
-    if (current == null || typeof current !== 'object' || Array.isArray(current)) {
-      return PATH_NOT_FOUND
-    }
-    if (!(seg in (current as Record<string, unknown>))) {
-      return PATH_NOT_FOUND
-    }
-    current = (current as Record<string, unknown>)[seg]
-  }
-
-  return current
-}
