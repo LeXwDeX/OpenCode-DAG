@@ -35,6 +35,7 @@ import type { PromptOps } from "@/session/prompt-ops"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
+import * as SessionStatus from "@/session/status"
 import { WorktreeManagerTag } from "../worktree-manager/tags"
 import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
@@ -335,6 +336,12 @@ const make = Effect.gen(function* () {
   // Uses serviceOption (no requirement propagation) — undefined when absent.
   const capturedAgentService = Option.getOrUndefined(yield* Effect.serviceOption(Agent.Service))
   const capturedChatSessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
+  // WP1: Capture SessionStatus.Service at the make level so notifyParentOfFailure
+  // can inspect parent session busy/idle state without adding Effect context
+  // requirements (the call site is inside maybeFinalizeWorkflow, which runs
+  // under setTimeout-based fiber dispatch with no service context).
+  // Uses serviceOption (no requirement propagation) — undefined when absent.
+  const capturedSessionStatus = Option.getOrUndefined(yield* Effect.serviceOption(SessionStatus.Service))
 
   // §10.e: non-interrupting log helper for node lifecycle events.
   // appendNodeLog failures are swallowed so they never break node execution.
@@ -1092,6 +1099,23 @@ const make = Effect.gen(function* () {
       if (!targetStatus) return
 
       yield* sessionService.updateWorkflowStatus(workflowId, targetStatus)
+
+      // WP1: Notify parent session when DAG workflow converges to failed.
+      // Placed AFTER updateWorkflowStatus (persist + EventBus emit) so the
+      // four iron laws (state machine + terminal irreversibility + event
+      // broadcast + persist-first) are fully honored before any best-effort
+      // side-effect. maybeFinalizeWorkflow's terminal guard above prevents
+      // double-notification under concurrent convergence.
+      if (targetStatus === "failed" && workflow.chat_session_id) {
+        const failedNodeIds = allNodes
+          .filter((n: DAGNodeSession) => n.status === "failed")
+          .map((n: DAGNodeSession) => n.node_id)
+        yield* notifyParentOfFailure({
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          failedNodes: failedNodeIds,
+        })
+      }
     }).pipe(Effect.catchCause(() => Effect.void))
 
   // ============================================================================
@@ -1384,6 +1408,64 @@ const make = Effect.gen(function* () {
 
       // 8. Workflow convergence (non-step path)
       yield* maybeFinalizeWorkflow(workflowId)
+    }).pipe(Effect.catchCause(() => Effect.void))
+
+  /**
+   * notifyParentOfFailure — DAG workflow 失败时通知父 session。
+   *
+   * Wake strategy:
+   * - busy: 仅注入消息到 history（不打断用户 turn）
+   * - idle: 注入消息 + ops.loop 唤醒主 LLM session 主动回应
+   *
+   * Best-effort: 任何内部失败静默忽略，避免影响 DAG engine。
+   * 必须在 maybeFinalizeWorkflow 内 targetStatus === "failed" 成功后调用。
+   * 由 maybeFinalizeWorkflow 现有 terminal guard 保证幂等。
+   *
+   * Not exported — module-internal helper (closure-scoped to make()).
+   */
+  const notifyParentOfFailure = (input: {
+    workflowId: string
+    chatSessionId: string
+    failedNodes: readonly string[]
+  }): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      if (!capturedSessionStatus || !_promptOps) return
+
+      const parentSessionID = input.chatSessionId as SessionID
+      const parentStatus = yield* capturedSessionStatus.get(parentSessionID).pipe(
+        Effect.catchCause(() => Effect.succeed({ type: "busy" } as const as SessionStatus.Info)),
+      )
+
+      const text = [
+        `<dag_workflow_failed workflow_id="${input.workflowId}">`,
+        `DAG workflow ${input.workflowId} has failed.`,
+        `Failed nodes: ${input.failedNodes.join(", ") || "unknown"}`,
+        `Use dagworker status/node_detail/logs to inspect, or replan for partial recovery.`,
+        `</dag_workflow_failed>`,
+      ].join("\n")
+
+      // 1. Inject synthetic message into parent session history (noReply: true
+      // prevents the prompt from triggering an LLM turn — injection only).
+      yield* _promptOps.prompt({
+        sessionID: parentSessionID,
+        noReply: true,
+        agent: "main",
+        parts: [{
+          type: "text",
+          synthetic: true,
+          text,
+          metadata: {
+            dag_workflow_id: input.workflowId,
+            dag_event: "workflow_failed",
+          },
+        }],
+      }).pipe(Effect.ignore)
+
+      // 2. Only wake the parent when it's idle (no active user turn to interrupt).
+      if (parentStatus.type === "idle") {
+        yield* _promptOps.loop({ sessionID: parentSessionID })
+          .pipe(Effect.forkDetach, Effect.ignore)
+      }
     }).pipe(Effect.catchCause(() => Effect.void))
 
   /**
