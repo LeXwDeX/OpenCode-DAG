@@ -490,13 +490,29 @@ const make = Effect.gen(function* () {
         })
 
         // Mark running (WP-D2: stays running until WP-D3 event bridge signals)
-        yield* sessionService.updateNodeStatus({
+        // The running-status DB write runs through Effect.result. If it fails
+        // the node stays pending in DB — spawning a recursive child workflow
+        // would orphan it (no parent-node completion signal would ever arrive).
+        // Convert to handleSpawnFailure (pending → skipped + cascade). Any
+        // subChildSession created above is left for the existing orphan-session
+        // GC to collect (accepted graceful degradation).
+        const subdagRunningResult = yield* sessionService.updateNodeStatus({
           sessionId: node.node_id,
           status: "running",
-        } satisfies UpdateNodeStatusInput).pipe(
-          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
-          Effect.ignore,
-        )
+        } satisfies UpdateNodeStatusInput).pipe(Effect.result)
+
+        if (Result.isFailure(subdagRunningResult)) {
+          const failure = Result.getFailure(subdagRunningResult)
+          const reason = failure._tag === 'Some' ? String(failure.value) : 'unknown error'
+          yield* handleSpawnFailure({
+            workflowId,
+            nodeId: node.node_id,
+            reason,
+            executionPhase: 'subdag_running_write_failed',
+            workflowChatSessionId: parentWf?.chat_session_id,
+          })
+          return
+        }
 
         // WP-D3: Persist `chat_session_id` metadata on the "dag" node so that
         // the `cancelWorkflow` cascade path can locate the child workflow by
@@ -738,13 +754,30 @@ const make = Effect.gen(function* () {
       }
 
       // 5. NOW mark as running (persist-first, before prompt)
-      yield* sessionService.updateNodeStatus({
+      // The running-status DB write runs through Effect.result so a failure can
+      // be handled explicitly rather than silently swallowed by Effect.ignore.
+      // If this write fails the node is still `pending` in DB — dispatching a
+      // child agent prompt at that point would leave the node permanently stuck
+      // (state machine rejects `pending → completed` on the eventual node_complete
+      // callback). Convert to handleSpawnFailure (pending → skipped + cascade).
+      const runningWriteResult = yield* sessionService.updateNodeStatus({
         sessionId: node.node_id,
         status: 'running'
-      } satisfies UpdateNodeStatusInput).pipe(
-        Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
-        Effect.ignore
-      )
+      } satisfies UpdateNodeStatusInput).pipe(Effect.result)
+
+      if (Result.isFailure(runningWriteResult)) {
+        const failure = Result.getFailure(runningWriteResult)
+        const reason = failure._tag === 'Some' ? String(failure.value) : 'unknown error'
+        yield* handleSpawnFailure({
+          workflowId,
+          nodeId: node.node_id,
+          reason,
+          executionPhase: 'running_status_write_failed',
+          workflowChatSessionId: workflow.chat_session_id,
+        })
+        return
+      }
+
       // #5 running
       yield* safeAppendLog({
         nodeId: node.node_id,
@@ -1249,6 +1282,109 @@ const make = Effect.gen(function* () {
       
       return { success: true }
     })
+
+  /**
+   * handleSpawnFailure — spawn-phase failure handler for nodes that are still
+   * in `pending` (or `queued`) state in DB at the moment the running-status
+   * DB write fails inside spawnReadyNode.
+   *
+   * Cannot reuse handleNodeFailure (which hardcodes a transition to `failed`
+   * on nodes that may still be `running` — A-layer state machine rejects
+   * `pending → failed` outright, see execution-core.ts getValidNextSessionNodeStatuses).
+   * Instead drives the only legal terminal transition from pending: pending→skipped
+   * (iron law #1, execution-core L382-383).
+   *
+   * Design contract:
+   * - Caller has already observed running-status DB write failure inside spawnReadyNode
+   * - Node is pending or queued in DB on entry (or state machine rejects the skip)
+   * - Best-effort: every internal write is independently protected by catchCause
+   *   so cascade / finalize / stepMode release always run even when one write errors
+   * - Not exported. Module-internal helper used only within this closure.
+   */
+  const handleSpawnFailure = (input: {
+    workflowId: string
+    nodeId: string
+    reason: string
+    executionPhase: 'running_status_write_failed' | 'subdag_running_write_failed'
+    workflowChatSessionId?: string
+  }): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      const { nodeId, workflowId, reason, executionPhase } = input
+
+      // 1. Audit log (best-effort — failure does not block cascade/finalize)
+      if (input.workflowChatSessionId) {
+        yield* safeAppendLog({
+          nodeId,
+          workflowId,
+          chatSessionId: input.workflowChatSessionId,
+          logLevel: 'error',
+          logMessage: `Node spawn failure (running write failed): ${nodeId} — ${reason}`,
+          executionPhase,
+          logData: { error: reason },
+        })
+      }
+
+      // 2. Violation record (best-effort, typed as execution_failed so existing
+      //    query surfaces treat it uniformly with runtime execution failures)
+      if (input.workflowChatSessionId) {
+        yield* sessionService.createViolation({
+          workflowId,
+          nodeId,
+          type: 'execution_failed',
+          severity: 'error',
+          message: `Spawn failure: ${reason}`,
+          chatSessionId: input.workflowChatSessionId,
+        } satisfies CreateViolationInput).pipe(Effect.catchCause(() => Effect.void))
+      }
+
+      // 3. State machine: pending/queued → skipped (the only legal pending-terminal
+      //    transition per A-layer execution-core).
+      yield* sessionService.updateNodeStatus({
+        sessionId: nodeId,
+        status: 'skipped',
+      } satisfies UpdateNodeStatusInput).pipe(
+        Effect.tapError((err: unknown) =>
+          Effect.logWarning(`[DAG] spawn-failure skip update failed for ${nodeId}: ${err}`),
+        ),
+        Effect.catchCause(() => Effect.void),
+      )
+
+      // 4. Cleanup spawnedNodes (defensive — prevents stale entries from
+      //    permanently blocking re-spawn through this path).
+      spawnedNodes.delete(nodeId)
+
+      // 5. Cascade skip all downstream pending nodes (same semantics as
+      //    handleNodeFailure's cascade step — "upstream_failure" trigger type).
+      yield* cascadeSkipDownstream(workflowId, nodeId, 'upstream_failure')
+
+      // 6. P2-B: stepMode Deferred release. Mirrors handleNodeFailure L1507-1513.
+      //    Under stepMode: resolve Deferred with ok:false:node_failed and skip
+      //    finalize (workflow stays paused). stepWorkflow's Effect.ensuring
+      //    handles stepMode + stepResolve table cleanup on its own.
+      if (stepMode.has(workflowId)) {
+        const resolve = stepResolve.get(workflowId)
+        if (resolve) {
+          stepResolve.delete(workflowId)
+          resolve({
+            ok: false,
+            reason: 'node_failed',
+            node_id: nodeId,
+            error: `spawn failure: ${reason}`,
+          })
+        }
+        return
+      }
+
+      // 7. Re-schedule independent branches that may now fit within the
+      //    concurrency budget (released slot from spawnedNodes.delete above).
+      //    Mirrors handleNodeFailure L1646. Without this, a spawn-failure on one
+      //    of the initial batch (max_concurrency < ready_count) leaves sibling
+      //    pending nodes permanently un-dispatched — workflow stuck running.
+      yield* scheduleReadyNodes(workflowId)
+
+      // 8. Workflow convergence (non-step path)
+      yield* maybeFinalizeWorkflow(workflowId)
+    }).pipe(Effect.catchCause(() => Effect.void))
 
   /**
    * 处理节点失败
