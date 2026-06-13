@@ -654,6 +654,28 @@ Workflows created from hand-written JSON are persisted as runtime instances. Mis
 
 Terminal workflows (`completed` / `failed` / `cancelled`) are frozen. A terminal failed workflow cannot be retried, replanned, or resumed in place. To recover: reconstruct the config, adjust the cause of failure, and `start` a new workflow.
 
+### Partial failure recovery (non-terminal workflow with mixed node status)
+
+When the workflow status is `running` or `paused` and some nodes completed while others failed, check the workflow status before deciding to rebuild — do not rebuild the entire workflow.
+
+**Step 1 — confirm the workflow is not terminal**: `dapworker status`. If status is `failed`/`completed`/`cancelled`, go to Terminal failure handling above. If `running` or `paused`, proceed.
+
+**Step 2 — pause if still running**: `dapworker pause`. Running nodes continue; no new nodes are scheduled.
+
+**Step 3 — identify node mix**: `dapworker status` lists nodes by status. Determine which are `completed` (preserve), which are `pending` (candidates for `remove_nodes` or `update_nodes`), and which are `failed`/`skipped` (frozen — cannot be removed or updated by replan).
+
+**Step 4 — construct replan patch**:
+- `remove_nodes`: only namespaced IDs of `pending` nodes (typically failed-node's downstream dependents that haven't been scheduled yet).
+- `add_nodes`: corrected replacement nodes with fixed config or increased timeout.
+- Do NOT include completed or running nodes in `remove_nodes` or `update_nodes` — they are frozen and rejected.
+
+**Step 5 — apply**: `dapworker action=replan patch={...}`, then `dapworker resume` if paused.
+
+Constraints:
+- `required: true` node failures cascade downstream and usually mark the workflow terminal (`required_node_failed` violation → workflow → `failed`). In that case replan is blocked; go to Terminal failure handling.
+- Non-required node failures may leave the workflow `running`/`paused` if other pending nodes remain; replan applies to those remaining pending nodes.
+- Frozen nodes (status `failed`/`completed`/`skipped`/`running`/`queued`) cannot be targeted by `remove_nodes`/`update_nodes`.
+
 ### `failure_handler` (workflow-level pre-terminal recovery)
 
 Activation conditions (ALL must be true):

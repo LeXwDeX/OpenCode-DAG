@@ -202,7 +202,11 @@ Each workflow node spawns a child agent session using the `worker_type` + `worke
 ## Failure investigation and recovery
 
 1. Inspect runtime state before searching for on-disk JSON config: `list` → `status` → `node_detail` → `logs` → `history`.
-2. Terminal workflows (`completed` / `failed` / `cancelled`) cannot be retried in place. Reconstruct the config and `start` a new workflow.
+2. Check workflow status BEFORE deciding to rebuild:
+   - `running` or `paused` with completed + failed nodes → **partial recovery via replan**: keep completed nodes; `remove_nodes` for pending/downstream nodes that depended on the failure; add corrected replacement nodes; then `dagworker resume`.
+   - Terminal (`failed` / `completed` / `cancelled`) → cannot reuse the workflow; reconstruct the config and `start` a new workflow.
+   - replan only accepts **pending** nodes in `remove_nodes`/`update_nodes`. Frozen nodes (`failed`/`completed`/`skipped`/`running`/`queued`) are rejected.
+   - `required: true` required-node failures cascade downstream and usually make the workflow terminal (required_node_failed violation + workflow → failed); in this case replan is blocked and a fresh workflow is necessary.
 3. `failure_handler` runs only while `workflow.status === "running"` and the failing node is still `running`. It does not apply after terminal failure.
 4. `failure_handler` fields: `enabled`, `agent?`, `diagnosis_timeout_ms?`, `on_diagnosis_timeout?`, `max_recoveries?`. The field `failure_handler.timeout_ms` does not exist; use `node.timeout_ms` for node execution timeout.
 5. `dagworker start` validates `worker_type` BEFORE database writes — an unregistered `worker_type` causes immediate rejection with `"worker_type not found: <name>"`.
