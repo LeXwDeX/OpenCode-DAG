@@ -8,6 +8,14 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 Complete protocol specification for OpenCode's DAG workflow engine. This document is the authoritative reference for the `dagworker` and `node_complete` tools, their schemas, state machines, and invariants.
 
+Structure:
+- **Part I** (§1–§13): how the engine works — tools, schemas, state machines, examples.
+- **Part II** (§14–§17): constraints the agent must respect — hard limits, state rules, replan boundaries, failure recovery.
+
+---
+
+# Part I: Technical Specification
+
 ## 1. Overview
 
 The DAG workflow engine is a **background process orchestrator**. Every chat session can spawn an unlimited number of workflows; each workflow runs asynchronously as a detached fiber; the orchestrating agent never blocks waiting for completion. Inspections are made via `dagworker status` / `dagworker list` as needed.
@@ -48,7 +56,7 @@ Child agent session  ── calls ──>  node_complete(node_id, status, output
 ```ts
 {
   action: "start"
-  workflow: string          // JSON-stringified DAGConfig (see §3)
+  workflow: string          // JSON-stringified DAGConfig (see §4)
   wait?: boolean            // Defaults false. If true, block until completion.
   timeout?: number          // Optional hard timeout in ms.
 }
@@ -56,7 +64,7 @@ Child agent session  ── calls ──>  node_complete(node_id, status, output
 
 **Output:** `{ workflowId, message, nodes }` — always returns immediately unless `wait: true`.
 
-**Errors:** malformed JSON config, validation failure (see §4 hard invariants), permission denied.
+**Errors:** malformed JSON config, validation failure (see §14 hard invariants), permission denied.
 
 ### Action: `status`
 
@@ -82,8 +90,6 @@ Workflow <id>:
     ...
   Duration: ...ms  (only when terminal)
 ```
-
-Use this to **poll progress** while the workflow runs in background.
 
 ### Action: `cancel`
 
@@ -169,7 +175,7 @@ There is no runtime custom-template store. If an agent hand-writes a JSON `workf
 
 ## 3. Tool: `node_complete`
 
-This tool is visible to **child agent sessions** inside workflow nodes — not to the orchestrating agent. Each node MUST call it exactly once when its work is done.
+This tool is visible to **child agent sessions** inside workflow nodes — not to the orchestrating agent. Each node calls it exactly once when its work is done.
 
 ### Signature
 
@@ -182,13 +188,11 @@ This tool is visible to **child agent sessions** inside workflow nodes — not t
 }
 ```
 
-### Explicit-completion discipline
+### Mechanism
 
-- `node_complete` is the **only** signal the engine recognises.
-- If the subagent reaches end-of-turn (idle) without calling `node_complete`, the engine inspects the node's status; if still `running`, it marks the node `failed` with `"node did not call node_complete tool"`.
-- If the subagent crashes (uncaught tool error, session error), the outer spawn path marks the node `failed` with the underlying error message and records a `violation` with `type: "execution_failed"`.
-
-The explicit-completion design eliminates ambiguity between "truly done" and "silently stuck."
+- `node_complete` is the only signal the engine recognises for node results.
+- If the subagent reaches end-of-turn without calling `node_complete`, the engine inspects the node's status; if still `running`, it marks the node `failed` with `"node did not call node_complete tool"`.
+- If the subagent crashes, the outer spawn path marks the node `failed` with the underlying error message and records a `violation` with `type: "execution_failed"`.
 
 ## 4. Schema: `DAGConfig`
 
@@ -202,13 +206,13 @@ interface DAGConfig {
 }
 ```
 
-### Hard invariants
+### Limits
 
-| Invariant | Limit | Consequence of breach |
+| Constraint | Limit | Rejection |
 |---|---|---|
-| Node cap | ≤ 100 (recommended ≤ 50) | `start` rejects with "max_nodes_exceeded" |
-| Concurrency | `max_concurrency` ≤ 10 | `start` rejects with "max_concurrency_exceeded" |
-| Required nodes | `required: true` nodes cannot be skipped downstream | Failure triggers `required_node_failed` violation |
+| Node cap | ≤ 100 (recommended ≤ 50) | `start` rejects: `max_nodes_exceeded` |
+| Concurrency | `max_concurrency` ≤ 10 | `start` rejects: `max_concurrency_exceeded` |
+| Required nodes | `required: true` failure triggers `required_node_failed` violation | violation recorded, cascade triggers |
 | No cycles | `dependencies[]` graph must be a DAG | `start` rejects with cycle diagnostic |
 
 ### Schedule semantics
@@ -298,7 +302,7 @@ type DAGInputMapping = Record<
 Node IDs in the database are stored as `${workflowId}::${cfg.id}`. This:
 - Prevents PK collision across workflows (two workflows may both have a node `build`).
 - Lets `node_complete` route by `split("::")[0]` to identify the owning workflow.
-- `cfg.id` itself must not contain `::` (would make routing ambiguous).
+- `cfg.id` itself cannot contain `::` — breaks routing and is rejected at `start` time.
 
 ### Dependency resolution
 
@@ -320,8 +324,6 @@ pending ─▶ queued ─▶ running ─▶ completed
          failed or condition is false)     pending
 ```
 
-Terminal states (`completed`, `failed` when retries exhausted, `skipped`) are **immutable**.
-
 The `queued` state means: dependencies resolved, but the node is waiting for an execution slot (`running_count < max_concurrency`). It is NOT `running` yet.
 
 ### Status transitions
@@ -336,8 +338,6 @@ The `queued` state means: dependencies resolved, but the node is waiting for an 
 | running | completed | `node_complete` called with `status: "completed"` |
 | running | failed | `node_complete` called with `status: "failed"`, OR subagent idle (`node_complete_missing`), OR outer `catchCause`, OR timeout |
 | running | pending | Failure diagnosis recovery reset before terminal failure is written |
-
-Terminal states block any further transition (iron law #2). Retry/recovery resets only use the legal `running → pending` path before a failure becomes terminal.
 
 ## 7. Workflow status state machine
 
@@ -413,48 +413,6 @@ When a node's `retry` is configured and `max_attempts > 1`:
 
 The retry exception to iron law #2 is explicitly documented in `state-machine/NodeStateMachine.ts`.
 
-### 10.1 Failure investigation and recovery
-
-When the user asks to debug, retry, or recover a failed DAG workflow, inspect runtime state before searching for an on-disk JSON config:
-
-1. `dagworker { "action": "list" }` — find candidate workflow IDs.
-2. `dagworker { "action": "status", "workflow": "<workflowId>" }` — determine workflow/node terminal state and violations.
-3. `dagworker { "action": "node_detail", "node_id": "<workflowId>::<nodeId>" }` — inspect the failed node config, retry count, output, and error.
-4. `dagworker { "action": "logs", "node_id": "<workflowId>::<nodeId>" }` — inspect execution logs.
-5. `dagworker { "action": "history", "workflow": "<workflowId>" }` — inspect prior replans.
-
-Missing on-disk JSON is not a blocker. Workflows created from hand-written JSON are persisted as runtime instances; reconstruct a new `DAGConfig` from `status` / `node_detail` / `logs` / `history` and memory if the original prompt-time JSON was not saved.
-
-Terminal workflows (`completed`, `failed`, `cancelled`) are frozen. Do not call terminal recovery an in-place retry; start a fresh workflow with a reconstructed config. `replan` only mutates the pending tail of a non-terminal workflow.
-
-`failure_handler` is a workflow-level pre-terminal recovery hook. It runs only when all of these are true:
-
-- `workflow.config.failure_handler.enabled === true`
-- `workflow.status === "running"`
-- the failing node is still `running`
-- the engine has not already written the node's terminal failure
-
-Valid `failure_handler` shape:
-
-```ts
-interface FailureHandlerConfig {
-  enabled: boolean
-  agent?: string
-  diagnosis_timeout_ms?: number
-  on_diagnosis_timeout?: "cascade"
-  max_recoveries?: number
-}
-```
-
-`failure_handler.diagnosis_timeout_ms` limits the diagnosis agent. It is not the node execution timeout. Use `node.timeout_ms` to extend a worker node's execution deadline.
-
-Common recovery mistakes:
-
-- Claiming a `failed` workflow can be retried in place. It cannot; start a new workflow.
-- Blocking on a missing saved JSON file before using `list` / `status` / `node_detail` / `logs` / `history`.
-- Writing `failure_handler.timeout_ms`. The valid field is `failure_handler.diagnosis_timeout_ms`.
-- Adding `failure_handler` after a workflow is already terminal and expecting it to revive the failed node.
-
 ## 11. Event bus integration
 
 Every status transition emits an event:
@@ -526,21 +484,7 @@ Runs strictly sequentially: `build` → `test` → `deploy`.
 
 Parallel fan-out with exponential retry. `aggregate` runs only when both fixes complete.
 
-## 13. Common pitfalls
-
-1. **Forgetting `node_complete` in subagent prompt**: Always tell the subagent "you MUST call `node_complete` when done." The node's prompt prefix (auto-injected by the engine) includes this reminder, but reinforcing in `worker_config.prompt` is safer.
-
-2. **`::` in `cfg.id`**: Breaks routing. Use plain alphanumeric IDs like `build`, `fix_a`, `step1`.
-
-3. **Cycles**: `A → B → A` will be rejected at `start` time. Run a dry check if the graph is complex.
-
-4. **Not polling status**: `dagworker start` returns immediately. If you want to know when the workflow completes, either poll `dagworker status` periodically, or set `wait: true` on start to block (not recommended for long workflows).
-
-5. **Hardcoding max_concurrency > 10**: Always ≤ 10. The engine enforces this but surfacing a clear error saves round trips.
-
-## 14. Replan protocol
-
-### 14.1 Overview
+## 13. Replan Mechanism
 
 `dagworker action=replan patch={...}` restructures the *tail* of a running workflow — the portion that hasn't left `pending` status — without cancelling in-flight nodes. The engine atomically:
 
@@ -552,7 +496,7 @@ Parallel fan-out with exponential retry. `aggregate` runs only when both fixes c
 
 All five writes happen inside a single `Database.transaction`. If any step throws, the whole transaction rolls back and the tool returns `{ ok: false, reason, detail }`.
 
-### 14.2 ReplanPatch schema
+### ReplanPatch schema
 
 ```ts
 interface ReplanPatch {
@@ -571,7 +515,7 @@ interface ReplanNodePatch {
 }
 ```
 
-### 14.3 ReplanResult shape
+### ReplanResult shape
 
 Success:
 ```json
@@ -591,43 +535,13 @@ Failure:
 { "ok": false, "reason": "Cannot remove frozen nodes: wf-abc::build", "detail": {} }
 ```
 
-### 14.4 Frozen vs mutable nodes
-
-Nodes are classified at the moment the replan begins:
-
-| Status | Classification | Notes |
-|---|---|---|
-| `pending` | Mutable | Patch may remove, update, or rewire dependencies. |
-| `queued` | Frozen | Scheduler picked it; may be mid-spawn. |
-| `running` | Frozen | Child agent session actively executing. |
-| `completed` | Frozen (terminal) | Output already produced. |
-| `failed` | Frozen (terminal) | Violation already recorded. |
-| `skipped` | Frozen (terminal) | Required-upstream failure path. |
-
-Any `remove_nodes` entry or `update_nodes` entry targeting a frozen/terminal node makes the replan reject.
-
-Workflows whose status is `completed` / `failed` / `cancelled` reject outright.
-
-### 14.5 Validation rules applied at replan time
-
-Before any DB write, `replanWorkflow` runs these checks on the post-patch config:
-
-| Rule | Limit | Failure message |
-|---|---|---|
-| Node cap | `nodes.length ≤ 100` | `node cap exceeded: N > 100` |
-| Concurrency cap | `1 ≤ max_concurrency ≤ 10` | `max_concurrency must be 1..10, got X` |
-| Dependency reference resolution | Every `dependencies[i]` resolves to a `cfg.id` in the post-patch graph | `unresolved dependency: node 'a' references 'b'` |
-| RequiredNodesValidator | Passes the existing validator | `Validation errors: ...` |
-| Required nodes cannot be removed | No `required: true` node appears in `remove_nodes` | `Cannot remove required nodes: ...` |
-| No cycles | DFS over the post-patch `dependencies[]` graph | `patch introduces a cycle` |
-
-### 14.6 Atomicity guarantee
+### Atomicity guarantee
 
 The actual DB writes happen inside `atomicReplan`, which wraps them in `Database.transaction((tx) => { ... })`. The callback is synchronous (`Effect.sync` semantics, `NotPromise<T>` return). Any throw inside the callback aborts the SQLite transaction; the surrounding `Effect` collapses it to `{ ok: false, reason, detail }` via `Effect.catchCause`.
 
 The single `dag_workflow_history` row written inside the same transaction is the durable audit record. Each successful replan produces exactly one such row with `action='replan'`.
 
-### 14.7 Worked example — add a verification stage mid-workflow
+### Worked example — add a verification stage mid-workflow
 
 Three-stage linear pipeline: `build → test → deploy`. `build` and `test` are `completed`; `deploy` is `pending`. We want to interpose a stage `stage-check` between `test` and `deploy`.
 
@@ -656,14 +570,120 @@ Result:
 - `dag_workflow.config` updated to reflect the new 4-node graph.
 - One `dag_workflow_history` row written with `action='replan'`, `old_state.node_ids = ["wf-abc::build", "wf-abc::test", "wf-abc::deploy"]`, `new_state.node_ids = ["wf-abc::build", "wf-abc::test", "wf-abc::deploy", "wf-abc::stage-check"]`.
 
-### 14.8 Common mistakes
+---
 
-1. **Trying to replan a completed workflow**: Rejected with `Cannot replan a terminal workflow (completed)`. Use a fresh workflow instead.
-2. **Trying to remove a frozen node**: Patching/removing a running or completed node is rejected. Only `pending` nodes are mutable.
-3. **Introducing cycles**: `A → B → A` in `update_nodes` / `add_nodes` is caught before any DB write.
-4. **Forgetting namespaced ids in `remove_nodes` / `update_nodes[].node_id`**: The engine looks them up by the namespaced form; an un-namespaced id silently no-ops (or throws "not found" if the node is required).
-5. **Adding a node whose `cfg.id` already exists in the post-patch graph**: The RequiredNodesValidator rejects duplicates.
-6. **Bumping `max_concurrency` above 10**: Rejected pre-write.
-7. **Removing a `required: true` node**: Always rejected, even if other required nodes complete.
+# Part II: Agent Rules
+
+## 14. Invariants & limits
+
+Hard limits enforced by the engine at `start` time:
+
+| Constraint | Limit | Rejection message |
+|---|---|---|
+| Node cap | `nodes.length ≤ 100` | `max_nodes_exceeded` |
+| Concurrency cap | `1 ≤ max_concurrency ≤ 10` | `max_concurrency_exceeded` |
+| Required nodes | `required: true` nodes cannot be skipped downstream | `required_node_failed` violation on failure |
+| No cycles | `dependencies[]` graph must be a DAG | cycle diagnostic at `start` time |
+| Unique IDs | `cfg.id` unique within workflow, no `::` separator | rejected at `start` |
+| Worker type | Must be a registered agent | `worker_type not found: <name>` |
+
+## 15. State machine rules
+
+### Terminal immutability
+
+- Terminal node states (`completed`, `failed` when retries exhausted, `skipped`) accept no further transitions.
+- Terminal workflow states (`completed`, `failed`, `cancelled`) cannot be retried, replanned, or resumed.
+- Exception: node-level `retry` is the sole permitted `failed → pending` reversal, only before retry exhaustion.
+- Exception: `failure_handler` diagnosis reset is a permitted `running → pending` reversal, only before terminal failure is written.
+
+### Explicit completion
+
+- `node_complete` is the only node-result signal the engine recognises. Visible to child sessions only, not to the orchestrating agent.
+- Engine auto-injects a `node_complete` reminder into the child node prompt prefix.
+- Idle subagent without `node_complete` call → engine marks node `failed` with `"node did not call node_complete tool"`.
+
+## 16. Replan constraints
+
+### Frozen vs mutable nodes
+
+At the moment replan begins, nodes are classified:
+
+| Status | Classification | Patch effect |
+|---|---|---|
+| `pending` | Mutable | May remove, update, or rewire |
+| `queued` | Frozen | Rejected |
+| `running` | Frozen | Rejected |
+| `completed` | Frozen (terminal) | Rejected |
+| `failed` | Frozen (terminal) | Rejected |
+| `skipped` | Frozen (terminal) | Rejected |
+
+Terminal workflows (`completed` / `failed` / `cancelled`) reject replan outright.
+
+### Validation rules at replan time
+
+| Rule | Failure message |
+|---|---|
+| `nodes.length ≤ 100` after patch | `node cap exceeded: N > 100` |
+| `1 ≤ max_concurrency ≤ 10` | `max_concurrency must be 1..10, got X` |
+| All `dependencies[i]` resolve to a `cfg.id` in the post-patch graph | `unresolved dependency: node 'a' references 'b'` |
+| RequiredNodesValidator passes | `Validation errors: ...` |
+| No `required: true` node in `remove_nodes` | `Cannot remove required nodes: ...` |
+| No cycles in post-patch `dependencies[]` | `patch introduces a cycle` |
+
+### Common mistakes
+
+- Namespaced IDs missing in `remove_nodes` / `update_nodes[].node_id`: engine resolves by namespaced form; un-namespaced ID silently no-ops (or throws "not found" for required nodes).
+- Duplicate `cfg.id` in post-patch graph: RequiredNodesValidator rejects.
+- Required nodes in `remove_nodes`: always rejected, even if other required nodes completed.
+
+## 17. Failure investigation & recovery
+
+### Investigation sequence
+
+When the user asks to debug, retry, or recover a failed DAG workflow, inspect runtime state before searching for an on-disk JSON config:
+
+1. `dagworker { "action": "list" }` — find candidate workflow IDs.
+2. `dagworker { "action": "status", "workflow": "<workflowId>" }` — determine workflow/node terminal state and violations.
+3. `dagworker { "action": "node_detail", "node_id": "<workflowId>::<nodeId>" }` — inspect the failed node config, retry count, output, and error.
+4. `dagworker { "action": "logs", "node_id": "<workflowId>::<nodeId>" }` — inspect execution logs.
+5. `dagworker { "action": "history", "workflow": "<workflowId>" }` — inspect prior replans.
+
+Workflows created from hand-written JSON are persisted as runtime instances. Missing on-disk JSON is not a blocker — reconstruct a new `DAGConfig` from `status` / `node_detail` / `logs` / `history` and memory if the original prompt-time JSON was not saved.
+
+### Terminal failure handling
+
+Terminal workflows (`completed` / `failed` / `cancelled`) are frozen. A terminal failed workflow cannot be retried, replanned, or resumed in place. To recover: reconstruct the config, adjust the cause of failure, and `start` a new workflow.
+
+### `failure_handler` (workflow-level pre-terminal recovery)
+
+Activation conditions (ALL must be true):
+
+- `workflow.config.failure_handler.enabled === true`
+- `workflow.status === "running"`
+- the failing node is still `running`
+- the engine has not yet written the node's terminal failure
+
+```ts
+interface FailureHandlerConfig {
+  enabled: boolean
+  agent?: string
+  diagnosis_timeout_ms?: number
+  on_diagnosis_timeout?: "cascade"
+  max_recoveries?: number
+}
+```
+
+`failure_handler.diagnosis_timeout_ms` limits the diagnosis agent. It is **not** the node execution timeout. Use `node.timeout_ms` to extend a worker node's execution deadline.
+
+`failure_handler` does not apply after terminal failure. Adding `failure_handler` to an already-terminal workflow will not revive the failed node.
+
+### Common mistakes
+
+- Claiming a `failed` workflow can be retried in place. It cannot; start a new workflow.
+- Blocking on a missing saved JSON file before using `list` / `status` / `node_detail` / `logs` / `history`.
+- Writing `failure_handler.timeout_ms`. The valid field is `failure_handler.diagnosis_timeout_ms`.
+- Adding `failure_handler` after a workflow is already terminal and expecting it to revive the failed node.
+
+---
 
 Numeric limits and defaults are owned by `packages/opencode/src/dag/session/limits.ts`.
