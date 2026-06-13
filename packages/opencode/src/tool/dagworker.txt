@@ -21,3 +21,9 @@ Actions:
 - `history`: Query workflow replan audit history.
 - `logs`: Query structured node execution logs.
 - `step`: Execute exactly one ready node while a workflow remains paused.
+
+Failure recovery rules:
+- Terminal workflows (`completed`, `failed`, `cancelled`) are frozen. Do not claim they can be retried or replanned in place; reconstruct the config and start a new workflow instead.
+- Missing on-disk JSON is not a blocker. Inspect persisted runtime state first with `list`, `status`, `node_detail`, `logs`, and `history` before asking the user for the original config.
+- `failure_handler` is a workflow-level pre-terminal recovery hook. It can retry only while the workflow is still `running` and the failed node is still `running`; after terminal failure it no longer applies.
+- `failure_handler` fields are `enabled`, `agent`, `diagnosis_timeout_ms`, `on_diagnosis_timeout`, and `max_recoveries`. Do not use `failure_handler.timeout_ms`; node timeouts use `node.timeout_ms`.

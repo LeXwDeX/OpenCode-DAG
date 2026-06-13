@@ -413,6 +413,48 @@ When a node's `retry` is configured and `max_attempts > 1`:
 
 The retry exception to iron law #2 is explicitly documented in `state-machine/NodeStateMachine.ts`.
 
+### 10.1 Failure investigation and recovery
+
+When the user asks to debug, retry, or recover a failed DAG workflow, inspect runtime state before searching for an on-disk JSON config:
+
+1. `dagworker { "action": "list" }` — find candidate workflow IDs.
+2. `dagworker { "action": "status", "workflow": "<workflowId>" }` — determine workflow/node terminal state and violations.
+3. `dagworker { "action": "node_detail", "node_id": "<workflowId>::<nodeId>" }` — inspect the failed node config, retry count, output, and error.
+4. `dagworker { "action": "logs", "node_id": "<workflowId>::<nodeId>" }` — inspect execution logs.
+5. `dagworker { "action": "history", "workflow": "<workflowId>" }` — inspect prior replans.
+
+Missing on-disk JSON is not a blocker. Workflows created from hand-written JSON are persisted as runtime instances; reconstruct a new `DAGConfig` from `status` / `node_detail` / `logs` / `history` and memory if the original prompt-time JSON was not saved.
+
+Terminal workflows (`completed`, `failed`, `cancelled`) are frozen. Do not call terminal recovery an in-place retry; start a fresh workflow with a reconstructed config. `replan` only mutates the pending tail of a non-terminal workflow.
+
+`failure_handler` is a workflow-level pre-terminal recovery hook. It runs only when all of these are true:
+
+- `workflow.config.failure_handler.enabled === true`
+- `workflow.status === "running"`
+- the failing node is still `running`
+- the engine has not already written the node's terminal failure
+
+Valid `failure_handler` shape:
+
+```ts
+interface FailureHandlerConfig {
+  enabled: boolean
+  agent?: string
+  diagnosis_timeout_ms?: number
+  on_diagnosis_timeout?: "cascade"
+  max_recoveries?: number
+}
+```
+
+`failure_handler.diagnosis_timeout_ms` limits the diagnosis agent. It is not the node execution timeout. Use `node.timeout_ms` to extend a worker node's execution deadline.
+
+Common recovery mistakes:
+
+- Claiming a `failed` workflow can be retried in place. It cannot; start a new workflow.
+- Blocking on a missing saved JSON file before using `list` / `status` / `node_detail` / `logs` / `history`.
+- Writing `failure_handler.timeout_ms`. The valid field is `failure_handler.diagnosis_timeout_ms`.
+- Adding `failure_handler` after a workflow is already terminal and expecting it to revive the failed node.
+
 ## 11. Event bus integration
 
 Every status transition emits an event:
