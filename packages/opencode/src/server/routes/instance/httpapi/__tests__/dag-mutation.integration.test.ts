@@ -134,33 +134,33 @@ describe("DAG Mutation API — create (DB integration, real session-service + st
     Database.Client.reset()
   })
 
-  it("legal config (20 nodes, concurrency 3) → real pending workflow row + nodeCount nodes", () => {
+  it("legal config (100 nodes, concurrency 3) → real pending workflow row + nodeCount nodes", () => {
     const service = Effect.runSync(DAGSessionService.make)
-    const config = makeConfig("create-legal", makeNodes(20), 3)
+    const config = makeConfig("create-legal", makeNodes(100), 3)
 
     const result = Effect.runSync(createViaHandlerPath(service, "create-legal", config))
-    expect(result.nodeCount).toBe(20)
+    expect(result.nodeCount).toBe(100)
     expect(result.status).toBe("pending")
 
     const workflow = Effect.runSync(service.getWorkflow(result.workflowId))
     expect(workflow?.status).toBe("pending")
 
     const nodes = Effect.runSync(service.listNodes(result.workflowId))
-    expect(nodes).toHaveLength(20)
+    expect(nodes).toHaveLength(100)
   })
 
-  it("IRON LAW: 21 nodes → createWorkflow fails WorkflowConfigValidationError, NO workflow row persisted (validate before insert)", () => {
+  it("IRON LAW: 101 nodes → createWorkflow fails WorkflowConfigValidationError, NO workflow row persisted (validate before insert)", () => {
     const service = Effect.runSync(DAGSessionService.make)
-    const config = makeConfig("create-21-nodes", makeNodes(21), 5)
+    const config = makeConfig("create-101-nodes", makeNodes(101), 5)
 
-    const exit = Effect.runSyncExit(createViaHandlerPath(service, "create-21-nodes", config))
+    const exit = Effect.runSyncExit(createViaHandlerPath(service, "create-101-nodes", config))
     expect(Exit.isFailure(exit)).toBe(true)
-    const error = Effect.runSync(Effect.flip(createViaHandlerPath(service, "create-21-nodes", config)))
+    const error = Effect.runSync(Effect.flip(createViaHandlerPath(service, "create-101-nodes", config)))
     expect(error).toBeInstanceOf(WorkflowConfigValidationError)
-    expect(error.message).toBe("node cap exceeded: 21 > 20")
+    expect(error.message).toBe("node cap exceeded: 101 > 100")
 
     // Iron law: validation runs before the INSERT, so nothing is persisted.
-    expect(countWorkflowsByName("create-21-nodes")).toBe(0)
+    expect(countWorkflowsByName("create-101-nodes")).toBe(0)
   })
 
   it("IRON LAW: max_concurrency = 11 → fails, no residual workflow row", () => {

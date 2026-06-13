@@ -196,7 +196,7 @@ The explicit-completion design eliminates ambiguity between "truly done" and "si
 interface DAGConfig {
   name: string                          // Required. Display name.
   description?: string                  // Optional prose.
-  nodes: DAGNodeConfig[]                // 1..20 nodes.
+  nodes: DAGNodeConfig[]                // Up to MAX_WORKFLOW_NODES (100); prefer ≤ RECOMMENDED_WORKFLOW_NODES (50).
   max_concurrency: number               // 1..10. Cap on parallel spawns.
   timeout_ms?: number                   // Optional hard workflow timeout.
 }
@@ -206,7 +206,7 @@ interface DAGConfig {
 
 | Invariant | Limit | Consequence of breach |
 |---|---|---|
-| Node cap | ≤ 20 | `start` rejects with "max_nodes_exceeded" |
+| Node cap | ≤ 100 (recommended ≤ 50) | `start` rejects with "max_nodes_exceeded" |
 | Concurrency | `max_concurrency` ≤ 10 | `start` rejects with "max_concurrency_exceeded" |
 | Required nodes | `required: true` nodes cannot be skipped downstream | Failure triggers `required_node_failed` violation |
 | No cycles | `dependencies[]` graph must be a DAG | `start` rejects with cycle diagnostic |
@@ -335,11 +335,9 @@ The `queued` state means: dependencies resolved, but the node is waiting for an 
 | queued | skipped | Required upstream failed |
 | running | completed | `node_complete` called with `status: "completed"` |
 | running | failed | `node_complete` called with `status: "failed"`, OR subagent idle (`node_complete_missing`), OR outer `catchCause`, OR timeout |
-| running | skipped | Required upstream failed |
-| running | pending | `condition` evaluated to `false` (→ actually `skipped`); same slot as `running → skipped` |
-| failed | pending | Retry reversal: `retry_count < max_attempts - 1` (sole exception to iron law #2) |
+| running | pending | Failure diagnosis recovery reset before terminal failure is written |
 
-Terminal states block any further transition (iron law #2), except retry `failed → pending`.
+Terminal states block any further transition (iron law #2). Retry/recovery resets only use the legal `running → pending` path before a failure becomes terminal.
 
 ## 7. Workflow status state machine
 
@@ -380,7 +378,7 @@ pending ─▶ running ─▶ completed
 type DAGViolationType =
   | "required_node_skipped"       // Required node was bypassed
   | "required_node_failed"        // Required node explicitly failed
-  | "max_nodes_exceeded"          // Config tried to materialize > 20 nodes
+  | "max_nodes_exceeded"          // Config tried to materialize > 100 nodes
   | "max_concurrency_exceeded"    // Config set max_concurrency > 10
   | "timeout_exceeded"            // Node or workflow timed out
   | "execution_failed"            // Runtime spawn/infrastructure error
@@ -396,7 +394,7 @@ Severity levels: `critical` | `error` | `warning` | `info`. Most node-level viol
 
 | Timeout | Scope | Trigger |
 |---|---|---|
-| `node.timeout_ms` | Per-node hard deadline | Spawned fiber cancelled, node marked `failed` with `timeout_exceeded` |
+| `node.timeout_ms` | Per-node hard deadline; default `1_800_000ms` | Spawned fiber cancelled, node marked `failed` with `timeout_exceeded` |
 | `workflow.timeout_ms` | Whole-workflow deadline | `dag start`'s `timeout` parameter |
 | `dagworker start`'s `timeout` field | Hard cap on orchestrator-side call | Executor fiber cancelled, workflow cancelled |
 
@@ -574,7 +572,7 @@ Before any DB write, `replanWorkflow` runs these checks on the post-patch config
 
 | Rule | Limit | Failure message |
 |---|---|---|
-| Node cap | `nodes.length ≤ 20` | `node cap exceeded: N > 20` |
+| Node cap | `nodes.length ≤ 100` | `node cap exceeded: N > 100` |
 | Concurrency cap | `1 ≤ max_concurrency ≤ 10` | `max_concurrency must be 1..10, got X` |
 | Dependency reference resolution | Every `dependencies[i]` resolves to a `cfg.id` in the post-patch graph | `unresolved dependency: node 'a' references 'b'` |
 | RequiredNodesValidator | Passes the existing validator | `Validation errors: ...` |
@@ -625,3 +623,5 @@ Result:
 5. **Adding a node whose `cfg.id` already exists in the post-patch graph**: The RequiredNodesValidator rejects duplicates.
 6. **Bumping `max_concurrency` above 10**: Rejected pre-write.
 7. **Removing a `required: true` node**: Always rejected, even if other required nodes complete.
+
+Numeric limits and defaults are owned by `packages/opencode/src/dag/session/limits.ts`.

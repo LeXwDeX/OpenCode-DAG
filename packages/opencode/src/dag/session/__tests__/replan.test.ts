@@ -378,8 +378,8 @@ describe('replan: post-patch validation', () => {
     return { config: makeConfig(nodes, maxConcurrency) }
   }
 
-  it('rejects > 20 nodes after add', () => {
-    const existing = Array.from({ length: 20 }, (_, i) =>
+  it('rejects > 100 nodes after add', () => {
+    const existing = Array.from({ length: 100 }, (_, i) =>
       makeNodeConfig({ id: `n${i}`, required: false }),
     )
     const oneMore = makeNodeConfig({ id: 'overflow', required: false })
@@ -753,6 +753,64 @@ describe('replan: previewReplanWorkflow dry-run integration', () => {
       expect(result.reason).toMatch(/frozen/)
       expect(result.detail).toBeTruthy()
     }
+    expect(Effect.runSync(sessionService.listHistory(workflow.id))).toEqual([])
+  })
+
+  it('preview rejects mismatched patch.workflow_id and leaves history unchanged', () => {
+    const sessionService = Effect.runSync(DAGSessionService.make)
+    const engine = Effect.runSync(WorkflowEngine.make)
+    const n1 = makeNodeConfig({ id: 'n1', required: false })
+    const workflow = Effect.runSync(sessionService.createWorkflow({
+      name: 'preview-workflow-id-mismatch',
+      chatSessionId: 'chat-preview-workflow-id-mismatch',
+      config: makeConfig([n1], 2),
+    }))
+    Effect.runSync(sessionService.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::n1`,
+      name: 'n1',
+      nodeName: 'n1',
+      nodeType: 'mock',
+      config: n1,
+    }))
+
+    const result = Effect.runSync(engine.previewReplanWorkflow!(workflow.id, {
+      workflow_id: `${workflow.id}-other`,
+      new_max_concurrency: 4,
+    }))
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/workflow_id mismatch/)
+    expect(Effect.runSync(sessionService.getWorkflow(workflow.id))!.config.max_concurrency).toBe(2)
+    expect(Effect.runSync(sessionService.listHistory(workflow.id))).toEqual([])
+  })
+
+  it('apply rejects mismatched patch.workflow_id before DB mutation', () => {
+    const sessionService = Effect.runSync(DAGSessionService.make)
+    const engine = Effect.runSync(WorkflowEngine.make)
+    const n1 = makeNodeConfig({ id: 'n1', required: false })
+    const workflow = Effect.runSync(sessionService.createWorkflow({
+      name: 'apply-workflow-id-mismatch',
+      chatSessionId: 'chat-apply-workflow-id-mismatch',
+      config: makeConfig([n1], 2),
+    }))
+    Effect.runSync(sessionService.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::n1`,
+      name: 'n1',
+      nodeName: 'n1',
+      nodeType: 'mock',
+      config: n1,
+    }))
+
+    const result = Effect.runSync(engine.replanWorkflow(workflow.id, {
+      workflow_id: `${workflow.id}-other`,
+      new_max_concurrency: 4,
+    }))
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/workflow_id mismatch/)
+    expect(Effect.runSync(sessionService.getWorkflow(workflow.id))!.config.max_concurrency).toBe(2)
     expect(Effect.runSync(sessionService.listHistory(workflow.id))).toEqual([])
   })
 })

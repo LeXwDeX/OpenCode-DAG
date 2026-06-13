@@ -3,10 +3,19 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 import { Effect } from 'effect';
-import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus } from '../types';
+import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGNodeStatus, DAGWorkflowSession } from '../types';
 import { describe, expect, it, beforeAll, afterAll } from 'bun:test';
-import { validateWorkflowConfigLimits } from '../workflow-engine';
+import {
+  __internal_hasNodeRecoveredSinceSpawn,
+  __internal_markNodeRecovery,
+  __internal_recoveryGeneration,
+  __internal_spawnedNodes,
+  validateWorkflowConfigLimits,
+} from '../workflow-engine';
+import { DEFAULT_NODE_TIMEOUT_MS } from '../limits';
 import { getValidNextSessionWorkflowStatuses } from '../execution-core';
+import type { Agent } from '@/agent/agent'
+import type { Session } from '@/session/session'
 
 // Helper to create a complete DAGNodeConfig
 function makeNodeConfig(
@@ -254,20 +263,20 @@ describe('Workflow Engine - Dependency Logic', () => {
 
 describe('Workflow Engine - T1: Timeout Enforcement', () => {
   describe('timeout configuration', () => {
-    it('should use default timeout of 300_000ms when node.config.timeout_ms is undefined', () => {
+    it('should use default timeout of 1_800_000ms when node.config.timeout_ms is undefined', () => {
       const node = makeNodeSession('node-1', 'running');
       const config = node.config;
       delete (config as any).timeout_ms;
       
-      const effectiveTimeout = config.timeout_ms ?? 300_000;
-      expect(effectiveTimeout).toBe(300_000);
+      const effectiveTimeout = config.timeout_ms ?? DEFAULT_NODE_TIMEOUT_MS;
+      expect(effectiveTimeout).toBe(1_800_000);
     });
 
     it('should respect custom timeout_ms from node config', () => {
       const node = makeNodeSession('node-1', 'running');
       node.config.timeout_ms = 60_000;
       
-      const effectiveTimeout = node.config.timeout_ms ?? 300_000;
+      const effectiveTimeout = node.config.timeout_ms ?? DEFAULT_NODE_TIMEOUT_MS;
       expect(effectiveTimeout).toBe(60_000);
     });
 
@@ -553,6 +562,36 @@ describe('Workflow Engine - T3: In-Flight Concurrency Accounting', () => {
     });
   });
 });
+
+describe('Workflow Engine - diagnosis recovery spawned node reset', () => {
+  it('can clear the failed node from spawnedNodes before retry/replan rescheduling', () => {
+    const nodeId = 'wf-recovery::A'
+    const spawnedNodes = __internal_spawnedNodes()
+
+    spawnedNodes.add(nodeId)
+    expect(spawnedNodes.has(nodeId)).toBe(true)
+
+    spawnedNodes.delete(nodeId)
+    expect(spawnedNodes.has(nodeId)).toBe(false)
+  })
+
+  it('post-prompt guard suppresses node_complete_missing only after diagnosis recovery', () => {
+    const nodeId = 'wf-recovery::stale'
+    const recoveryGeneration = __internal_recoveryGeneration()
+
+    recoveryGeneration.delete(nodeId)
+    const generationAtOriginalSpawn = recoveryGeneration.get(nodeId) ?? 0
+    expect(__internal_hasNodeRecoveredSinceSpawn(nodeId, generationAtOriginalSpawn)).toBe(false)
+
+    __internal_markNodeRecovery(nodeId)
+    expect(__internal_hasNodeRecoveredSinceSpawn(nodeId, generationAtOriginalSpawn)).toBe(true)
+
+    const generationAtRescheduledSpawn = recoveryGeneration.get(nodeId) ?? 0
+    expect(__internal_hasNodeRecoveredSinceSpawn(nodeId, generationAtRescheduledSpawn)).toBe(false)
+
+    recoveryGeneration.delete(nodeId)
+  })
+})
 
 // ============================================================================
 // T4: getWorkflowStatus Degraded Response Tests
@@ -1036,6 +1075,65 @@ describe('WP1.3: Node Log Writer — real DB integration', () => {
     expect(phases.filter((p: string) => p === 'cascade_skip')).toHaveLength(5)
   })
 
+  it('diagnosis setup failure restores workflow out of paused and cascades failure', async () => {
+    const { Agent } = await import('@/agent/agent')
+    const { Session } = await import('@/session/session')
+    const { WorkflowEngine } = await import('../workflow-engine')
+    const { workflowId } = setupWorkflow('diagnosis-setup-failure-test', [
+      { id: 'A', deps: [], required: true },
+      { id: 'B', deps: ['A'], required: true },
+    ])
+    const wid = workflowId
+    const createdWorkflow = Effect.runSync(service.getWorkflow(wid)) as DAGWorkflowSession
+    if (!service.atomicReplan) throw new Error('atomicReplan unavailable')
+    Effect.runSync(service.atomicReplan({
+      workflowId: wid,
+      chatSessionId: createdWorkflow.chat_session_id,
+      removeNodeIds: [],
+      updates: [],
+      newNodes: [],
+      newWorkflowConfig: {
+        ...createdWorkflow.config,
+        failure_handler: { enabled: true, agent: 'general', max_recoveries: 1 },
+      },
+      action: 'replan',
+      oldState: { config: createdWorkflow.config, node_ids: [] },
+      newState: {
+        config: {
+          ...createdWorkflow.config,
+          failure_handler: { enabled: true, agent: 'general', max_recoveries: 1 },
+        },
+        node_ids: [],
+      },
+      changeDetails: {},
+      changedBy: null,
+    }))
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateNodeStatus({ sessionId: `${wid}::A`, status: 'running' }))
+
+    const fakeAgentService = {
+      get: () => Effect.succeed({ name: 'general' } as Agent.Info),
+    } as Pick<Agent.Interface, 'get'>
+    const fakeSessionService = {
+      create: () => Effect.fail(new Error('diagnosis session create failed')),
+    } as unknown as Pick<Session.Interface, 'create'>
+    const engineWithCapturedServices = Effect.runSync(
+      WorkflowEngine.make.pipe(
+        Effect.provideService(Agent.Service, fakeAgentService as Agent.Interface),
+        Effect.provideService(Session.Service, fakeSessionService as Session.Interface),
+      ),
+    )
+
+    Effect.runSync(engineWithCapturedServices.handleNodeFailure(wid, `${wid}::A`, new Error('A failed')))
+
+    const wf = Effect.runSync(service.getWorkflow(wid)) as DAGWorkflowSession | undefined
+    const nodeA = Effect.runSync(service.getNode(`${wid}::A`)) as DAGNodeSession | undefined
+    const nodeB = Effect.runSync(service.getNode(`${wid}::B`)) as DAGNodeSession | undefined
+    expect(wf?.status).not.toBe('paused')
+    expect(nodeA?.status satisfies DAGNodeStatus | undefined).toBe('failed')
+    expect(nodeB?.status satisfies DAGNodeStatus | undefined).toBe('skipped')
+  })
+
   it('§10.e: node logging failure does not interrupt node completion', () => {
     // Even if appendNodeLog would fail, the node operation must succeed.
     // Simulate by completing a node on a workflow that was cancelled.
@@ -1062,19 +1160,35 @@ describe('WP1.3: Node Log Writer — real DB integration', () => {
     const node = Effect.runSync(service.getNode(`${wid}::A`)) as any
     expect(node?.status).toBe('completed')
   })
+
+  it('paused scheduling does not reserve pending nodes in spawnedNodes', () => {
+    const { workflowId } = setupWorkflow('paused-no-reservation-test', [
+      { id: 'A', deps: [], required: true },
+    ])
+    const wid = workflowId
+    __internal_spawnedNodes().delete(`${wid}::A`)
+    Effect.runSync(service.updateWorkflowStatus(wid, 'running'))
+    Effect.runSync(service.updateWorkflowStatus(wid, 'paused'))
+
+    const result = Effect.runSync(engine.scheduleReadyNodes(wid)) as { scheduled: number }
+
+    expect(result.scheduled).toBe(0)
+    expect(__internal_spawnedNodes().has(`${wid}::A`)).toBe(false)
+    expect((Effect.runSync(service.getNode(`${wid}::A`)) as DAGNodeSession | undefined)?.status).toBe('pending')
+  })
 })
 
-describe('validateWorkflowConfigLimits: 20/10 cap single source of truth', () => {
+describe('validateWorkflowConfigLimits: 100/10 cap single source of truth', () => {
   const nodes = (n: number): unknown[] => Array.from({ length: n }, (_, i) => ({ id: `n${i}` }))
 
-  it('accepts exactly 20 nodes', () => {
-    expect(validateWorkflowConfigLimits({ nodes: nodes(20), max_concurrency: 5 })).toEqual({ ok: true })
+  it('accepts exactly 100 nodes', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(100), max_concurrency: 5 })).toEqual({ ok: true })
   })
 
-  it('rejects 21 nodes with node cap reason', () => {
-    expect(validateWorkflowConfigLimits({ nodes: nodes(21), max_concurrency: 5 })).toEqual({
+  it('rejects 101 nodes with node cap reason', () => {
+    expect(validateWorkflowConfigLimits({ nodes: nodes(101), max_concurrency: 5 })).toEqual({
       ok: false,
-      reason: 'node cap exceeded: 21 > 20',
+      reason: 'node cap exceeded: 101 > 100',
     })
   })
 
@@ -1134,4 +1248,3 @@ describe('validateWorkflowConfigLimits: 20/10 cap single source of truth', () =>
     })
   })
 })
-

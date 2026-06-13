@@ -3,7 +3,7 @@
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 /**
- * Workflow creation/replan 配置上限校验（20/10 上限单一来源）。
+ * Workflow creation/replan 配置上限校验（numeric limits single source）。
  *
  * Extracted from workflow-engine.ts to break the session-service ↔ workflow-engine
  * circular import. Both createWorkflow (session-service) and validateReplanPostConfig
@@ -44,9 +44,18 @@ export const MAX_SUB_DAG_DEPTH = 3
  */
 export const DEFAULT_SUB_DAG_TIMEOUT_MS = 1_800_000
 
+/** Default node execution timeout: 30 minutes. */
+export const DEFAULT_NODE_TIMEOUT_MS = 1_800_000
+
+/** Hard workflow node cap. */
+export const MAX_WORKFLOW_NODES = 100
+
+/** Planning guidance threshold before a workflow should be split/replanned. */
+export const RECOMMENDED_WORKFLOW_NODES = 50
+
 /**
  * Single source of truth for the workflow config caps:
- *   - node count ≤ 20
+ *   - node count ≤ MAX_WORKFLOW_NODES
  *   - max_concurrency ∈ [1, 10]
  *
  * Consumed by `createWorkflow` (session-service.ts) at creation and reused by
@@ -60,8 +69,8 @@ export function validateWorkflowConfigLimits(
   // must be rejected, not silently bypassed — see the guard below.
   config: { nodes: readonly unknown[]; max_concurrency: number | undefined },
 ): { ok: true } | { ok: false; reason: string } {
-  if (config.nodes.length > 20) {
-    return { ok: false, reason: `node cap exceeded: ${config.nodes.length} > 20` }
+  if (config.nodes.length > MAX_WORKFLOW_NODES) {
+    return { ok: false, reason: `node cap exceeded: ${config.nodes.length} > ${MAX_WORKFLOW_NODES}` }
   }
   // P0: undefined/null/non-finite must NOT bypass the 1..10 cap. Pre-guard, an
   // undefined value made both `< 1` and `> 10` evaluate false, returning ok:true
@@ -230,5 +239,60 @@ export function validateInputMapping(
     }
   }
 
+  return { ok: true }
+}
+
+/**
+ * WP-E1: Failure handler schema validation (no runtime evaluation).
+ *
+ * Validates:
+ * 1. Default (undefined): OK (no handler = immediate cascade).
+ * 2. If enabled is false: OK (handler disabled).
+ * 3. If enabled is true:
+ *    - `agent` must be a non-empty string (when provided).
+ *    - `diagnosis_timeout_ms` must be a positive integer ≥ 5000 (≥ 5s).
+ *    - `on_diagnosis_timeout` must be `"cascade"` (when provided).
+ *    - `max_recoveries` must be a non-negative integer ≤ 10.
+ *
+ * 调用方：
+ * - `createWorkflow`（session-service.ts）
+ * - `validateReplanPostConfig`（workflow-engine.ts）
+ *
+ * Reason strings 稳定共享，两个入口报告相同消息。
+ */
+export function validateFailureHandler(config: unknown): { ok: true } | { ok: false; reason: string } {
+  if (config === undefined || config === null) return { ok: true }
+  if (typeof config !== "object" || Array.isArray(config)) {
+    return { ok: false, reason: `failure_handler must be a plain object, got ${Array.isArray(config) ? "array" : typeof config}` }
+  }
+  const fh = config as Record<string, unknown>
+  if (typeof fh.enabled !== "boolean") {
+    return { ok: false, reason: `failure_handler.enabled must be a boolean` }
+  }
+  if (!fh.enabled) return { ok: true }
+  if (fh.agent !== undefined && (typeof fh.agent !== "string" || fh.agent.length === 0)) {
+    return { ok: false, reason: `failure_handler.agent must be a non-empty string` }
+  }
+  if (fh.diagnosis_timeout_ms !== undefined) {
+    if (typeof fh.diagnosis_timeout_ms !== "number" || !Number.isFinite(fh.diagnosis_timeout_ms)) {
+      return { ok: false, reason: `failure_handler.diagnosis_timeout_ms must be a finite number` }
+    }
+    if (fh.diagnosis_timeout_ms < 5000) {
+      return { ok: false, reason: `failure_handler.diagnosis_timeout_ms must be ≥ 5000ms` }
+    }
+  }
+  if (fh.on_diagnosis_timeout !== undefined) {
+    if (fh.on_diagnosis_timeout !== "cascade") {
+      return { ok: false, reason: `failure_handler.on_diagnosis_timeout must be "cascade"` }
+    }
+  }
+  if (fh.max_recoveries !== undefined) {
+    if (typeof fh.max_recoveries !== "number" || !Number.isFinite(fh.max_recoveries)) {
+      return { ok: false, reason: `failure_handler.max_recoveries must be a finite number` }
+    }
+    if (!Number.isInteger(fh.max_recoveries) || fh.max_recoveries < 0 || fh.max_recoveries > 10) {
+      return { ok: false, reason: `failure_handler.max_recoveries must be an integer in [0, 10]` }
+    }
+  }
   return { ok: true }
 }

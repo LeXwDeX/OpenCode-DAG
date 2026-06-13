@@ -17,7 +17,7 @@
  *
  * Acceptance criteria (009-dag-capability-expansion.md §7 WP-D2):
  * - Parent workflow + "dag" node DB rows created correctly
- * - Sub-DAG config with > 20 nodes rejected by createWorkflow (node cap)
+ * - Sub-DAG config with > 100 nodes rejected by createWorkflow (node cap)
  * - bootstrapWorkflowFromConfig depth=4 rejected before any DB writes
  * - bootstrapWorkflowFromConfig depth=1 creates DB rows + persists chat_session_id
  */
@@ -167,10 +167,10 @@ describe("WP-D2 scenario 27a: sub-DAG spawn DB integration", () => {
     expect(nodes[0].config.worker_config.subDagConfig).toBeTruthy()
   })
 
-  it("Test B: createWorkflow with 21 nodes → validateWorkflowConfigLimits rejects", async () => {
+  it("Test B: createWorkflow with 101 nodes → validateWorkflowConfigLimits rejects", async () => {
     const dagSessionService = Effect.runSync(DAGSessionService.make)
 
-    const overCapNodes: DAGNodeConfig[] = Array.from({ length: 21 }, (_, i) => ({
+    const overCapNodes: DAGNodeConfig[] = Array.from({ length: 101 }, (_, i) => ({
       id: `node-${i}`,
       name: `node-${i}`,
       dependencies: [],
@@ -197,7 +197,7 @@ describe("WP-D2 scenario 27a: sub-DAG spawn DB integration", () => {
 
     expect(result._tag).toBe("Failure")
     if (result._tag === "Failure") {
-      expect(String(result.cause)).toContain("node cap exceeded")
+      expect(String(result.cause)).toContain("node cap exceeded: 101 > 100")
     }
   })
 

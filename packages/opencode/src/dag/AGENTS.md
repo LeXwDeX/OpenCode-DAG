@@ -117,7 +117,7 @@ DAG 工作流配置形状的**唯一权威定义** = `session/types.ts` 的 `DAG
 ] }
 ```
 
-约束上限（`limits.ts`）：节点 ≤20、并发 1-10、子 DAG 深度 ≤3。声明式 `condition`（节点级 skip/ready）与 `input_mapping`（上游数据注入）的 schema 与校验规则以 `session/types.ts` + schema 校验代码为准。
+约束上限与默认超时的数字真相源是 `session/limits.ts`；本文档不复制具体数值。声明式 `condition`（节点级 skip/ready）与 `input_mapping`（上游数据注入）的 schema 与校验规则以 `session/types.ts` + schema 校验代码为准。
 
 ### 6.2 扩展点
 

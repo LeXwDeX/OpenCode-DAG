@@ -252,7 +252,7 @@ export interface DAGNodeConfig {
  * - `validateWorkerTypes` (core-start.ts): skips agent registry resolution,
  *   checks that `subDagConfig` is present.
  * - `validateWorkflowConfigLimits` (limits.ts): applied to `subDagConfig`
- *   independently at `createWorkflow` time (nodes ≤20, concurrency ∈ [1,10]).
+ *   independently at `createWorkflow` time (node cap from limits.ts, concurrency ∈ [1,10]).
  * - `bootstrapWorkflowFromConfig` (core-start.ts): rejects depth > 3
  *   (`MAX_SUB_DAG_DEPTH`) before any DB writes.
  */
@@ -278,6 +278,16 @@ export interface DAGConfig {
   max_concurrency: number;
   /** 工作流级别的超时（毫秒） */
   timeout_ms?: number;
+  /**
+   * Failure handler configuration (WP-E1).
+   *
+   * When enabled, the engine pauses the workflow and spawns a diagnosis agent
+   * on node failure, giving an opportunity to retry with adjusted parameters,
+   * replan the tail, or skip non-required nodes — instead of immediate cascade.
+   *
+   * Default (undefined): immediate cascade (existing behavior). Backward-compatible.
+   */
+  failure_handler?: FailureHandlerConfig;
 }
 
 // ============================================================================
@@ -783,3 +793,73 @@ export type StepResult =
       node_id: string
       error: string
     }
+
+// ============================================================================
+// 11. Failure Diagnosis & Auto-Recovery (WP-E1)
+// ============================================================================
+
+/**
+ * Workflow-level failure handler configuration (WP-E1).
+ *
+ * When `enabled: true`, the engine pauses the workflow and spawns a
+ * diagnosis agent session when any node fails. The agent inspects the
+ * failure context and returns a structured decision:
+ *
+ * - `retry` — while the failed node is still running, reset it to `pending` and re-execute with optional adjustments.
+ * - `replan` — apply a replan patch to the pending tail; the current running node may reset to pending only after a successful replan.
+ * - `skip` — abandon recovery and fall through to the normal failed+cascade path; the engine never writes running/failed → skipped.
+ * - `cascade` — accept failure, proceed with normal cascade path.
+ *
+ * Default behavior (when `failure_handler` is undefined) is the existing
+ * immediate cascade path. Backward-compatible.
+ */
+export interface FailureHandlerConfig {
+  /** Enable automatic failure diagnosis (default: false = immediate cascade). */
+  enabled: boolean;
+  /** Agent name used for diagnosis (default: "general"). Must be a registered agent. */
+  agent?: string;
+  /** Max time to wait for diagnosis before falling back to cascade (ms). Default: 120000 (2 min). */
+  diagnosis_timeout_ms?: number;
+  /** Fallback action when diagnosis itself times out (default: "cascade"; only cascade is valid). */
+  on_diagnosis_timeout?: "cascade";
+  /** Max automatic recoveries per workflow before giving up and cascading (default: 3). */
+  max_recoveries?: number;
+}
+
+/**
+ * Input context passed to the diagnosis agent (WP-E1).
+ *
+ * Read-only snapshot — diagnosis agent uses this to understand what happened.
+ */
+export interface FailureDiagnosisInput {
+  /** Workflow ID. */
+  workflowId: string;
+  /** Failed node ID. */
+  nodeId: string;
+  /** Error message. */
+  error: string;
+  /** Whether this was a timeout (true) or other failure (false). */
+  isTimeout: boolean;
+  /** The failed node's config. */
+  nodeConfig: DAGNodeConfig;
+  /** Recent node logs (last 20 entries). */
+  nodeLogs: readonly { log_message: string; log_level: string; created_at: number }[];
+  /** Workflow progress: completed / failed / total. */
+  workflowProgress: { completed: number; failed: number; total: number };
+  /** How many automatic recoveries have already been attempted for this node. */
+  recoveryAttemptsForNode: number;
+  /** Total recoveries attempted across entire workflow. */
+  totalRecoveriesAttempted: number;
+}
+
+/**
+ * Structured decision returned by the diagnosis agent (WP-E1).
+ *
+ * The engine executes retry/replan before failure is terminal. A skip decision is
+ * a cascade-compatible abandon signal; it does not authorize failed/running → skipped.
+ */
+export type DiagnosisDecision =
+  | { action: "retry"; reason: string; new_timeout_ms?: number; new_worker_config?: Record<string, unknown> }
+  | { action: "replan"; reason: string; patch: ReplanPatch }
+  | { action: "skip"; reason: string }
+  | { action: "cascade"; reason: string };

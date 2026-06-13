@@ -17,6 +17,7 @@
  */
 
 import type { DAGConfig, DAGNodeConfig } from "../../session/types"
+import { MAX_WORKFLOW_NODES, RECOMMENDED_WORKFLOW_NODES } from "../../session/limits"
 
 // ---------------------------------------------------------------------------
 // Template identity
@@ -62,7 +63,10 @@ export interface DAGTemplate {
 // ---------------------------------------------------------------------------
 
 function brief(input: DAGTemplateInput): string {
-  const parts: string[] = [input.goal]
+  const parts: string[] = [
+    input.goal,
+    `规划要求：按可验证的小任务拆分 DAG 节点；推荐不超过 ${RECOMMENDED_WORKFLOW_NODES} 个节点，硬上限 ${MAX_WORKFLOW_NODES} 个节点。`,
+  ]
   if (input.scope) parts.push(`范围：${input.scope}`)
   if (input.context) parts.push(`上下文：${input.context}`)
   return parts.join(" | ")

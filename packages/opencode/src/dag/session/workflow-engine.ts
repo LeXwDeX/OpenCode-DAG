@@ -2,7 +2,7 @@
 // Copyright (c) 2026 the fork author (see NOTICE file for attribution).
 // Licensed under GNU AGPL v3; modifications must be open-sourced.
 
-import { Cause, Effect, Result } from "effect"
+import { Cause, Effect, Option, Result } from "effect"
 import * as Log from "@opencode-ai/core/util/log"
 import { DAGSessionService, emitWorkflowReplannedEvent, getEventBus } from "./session-service"
 import type {
@@ -10,7 +10,7 @@ import type {
   CreateViolationInput,
   UpdateNodeStatusInput,
 } from "./session-service"
-import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { DEFAULT_NODE_TIMEOUT_MS, validateFailureHandler, validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import { buildOutputMap, splitByCondition } from "./condition-eval"
 import { collectInputMapping } from "./input-mapping-collector"
 import { injectCollectedDataToPrompt } from "./prompt-inject"
@@ -23,6 +23,9 @@ import type {
   DAGViolation,
   DAGViolationType,
   DAGWorkflowStatus,
+  DiagnosisDecision,
+  FailureDiagnosisInput,
+  FailureHandlerConfig,
   ReplanPatch,
   ReplanPreviewResult,
   ReplanResult,
@@ -151,6 +154,7 @@ const engineRegistry = new Map<string, WorkflowEngine>()
 const spawnedNodes = new Set<string>()
 const concurrencyRegistry = new Map<string, number>()
 const replanInFlight = new Set<string>()
+const recoveryGenerationRegistry = new Map<string, number>()
 // P2-B: Module-level registry for step-execution (single-node under paused workflow).
 // A workflow is in step mode iff its workflowId is in `stepMode`. While set:
 // - spawnReadyNode's paused guard allows spawn for the target workflow
@@ -170,178 +174,31 @@ const stepResolve = new Map<string, (result: StepResult) => void>()
 const nodeSettledRegistry = new Map<string, boolean>()
 
 // ============================================================================
-// WP-D3: Sub-DAG Lifecycle Bridge — Parent↔Child event subscription registry
+// WP-E1: Failure Diagnosis — recovery attempts registry
+// Tracks how many automatic recoveries have been attempted per workflow.
+// Module-level (not persisted) — acceptable since diagnosis is best-effort
+// and restarts reset all in-flight workflows anyway.
 // ============================================================================
-//
-// When `spawnReadyNode` dispatches a `worker_type="dag"` node, the child
-// workflow runs independently. The parent node stays in "running" until the
-// child converges to a terminal state. This bridge subscribes to EventBus
-// events (`workflow.completed` / `workflow.failed` / `workflow.cancelled`) and
-// translates them to `handleNodeCompletion` / `handleNodeFailure` on the
-// parent engine — reusing the existing completion path (no new state-mutation
-// channel, iron laws #3/#4).
-//
-// Each entry is keyed by `parentNodeId` (globally unique namespaced ID). The
-// value carries the unsubscribes, the setTimeout ID, and the child workflow ID
-// (for the cancel cascade discovery). A single `cleanupSubscriptions` call
-// removes everything for that node — covering the 4 terminal paths:
-// completed / failed / cancelled / timeout.
+const recoveryAttemptsRegistry = new Map<string, number>()
+
+// ============================================================================
+// WP-D3: Sub-DAG Lifecycle Bridge — extracted to ./subdag-bridge.ts (Step 4).
+// Re-exported here for backward compatibility with all existing consumers
+// (workflow-engine.ts internal calls + scenario-27-subdag-lifecycle.test.ts).
+// Imported separately for internal use within this file.
 // ============================================================================
 
-interface SubdagSubscriptionState {
-  unsubscribes: Array<() => void>
-  timeoutId: ReturnType<typeof setTimeout> | undefined
-  parentWorkflowId: string
-  childWorkflowId: string
-}
+import {
+  cleanupSubscriptions,
+  installSubdagLifecycleBridge,
+} from "./subdag-bridge"
 
-const subdagSubscriptions = new Map<string, SubdagSubscriptionState>()
-
-/** @internal test-only — exposes module-private subdagSubscriptions map. */
-export const __internal_subdagSubscriptions = (): Map<string, SubdagSubscriptionState> =>
-  subdagSubscriptions
-
-/**
- * Cancel all event subscriptions and the timeout timer for a parent node.
- * Idempotent — safe to call multiple times (second call is a no-op).
- *
- * Called from 4 paths (WP-D3 §7, INFO-4):
- *   1. `workflow.completed` handler (parent node completed)
- *   2. `workflow.failed` handler (parent node failed)
- *   3. `workflow.cancelled` handler (parent node failed-after-cancel)
- *   4. setTimeout fire (timeout fallback)
- */
-export function cleanupSubscriptions(parentNodeId: string): void {
-  const state = subdagSubscriptions.get(parentNodeId)
-  if (!state) return
-  if (state.timeoutId !== undefined) clearTimeout(state.timeoutId)
-  for (const unsub of state.unsubscribes) unsub()
-  subdagSubscriptions.delete(parentNodeId)
-}
-
-/**
- * Install the event-bridge for a sub-DAG lifecycle (WP-D3, §3.3 + §7 WP-D3).
- *
- * After `spawnReadyNode` dispatches a "dag" node and `bootstrapWorkflowFromConfig`
- * returns, this function subscribes to the child workflow's terminal events
- * and starts a timeout fallback timer. When either the event arrives or the
- * timer fires, the appropriate parent-node completion path is driven
- * (`handleNodeCompletion` / `handleNodeFailure`).
- *
- * Dependencies are passed as callbacks rather than captured from closure so
- * the bridge can be tested in isolation without going through `spawnReadyNode`.
- *
- * @param args.parentWorkflowId The parent workflow ID (consumer of the bridge).
- * @param args.parentNodeId The parent "dag" node ID (namespaced, subscription key).
- * @param args.childWorkflowId The child workflow ID (event-filter target).
- * @param args.timeoutMs Timeout in ms before the bridge fires "subdag_timeout".
- * @param args.eventBus The shared IEventBus instance (process-level singleton).
- * @param args.sessionService The session service (for creating timeout violations).
- * @param args.onChildCompleted Callback driven when the child reaches "completed".
- * @param args.onChildFailed Callback driven when the child reaches "failed" / "cancelled".
- * @param args.onCancelChild Callback driven on timeout to cancel the child workflow.
- * @param args.onCreateViolation Callback to create a DAGViolation row.
- */
-export function installSubdagLifecycleBridge(args: {
-  parentWorkflowId: string
-  parentNodeId: string
-  childWorkflowId: string
-  timeoutMs: number
-  eventBus: IEventBus
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  sessionService: any
-  onChildCompleted: (workflowId: string, nodeId: string, output: unknown) => Effect.Effect<unknown>
-  onChildFailed: (workflowId: string, nodeId: string, error: Error) => Effect.Effect<unknown>
-  onCancelChild: (childWorkflowId: string) => Effect.Effect<unknown>
-  onCreateViolation: (input: CreateViolationInput) => Effect.Effect<unknown>
-}): void {
-  const {
-    parentWorkflowId,
-    parentNodeId,
-    childWorkflowId,
-    timeoutMs,
-    eventBus,
-    sessionService,
-    onChildCompleted,
-    onChildFailed,
-    onCancelChild,
-    onCreateViolation,
-  } = args
-  const unsubscribes: Array<() => void> = []
-
-  // Idempotency guard: only act once per parent-node (prevents duplicate
-  // state-machine transitions if a child event races with the timeout).
-  let settled = false
-  const settle = () => {
-    if (settled) return false
-    settled = true
-    cleanupSubscriptions(parentNodeId)
-    return true
-  }
-
-  // Subscribe to "workflow.completed" — child converged successfully
-  unsubscribes.push(
-    eventBus.subscribe("workflow.completed", (event) => {
-      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
-      if (!settle()) return
-      Effect.runPromise(onChildCompleted(parentWorkflowId, parentNodeId, childWorkflowId).pipe(Effect.ignore))
-    }),
-  )
-
-  // Subscribe to "workflow.failed"
-  unsubscribes.push(
-    eventBus.subscribe("workflow.failed", (event) => {
-      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
-      if (!settle()) return
-      Effect.runPromise(
-        onChildFailed(parentWorkflowId, parentNodeId, new Error("sub-workflow failed")).pipe(Effect.ignore),
-      )
-    }),
-  )
-
-  // Subscribe to "workflow.cancelled" — treated as a failure from the parent's
-  // perspective (parent node marked failed, cascade skip downstream follows)
-  unsubscribes.push(
-    eventBus.subscribe("workflow.cancelled", (event) => {
-      if ((event as { workflow_id: string }).workflow_id !== childWorkflowId) return
-      if (!settle()) return
-      Effect.runPromise(
-        onChildFailed(parentWorkflowId, parentNodeId, new Error("sub-workflow cancelled")).pipe(Effect.ignore),
-      )
-    }),
-  )
-
-  // Timeout fallback: if no terminal event arrives within timeoutMs, fire the
-  // violation + cancel child + fail parent node.
-  const timeoutId = setTimeout(() => {
-    if (!settle()) return
-    Effect.runPromise(
-      Effect.gen(function* () {
-        yield* onCreateViolation({
-          workflowId: parentWorkflowId,
-          nodeId: parentNodeId,
-          type: "subdag_timeout",
-          severity: "error",
-          message: `sub-DAG did not converge within ${timeoutMs}ms`,
-          details: { timeoutMs, childWorkflowId },
-        }).pipe(Effect.catchCause(() => Effect.void))
-        yield* onCancelChild(childWorkflowId).pipe(Effect.catchCause(() => Effect.void))
-        yield* onChildFailed(
-          parentWorkflowId,
-          parentNodeId,
-          new Error(`sub-DAG timed out after ${timeoutMs}ms`),
-        ).pipe(Effect.catchCause(() => Effect.void))
-      }).pipe(Effect.ignore),
-    )
-  }, timeoutMs)
-
-  subdagSubscriptions.set(parentNodeId, {
-    unsubscribes,
-    timeoutId,
-    parentWorkflowId,
-    childWorkflowId,
-  })
-}
+export {
+  type SubdagSubscriptionState,
+  __internal_subdagSubscriptions,
+  cleanupSubscriptions,
+  installSubdagLifecycleBridge,
+} from "./subdag-bridge"
 
 // ============================================================================
 // Replan Pure Helpers — canonical implementations in ./execution-core.ts.
@@ -354,7 +211,7 @@ export function installSubdagLifecycleBridge(args: {
 export { validateWorkflowConfigLimits } from "./limits"
 
 /**
- * Validates the post-patch config: node cap (20), concurrency range (1..10),
+ * Validates the post-patch config: node cap, concurrency range (1..10),
  * dependency resolution, required-node integrity, and cycle absence.
  *
  * NOTE: Stays in workflow-engine.ts (Advisory A1 方案 b) because it depends on
@@ -369,6 +226,10 @@ export function validateReplanPostConfig(
   const limits = validateWorkflowConfigLimits({ nodes: newConfigNodes, max_concurrency: newMaxConcurrency })
   if (!limits.ok) {
     return { ok: false, reason: limits.reason }
+  }
+  const handlerResult = validateFailureHandler(workflow.config.failure_handler)
+  if (!handlerResult.ok) {
+    return { ok: false, reason: handlerResult.reason }
   }
   const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
   for (const n of newConfigNodes) {
@@ -422,6 +283,17 @@ export function unregisterEngine(workflowId: string): void {
   for (const k of Array.from(spawnedNodes)) {
     if (k.startsWith(`${workflowId}::`)) spawnedNodes.delete(k)
   }
+  for (const k of Array.from(recoveryGenerationRegistry.keys())) {
+    if (k.startsWith(`${workflowId}::`)) recoveryGenerationRegistry.delete(k)
+  }
+}
+
+function markNodeRecovery(nodeId: string): void {
+  recoveryGenerationRegistry.set(nodeId, (recoveryGenerationRegistry.get(nodeId) ?? 0) + 1)
+}
+
+function hasNodeRecoveredSinceSpawn(nodeId: string, generationAtSpawn: number): boolean {
+  return (recoveryGenerationRegistry.get(nodeId) ?? 0) !== generationAtSpawn
 }
 
 /**
@@ -443,11 +315,26 @@ export const __internal_concurrencyRegistry = (): Map<string, number> => concurr
 export const __internal_stepMode = (): Set<string> => stepMode
 /** @internal test-only — exposes module-private nodeSettled registry for unit testing (WP1) */
 export const __internal_nodeSettled = (): Map<string, boolean> => nodeSettledRegistry
+/** @internal test-only — exposes recovery generation registry for stale-spawn regression tests */
+export const __internal_recoveryGeneration = (): Map<string, number> => recoveryGenerationRegistry
+/** @internal test-only — advances the recovery generation for stale-spawn regression tests */
+export const __internal_markNodeRecovery = (nodeId: string): void => markNodeRecovery(nodeId)
+/** @internal test-only — mirrors spawnReadyNode's post-prompt recovery guard */
+export const __internal_hasNodeRecoveredSinceSpawn = (nodeId: string, generationAtSpawn: number): boolean =>
+  hasNodeRecoveredSinceSpawn(nodeId, generationAtSpawn)
 
 const make = Effect.gen(function* () {
   const dagSessionService = yield* DAGSessionService.make
   const sessionService = dagSessionService
   const violationAPI = new ViolationQueryAPI(sessionService)
+
+  // WP-E1: Capture Agent.Service and Session.Service at the make level so
+  // handleNodeFailure's inner failure-diagnosis path can use them without
+  // adding Effect context requirements (handleNodeFailure is called from
+  // setTimeout callbacks via Effect.runPromise which has no service context).
+  // Uses serviceOption (no requirement propagation) — undefined when absent.
+  const capturedAgentService = Option.getOrUndefined(yield* Effect.serviceOption(Agent.Service))
+  const capturedChatSessions = Option.getOrUndefined(yield* Effect.serviceOption(Session.Service))
 
   // §10.e: non-interrupting log helper for node lifecycle events.
   // appendNodeLog failures are swallowed so they never break node execution.
@@ -465,6 +352,24 @@ const make = Effect.gen(function* () {
   // are now imported from ./execution-core.ts (A layer, pure logic)
   // ============================================================================
 
+  /**
+   * P2-B stepMode guard for early-failure paths inside spawnReadyNode.
+   * When a node fails via direct updateNodeStatus (NOT via handleNodeFailure),
+   * the stepMode Deferred must still be resolved to prevent stepWorkflow from hanging.
+   * Idempotent: only fires when stepMode is active for this workflow; the first
+   * caller wins (delete-before-callback prevents double-resolution).
+   */
+  const resolveStepFailed = (wid: string, nodeId: string, errorMsg: string): void => {
+    if (stepMode.has(wid)) {
+      const resolve = stepResolve.get(wid)
+      if (resolve) {
+        stepResolve.delete(wid)
+        stepMode.delete(wid)
+        resolve({ ok: false, reason: 'node_failed', node_id: nodeId, error: errorMsg })
+      }
+    }
+  }
+
   // ============================================================================
   // Node Spawn — Full daemon-flow for a single node (§10 compliant)
   // ============================================================================
@@ -479,6 +384,7 @@ const make = Effect.gen(function* () {
     // WP1-B: register node as not-yet-settled. Effect.ensuring sets it to true
     // when the node reaches any terminal state (clears the timeout).
     nodeSettledRegistry.set(node.node_id, false)
+    const recoveryGenerationAtSpawn = recoveryGenerationRegistry.get(node.node_id) ?? 0
 
     // WP1-B: timeout state in closure scope so Effect.ensuring can access it.
     let nodeSettledFlag = false
@@ -503,6 +409,7 @@ const make = Effect.gen(function* () {
       // P2-B: step-mode relaxation — when stepMode is active for this workflow,
       // spawn is allowed even under 'paused' (stepWorkflow is driving a single-node execution).
       if (wf && wf.status === 'paused' && !stepMode.has(workflowId)) {
+        spawnedNodes.delete(node.node_id)
         return
       }
 
@@ -516,6 +423,8 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
           Effect.ignore
         )
+        // P2-B: resolve stepMode Deferred so stepWorkflow does not hang
+        resolveStepFailed(workflowId, node.node_id, 'no promptOps configured for DAG node execution')
         return
       }
 
@@ -536,6 +445,7 @@ const make = Effect.gen(function* () {
             Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
             Effect.ignore,
           )
+          resolveStepFailed(workflowId, node.node_id, `worker_type="dag" requires valid worker_config.subDagConfig (DAGConfig)`)
           return
         }
 
@@ -568,6 +478,7 @@ const make = Effect.gen(function* () {
             Effect.tapError((err) => Effect.logWarning(`[DAG] violation create failed: ${err}`)),
             Effect.ignore,
           )
+          resolveStepFailed(workflowId, node.node_id, `recursion depth exceeded: depth ${childDepth} > max ${MAX_SUB_DAG_DEPTH}`)
           return
         }
 
@@ -627,6 +538,7 @@ const make = Effect.gen(function* () {
             Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
             Effect.ignore,
           )
+          resolveStepFailed(workflowId, node.node_id, errMsg)
           return
         }
         // WP-D2: sub-DAG node stays in "running" state after bootstrap success.
@@ -723,6 +635,8 @@ const make = Effect.gen(function* () {
           Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
           Effect.ignore
         )
+        // P2-B: resolve stepMode Deferred so stepWorkflow does not hang
+        resolveStepFailed(workflowId, node.node_id, `unknown worker_type: ${node.config.worker_type}`)
         // #2 worker_missing
         if (wf?.chat_session_id) {
           yield* safeAppendLog({
@@ -770,6 +684,8 @@ const make = Effect.gen(function* () {
               Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
               Effect.ignore
             )
+            // P2-B: resolve stepMode Deferred so stepWorkflow does not hang
+            resolveStepFailed(workflowId, node.node_id, 'worktree creation failed')
             return
           }
 
@@ -916,7 +832,7 @@ const make = Effect.gen(function* () {
           })
         }
         
-        const timeoutMs = node.config.timeout_ms ?? 300_000
+        const timeoutMs = node.config.timeout_ms ?? DEFAULT_NODE_TIMEOUT_MS
         // #6 prompt_started
         yield* safeAppendLog({
           nodeId: node.node_id,
@@ -980,6 +896,9 @@ const make = Effect.gen(function* () {
       const postPromptNode = yield* sessionService.getNode(node.node_id).pipe(
         Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
       )
+      if (hasNodeRecoveredSinceSpawn(node.node_id, recoveryGenerationAtSpawn)) {
+        return
+      }
       if (postPromptNode?.status === "failed") {
         // Timeout fiber (or other mechanism) already marked node failed.
         // Skip node_complete_missing logic to avoid duplicate transitions.
@@ -1033,6 +952,8 @@ const make = Effect.gen(function* () {
               Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
               Effect.ignore
             )
+            // P2-B: resolve stepMode Deferred so stepWorkflow does not hang
+            resolveStepFailed(workflowId, node.node_id, `spawn failed: ${errMsg}`)
             yield* sessionService.createViolation({
               workflowId,
               nodeId: node.node_id,
@@ -1168,6 +1089,8 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       // Freeze out concurrent spawn while a replan is in progress (race guard)
       if (replanInFlight.has(workflowId)) return { scheduled: 0 }
+      const workflow = yield* sessionService.getWorkflow(workflowId)
+      if (workflow?.status === 'paused' && !stepMode.has(workflowId)) return { scheduled: 0 }
       const allNodes = yield* sessionService.listNodes(workflowId)
       const completedNodeIds = new Set<string>(
         allNodes.filter((n: DAGNodeSession) => n.status === 'completed').map((n: DAGNodeSession) => n.node_id)
@@ -1291,6 +1214,7 @@ const make = Effect.gen(function* () {
         status: 'completed',
         outputData: output
       })
+      recoveryGenerationRegistry.delete(nodeId)
 
       // #11 completed
       const wf = yield* sessionService.getWorkflow(workflowId)
@@ -1357,6 +1281,183 @@ const make = Effect.gen(function* () {
       }
       const alreadyTerminal = wasAlreadyFailed  // Only 'failed' terminal state continues
 
+      // WP-E1: Failure Diagnosis — only for currently-running workflows and a
+      // currently-running node. Diagnosis happens before writing failed/violation
+      // so recovery uses legal running→pending, never failed→pending/skipped.
+      const workflowForHandler = yield* sessionService.getWorkflow(workflowId)
+      const failureHandler = workflowForHandler?.config?.failure_handler as FailureHandlerConfig | undefined
+      if (
+        failureHandler?.enabled &&
+        !alreadyTerminal &&
+        currentNode?.status === "running" &&
+        workflowForHandler?.status === "running" &&
+        !stepMode.has(workflowId)
+      ) {
+        const maxRecoveries = failureHandler.max_recoveries ?? 3
+        const recoveryAttempts = recoveryAttemptsRegistry.get(workflowId) ?? 0
+
+        if (recoveryAttempts < maxRecoveries && workflowForHandler.chat_session_id && _promptOps) {
+          const allNodesForRecovery = yield* sessionService.listNodes(workflowId)
+          const nodeLogs = (yield* sessionService.listNodeLogs(nodeId, 20).pipe(
+            Effect.catchCause(() => Effect.succeed([] as { log_message: string; log_level: string; created_at: number }[])),
+          )) ?? [] as { log_message: string; log_level: string; created_at: number }[]
+          const failedNodeConfig = currentNode.config
+          const diagnosisInput: FailureDiagnosisInput = {
+            workflowId,
+            nodeId,
+            error: error.message,
+            isTimeout: error.message.includes("timed out") || error.message.includes("timeout"),
+            nodeConfig: failedNodeConfig,
+            nodeLogs: nodeLogs.map((l: { log_message: string; log_level: string; created_at: number }) => ({
+              log_message: l.log_message,
+              log_level: l.log_level,
+              created_at: l.created_at,
+            })),
+            workflowProgress: {
+              completed: allNodesForRecovery.filter((n: DAGNodeSession) => n.status === "completed").length,
+              failed: allNodesForRecovery.filter((n: DAGNodeSession) => n.status === "failed").length,
+              total: allNodesForRecovery.length,
+            },
+            recoveryAttemptsForNode: recoveryAttempts,
+            totalRecoveriesAttempted: recoveryAttempts,
+          }
+          const promptOps = _promptOps
+
+          yield* sessionService.updateWorkflowStatus(workflowId, "paused")
+
+          if (!capturedAgentService || !capturedChatSessions) {
+            log.warn(`[WP-E1] Agent/Session service not captured, skipping diagnosis`)
+            yield* sessionService.updateWorkflowStatus(workflowId, "running")
+          } else {
+            const diagnosisAgentName = failureHandler.agent ?? "general"
+            const diagAgent = yield* capturedAgentService.get(diagnosisAgentName).pipe(
+              Effect.catchCause(() => Effect.succeed(undefined as Agent.Info | undefined)),
+            )
+            if (!diagAgent) {
+              log.warn(`[WP-E1] Diagnosis agent '${diagnosisAgentName}' not found, cascading`)
+              yield* sessionService.updateWorkflowStatus(workflowId, "running")
+            } else {
+              const decision = yield* Effect.gen(function* () {
+                const diagSession = yield* capturedChatSessions.create({
+                  parentID: workflowForHandler.chat_session_id as SessionID,
+                  title: `DAG Diagnosis: ${failedNodeConfig.name || nodeId}`,
+                })
+                const { runDiagnosisAgent } = yield* Effect.promise(() => import("./failure-diagnosis"))
+                return yield* runDiagnosisAgent({
+                  workflowId,
+                  chatSessionId: workflowForHandler.chat_session_id,
+                  input: diagnosisInput,
+                  handler: failureHandler,
+                  promptOps,
+                  agent: diagAgent,
+                  diagnosisSessionId: diagSession.id,
+                  workflowProgress: diagnosisInput.workflowProgress,
+                })
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.gen(function* () {
+                    const reason = String(Cause.squash(cause))
+                    log.warn(`[WP-E1] Diagnosis setup failed, cascading`, { workflowId, nodeId, reason })
+                    yield* sessionService.updateWorkflowStatus(workflowId, "running").pipe(Effect.catchCause(() => Effect.void))
+                    return { action: "cascade", reason: `diagnosis setup failed: ${reason}` } as DiagnosisDecision
+                  }),
+                ),
+              )
+
+              recoveryAttemptsRegistry.set(workflowId, recoveryAttempts + 1)
+
+              if (decision.action === "retry") {
+                const newTimeout =
+                  (decision as Extract<DiagnosisDecision, { action: "retry" }>).new_timeout_ms ??
+                  (failedNodeConfig.timeout_ms ? failedNodeConfig.timeout_ms * 2 : undefined)
+                yield* sessionService.updateNodeStatus({
+                  sessionId: nodeId,
+                  status: "pending",
+                } satisfies UpdateNodeStatusInput)
+                markNodeRecovery(nodeId)
+                if (newTimeout && newTimeout !== failedNodeConfig.timeout_ms && sessionService.updateNodeConfig) {
+                  yield* sessionService.updateNodeConfig({
+                    nodeId,
+                    newConfig: { ...failedNodeConfig, timeout_ms: newTimeout },
+                  }).pipe(Effect.catchCause(() => Effect.void))
+                }
+                yield* safeAppendLog({
+                  nodeId,
+                  workflowId,
+                  chatSessionId: workflowForHandler.chat_session_id,
+                  logLevel: "info",
+                  logMessage: `Diagnosis: RETRY — ${decision.reason}. New timeout: ${newTimeout ?? "unchanged"}`,
+                  executionPhase: "diagnosis_retry",
+                  logData: { decision: decision.action, reason: decision.reason, new_timeout: newTimeout },
+                })
+                yield* sessionService.updateWorkflowStatus(workflowId, "running")
+                spawnedNodes.delete(nodeId)
+                yield* scheduleReadyNodes(workflowId)
+                return { success: true }
+              }
+
+              if (decision.action === "replan") {
+                yield* safeAppendLog({
+                  nodeId,
+                  workflowId,
+                  chatSessionId: workflowForHandler.chat_session_id,
+                  logLevel: "info",
+                  logMessage: `Diagnosis: REPLAN — ${decision.reason}`,
+                  executionPhase: "diagnosis_replan",
+                  logData: { decision: decision.action, reason: decision.reason },
+                })
+                const replanResult = yield* replanWorkflow(workflowId, decision.patch)
+                if (replanResult.ok) {
+                  yield* sessionService.updateNodeStatus({
+                    sessionId: nodeId,
+                    status: "pending",
+                  } satisfies UpdateNodeStatusInput)
+                  markNodeRecovery(nodeId)
+                  yield* sessionService.updateWorkflowStatus(workflowId, "running")
+                  spawnedNodes.delete(nodeId)
+                  yield* scheduleReadyNodes(workflowId)
+                  return { success: true }
+                }
+                yield* sessionService.updateWorkflowStatus(workflowId, "running")
+              } else {
+                if (decision.action === "skip") {
+                  yield* safeAppendLog({
+                    nodeId,
+                    workflowId,
+                    chatSessionId: workflowForHandler.chat_session_id,
+                    logLevel: "warn",
+                    logMessage: `Diagnosis: SKIP abandoned to cascade — ${decision.reason}`,
+                    executionPhase: "diagnosis_skip_abandoned",
+                    logData: { decision: decision.action, reason: decision.reason },
+                  })
+                } else {
+                  yield* safeAppendLog({
+                    nodeId,
+                    workflowId,
+                    chatSessionId: workflowForHandler.chat_session_id,
+                    logLevel: "warn",
+                    logMessage: `Diagnosis: CASCADE — ${decision.reason}`,
+                    executionPhase: "diagnosis_cascade",
+                    logData: { decision: decision.action, reason: decision.reason },
+                  })
+                }
+                yield* sessionService.updateWorkflowStatus(workflowId, "running")
+              }
+            }
+          }
+        } else if (recoveryAttempts >= maxRecoveries) {
+          yield* safeAppendLog({
+            nodeId,
+            workflowId,
+            chatSessionId: workflowForHandler.chat_session_id,
+            logLevel: "warn",
+            logMessage: `Max recoveries (${maxRecoveries}) reached, cascading failure`,
+            executionPhase: "diagnosis_exhausted",
+            logData: { max_recoveries: maxRecoveries, recovery_attempts: recoveryAttempts },
+          })
+        }
+      }
+
       if (!alreadyTerminal) {
         // 1. Mark node failed
         yield* sessionService.updateNodeStatus({
@@ -1398,6 +1499,7 @@ const make = Effect.gen(function* () {
 
       // 3. Cascade skip downstream pending nodes BEFORE scheduleReadyNodes
       yield* cascadeSkipDownstream(workflowId, nodeId)
+      recoveryGenerationRegistry.delete(nodeId)
 
       // 4. P2-B: stepMode guard (WARN-1) — under step mode, resolve the Deferred
       //    with ok:false:node_failed and skip schedule/finalize. Cascade skip
@@ -1658,6 +1760,9 @@ const make = Effect.gen(function* () {
 
   const previewReplanWorkflow: NonNullable<WorkflowEngine['previewReplanWorkflow']> = (workflowId, patch) =>
     Effect.gen(function* () {
+      if (patch.workflow_id !== workflowId) {
+        return yield* Effect.fail(new Error(`workflow_id mismatch: patch.workflow_id=${patch.workflow_id} does not match ${workflowId}`))
+      }
       const workflow = yield* sessionService.getWorkflow(workflowId)
       if (!workflow) return yield* Effect.fail(new Error(`Workflow ${workflowId} not found`))
       const currentNodes = yield* sessionService.listNodes(workflowId)
@@ -1715,6 +1820,9 @@ const make = Effect.gen(function* () {
 
   const replanWorkflow: WorkflowEngine['replanWorkflow'] = (workflowId, patch) =>
     Effect.gen(function* () {
+      if (patch.workflow_id !== workflowId) {
+        return yield* Effect.fail(new Error(`workflow_id mismatch: patch.workflow_id=${patch.workflow_id} does not match ${workflowId}`))
+      }
       // 0. Freeze out concurrent spawn for the duration of this replan
       // NOTE: replanInFlight only freezes NEW scheduleReadyNodes calls. Already-forked
       // spawnReadyNode fibers from a prior tick continue running. If one of them

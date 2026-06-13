@@ -29,7 +29,7 @@ import type {
 import type { IEventBus } from "../state-machine/IStateMachine"
 import type { WorkflowEvent, NodeEvent, DiffStats } from "../state-machine/types"
 import { FallbackTrigger } from "../state-machine/types"
-import { validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { DEFAULT_NODE_TIMEOUT_MS, validateFailureHandler, validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
 import {
   getValidNextSessionWorkflowStatuses,
   getValidNextSessionNodeStatuses,
@@ -175,7 +175,7 @@ export interface CreateWorkflowInput {
 }
 
 /**
- * Raised when a workflow config violates the 20-node / 1..10-concurrency caps
+ * Raised when a workflow config violates node / 1..10-concurrency caps
  * at creation time. Caps are sourced exclusively from
  * `validateWorkflowConfigLimits` (limits.ts).
  */
@@ -291,6 +291,10 @@ const make = Effect.gen(function* () {
       if (!limits.ok) {
         return yield* Effect.fail(new WorkflowConfigValidationError(limits.reason))
       }
+      const handlerResult = validateFailureHandler(input.config?.failure_handler)
+      if (!handlerResult.ok) {
+        return yield* Effect.fail(new WorkflowConfigValidationError(handlerResult.reason))
+      }
       // WP-B1: per-node condition schema validation (required↔condition 互斥, ref ⊆ deps, structural)
       // WP-C1: per-node input_mapping schema validation (ref ⊆ deps, serializable)
       for (const node of (input.config?.nodes ?? []) as DAGNodeConfig[]) {
@@ -355,11 +359,64 @@ const make = Effect.gen(function* () {
       if (result.length === 0) return undefined
       
       const row = result[0]
+
+      // ── populate node_sessions + violations (interface contract) ──
+      // getWorkflow returns a full DAGWorkflowSession with aggregated node_sessions
+      // and violations. List methods (listAllWorkflows, listWorkflowsByChatSession) remain
+      // lightweight: callers who need nodes/violations use listNodes/listViolations directly.
+      let nodeRows: any[] = []
+      let violationRows: any[] = []
+      Database.use((db) => {
+        nodeRows = db.select().from(dagNodes)
+          .where(eq(dagNodes.workflow_id, workflowId))
+          .all()
+        violationRows = db.select().from(dagViolations)
+          .where(eq(dagViolations.workflow_id, workflowId))
+          .all()
+      })
+
+      const nodeSessions: Record<string, DAGNodeSession> = {}
+      for (const n of nodeRows) {
+        nodeSessions[n.node_id] = {
+          node_id: n.node_id,
+          workflow_id: n.workflow_id,
+          config: n.config as DAGNodeConfig,
+          status: n.status as DAGNodeStatus,
+          output: n.output ?? null,
+          retry_count: n.retry_count,
+          max_retries: n.max_retries,
+          timeout_ms: n.timeout_ms,
+          required_nodes: (n.required_nodes as string[]) ?? [],
+          dependencies: (n.dependencies as string[]) ?? [],
+          metadata: (n.metadata as Record<string, unknown>) ?? {},
+          start_time: n.start_time,
+          completed_at: n.completed_at ?? null,
+          end_time: n.end_time,
+          duration_ms: n.duration_ms,
+          parent_node: n.parent_node,
+          created_at: n.created_at,
+          updated_at: n.updated_at,
+          logs: [],
+          error_info: (n.error_info as DAGNodeSession["error_info"]) ?? undefined,
+        }
+      }
+
+      const violations: DAGViolation[] = violationRows.map((v) => ({
+        id: v.violation_id,
+        workflowId: v.workflow_id,
+        nodeId: v.node_id ?? undefined,
+        type: v.violation_type as DAGViolationType,
+        severity: v.severity as DAGViolationSeverity,
+        message: v.message,
+        timestamp: new Date(v.created_at).toISOString(),
+        details: (v.details as Record<string, unknown>) ?? undefined,
+      }))
+
       return {
         id: row.workflow_id,
         chat_session_id: row.chat_session_id,
-        config: row.config,
-        metadata: row.metadata ?? {},
+        config: row.config as DAGConfig,
+        metadata: (row.metadata as Record<string, unknown>) ?? {},
         status: row.status as DAGWorkflowStatus,
         start_time: row.started_at ?? row.created_at,
         end_time: row.completed_at,
@@ -368,8 +425,8 @@ const make = Effect.gen(function* () {
         updated_at: row.updated_at,
         completed_at: row.completed_at,
         duration_ms: row.completed_at ? row.completed_at - (row.started_at ?? row.created_at) : null,
-        node_sessions: {},
-        violations: [],
+        node_sessions: nodeSessions,
+        violations,
       }
     })
   
@@ -483,7 +540,7 @@ const make = Effect.gen(function* () {
           error_info: null,
           retry_count: input.retryCount ?? 0,
           max_retries: input.maxRetries ?? 3,
-          timeout_ms: input.timeoutMs ?? 300000,
+          timeout_ms: input.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS,
           required_nodes: [],
           dependencies: input.dependencyNodes ?? [],
           metadata: {},
@@ -505,7 +562,7 @@ const make = Effect.gen(function* () {
         output: input.inputData ?? null,
         retry_count: input.retryCount ?? 0,
         max_retries: input.maxRetries ?? 3,
-        timeout_ms: input.timeoutMs ?? 300000,
+        timeout_ms: input.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS,
         required_nodes: [],
         dependencies: input.dependencyNodes ?? [],
         metadata: {},
@@ -890,7 +947,7 @@ const make = Effect.gen(function* () {
             error_info: null,
             retry_count: n.retryCount ?? 0,
             max_retries: n.maxRetries ?? 0,
-            timeout_ms: n.timeoutMs ?? 300000,
+            timeout_ms: n.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS,
             required_nodes: [],
             dependencies: n.dependencyNodes ?? [],
             metadata: {},
