@@ -36,6 +36,11 @@ export const DAGNodeStatusSchema = Schema.Literals([
   "completed",
   "failed",
   "skipped",
+  // WP2: recoverable — non-terminal state entered when failure_policy='recoverable'.
+  // buildSessionNodeEvent returns null for pending/queued/recoverable by default
+  // (no EventBus emission); this schema entry enables the literal to typecheck
+  // when downstream code (e.g. DagNodeUpdated payload) references DAGNodeStatus.
+  "recoverable",
 ])
 
 export const DAGStatusSchema = Schema.Union([DAGWorkflowStatusSchema, DAGNodeStatusSchema])

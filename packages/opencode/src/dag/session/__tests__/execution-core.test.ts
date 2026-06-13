@@ -545,8 +545,8 @@ describe("getValidNextSessionNodeStatuses", () => {
     expect(getValidNextSessionNodeStatuses("queued")).toEqual(["running", "skipped"])
   })
 
-  it("running → completed, failed, pending", () => {
-    expect(getValidNextSessionNodeStatuses("running")).toEqual(["completed", "failed", "pending"])
+  it("running → completed, failed, pending, recoverable", () => {
+    expect(getValidNextSessionNodeStatuses("running")).toEqual(["completed", "failed", "pending", "recoverable"])
   })
 
   it("terminal states return empty", () => {

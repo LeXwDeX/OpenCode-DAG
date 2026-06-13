@@ -136,14 +136,16 @@ describe('DAG Session Types - Shape Validation', () => {
         'completed',
         'failed',
         'skipped',
+        'recoverable',
       ];
-      expect(statuses).toHaveLength(6);
+      expect(statuses).toHaveLength(7);
       expect(statuses).toContain('pending');
       expect(statuses).toContain('queued');
       expect(statuses).toContain('running');
       expect(statuses).toContain('completed');
       expect(statuses).toContain('failed');
       expect(statuses).toContain('skipped');
+      expect(statuses).toContain('recoverable');
     });
   });
 
@@ -232,6 +234,10 @@ describe('DAG Session Logic - Terminal Status Guards', () => {
 
     it('should return false for running nodes', () => {
       expect(isNodeTerminalStatus('running')).toBe(false);
+    });
+
+    it('should return false for recoverable nodes (non-terminal; awaiting replan)', () => {
+      expect(isNodeTerminalStatus('recoverable')).toBe(false);
     });
   });
 });
@@ -447,10 +453,11 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
     const validTransitions = {
       'pending': ['queued', 'running', 'skipped'],
       'queued': ['running', 'skipped'],
-      'running': ['completed', 'failed', 'pending'],
+      'running': ['completed', 'failed', 'pending', 'recoverable'],
       'completed': [], // terminal
       'failed': [], // terminal
       'skipped': [], // terminal
+      'recoverable': ['pending', 'failed'],
     };
 
     it('pending can transition to queued', () => {
@@ -462,7 +469,11 @@ describe('DAG Session - Status State Machine (Iron Law)', () => {
     });
 
     it('running can transition to completed, failed, or pending (recovery reset)', () => {
-      expect(validTransitions['running']).toEqual(['completed', 'failed', 'pending']);
+      expect(validTransitions['running']).toEqual(['completed', 'failed', 'pending', 'recoverable']);
+    });
+
+    it('recoverable can transition to pending (reset) or failed (abandon)', () => {
+      expect(validTransitions['recoverable']).toEqual(['pending', 'failed']);
     });
 
     it('terminal node states have no outgoing transitions', () => {
@@ -841,6 +852,11 @@ describe('Iron Law #3: buildSessionNodeEvent', () => {
 
   it('queued transition emits null (no event)', () => {
     const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'queued')
+    expect(event).toBeNull()
+  })
+
+  it('recoverable transition emits null (no event — non-terminal, no broadcast)', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'recoverable')
     expect(event).toBeNull()
   })
 });

@@ -87,6 +87,11 @@ function recoverNodeTargetStatus(
     case 'running': return 'failed'
     case 'queued': return 'skipped'
     case 'pending': return 'skipped'
+    // WP2: orphan recovery sees recoverable → failed. Process restart means
+    // the main agent that would have issued a replan is gone; the recoverable
+    // wait-for-replan context is lost. Safest terminal = failed (not running,
+    // because there is no executor to re-spawn the node).
+    case 'recoverable': return 'failed'
     case 'completed':
     case 'failed':
     case 'skipped':

@@ -20,7 +20,7 @@ const root = "/dag"
 
 export const DagWorkflowStatus = Schema.Literals(["pending", "running", "completed", "failed", "cancelled", "paused"])
 
-export const DagNodeStatus = Schema.Literals(["pending", "queued", "running", "completed", "failed", "skipped"])
+export const DagNodeStatus = Schema.Literals(["pending", "queued", "running", "completed", "failed", "skipped", "recoverable"])
 
 export const DagNodeError = Schema.Struct({
   type: Schema.String,

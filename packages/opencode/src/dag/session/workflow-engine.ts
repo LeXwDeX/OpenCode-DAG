@@ -1499,6 +1499,61 @@ const make = Effect.gen(function* () {
       }
       const alreadyTerminal = wasAlreadyFailed  // Only 'failed' terminal state continues
 
+      // WP2: failure_policy='recoverable' branch — node-level recovery path.
+      // If node is configured with failure_policy='recoverable' and is currently
+      // running, transition to 'recoverable' non-terminal state instead of 'failed'.
+      // NO cascadeSkipDownstream, NO violation; downstream pending preserved.
+      // Workflow does not finalize (recoverable is non-terminal, so maybeFinalizeWorkflow
+      // returns null and the workflow stays in its current state).
+      // This branch is orthogonal to WP-E1 failure_handler (workflow-level):
+      // node-level policy takes precedence when both are configured.
+      const failurePolicy = (currentNode?.config?.failure_policy as 'fail' | 'recoverable' | undefined) ?? 'fail'
+      if (
+        failurePolicy === 'recoverable' &&
+        !alreadyTerminal &&
+        currentNode?.status === 'running'
+      ) {
+        yield* sessionService.updateNodeStatus({
+          sessionId: nodeId,
+          status: 'recoverable',
+          error: error.message,
+        } satisfies UpdateNodeStatusInput)
+
+        const wfForRecoverableLog = yield* sessionService.getWorkflow(workflowId)
+        if (wfForRecoverableLog?.chat_session_id) {
+          yield* safeAppendLog({
+            nodeId,
+            workflowId,
+            chatSessionId: wfForRecoverableLog.chat_session_id,
+            logLevel: 'warn',
+            logMessage: `Node entered recoverable state: ${nodeId} — ${error.message}. Waiting for replan.`,
+            executionPhase: 'recoverable',
+            logData: { error: error.message, failure_policy: 'recoverable' },
+          })
+        }
+
+        // Schedule other independent branches (nodes not downstream of this one).
+        // Downstream pending nodes are preserved (not cascade-skipped) — they remain
+        // pending until an agent replan replaces/restarts the recoverable node.
+        if (!stepMode.has(workflowId)) {
+          yield* scheduleReadyNodes(workflowId)
+          // maybeFinalizeWorkflow returns null because recoverable is non-terminal
+          // (computeFinalWorkflowStatus sees recoverable as in-progress → null).
+          yield* maybeFinalizeWorkflow(workflowId)
+        } else {
+          // stepMode: resolve the Deferred with node_failed (semantically equivalent
+          // to a terminal failure from the step caller's perspective, even though
+          // the node is non-terminal in the DAG state machine).
+          const resolve = stepResolve.get(workflowId)
+          if (resolve) {
+            stepResolve.delete(workflowId)
+            resolve({ ok: false, reason: 'node_failed', node_id: nodeId, error: error.message })
+          }
+        }
+
+        return { success: true }
+      }
+
       // WP-E1: Failure Diagnosis — only for currently-running workflows and a
       // currently-running node. Diagnosis happens before writing failed/violation
       // so recovery uses legal running→pending, never failed→pending/skipped.

@@ -41,8 +41,13 @@ export type DAGWorkflowStatus =
  *                            → failed (执行失败)
  *                            → skipped (required node 被跳过 = 违规)
  *                            → pending (recovery reset — orphaned running node, WP-A3)
+ *                            → recoverable (failure_policy='recoverable' → 非终态保持)
  *
  * queued: 已满足依赖关系，等待执行槽位
+ *
+ * recoverable: 执行失败，但 failure_policy='recoverable' → 非终态保持，
+ *   等待 agent replan 替换，可转 pending (重跑) 或 failed (放弃)。
+ *   不在 ready set 中，不会被自动重调度。
  */
 export type DAGNodeStatus =
   | 'pending'
@@ -50,7 +55,8 @@ export type DAGNodeStatus =
   | 'running'
   | 'completed'
   | 'failed'
-  | 'skipped';
+  | 'skipped'
+  | 'recoverable';
 
 // ============================================================================
 // 2. 配置类型
@@ -234,6 +240,17 @@ export interface DAGNodeConfig {
    * 运行时数据收集由 WP-C2 实现（纯读 DB，无写）。
    */
   input_mapping?: DAGInputMapping;
+  /**
+   * 节点失败策略（WP2 recoverable 状态机）。
+   *
+   * - `'fail'`（缺省）= 当前行为，节点执行失败立即 running → failed + cascade skip 下游。
+   * - `'recoverable'` = 节点执行失败时 running → recoverable 非终态，
+   *   不调用 cascadeSkipDownstream，workflow 不 finalize，下游 pending 保留。
+   *   等待 agent replan 替换（recoverable → pending 重跑，或 recoverable → failed 放弃）。
+   *
+   * 缺省 = `'fail'`（向后兼容，旧 DAG 零变化）。
+   */
+  failure_policy?: 'fail' | 'recoverable';
 }
 
 /**
@@ -481,6 +498,8 @@ export interface DAGWorkflowProgress {
     skipped: number;
     pending: number;
     running: number;
+    /** WP2: recoverable 节点数（非终态，等待 replan） */
+    recoverable: number;
   };
   /** 所有节点统计 */
   all_nodes: {
@@ -490,6 +509,8 @@ export interface DAGWorkflowProgress {
     skipped: number;
     pending: number;
     running: number;
+    /** WP2: recoverable 节点数（非终态，等待 replan） */
+    recoverable: number;
   };
   /** 当前并发数 */
   current_concurrency: number;
@@ -585,6 +606,7 @@ export function calculateWorkflowProgress(session: DAGWorkflowSession): DAGWorkf
       skipped: countByStatus(requiredNodes, 'skipped'),
       pending: countByStatus(requiredNodes, 'pending'),
       running: countByStatus(requiredNodes, ['queued', 'running']),
+      recoverable: countByStatus(requiredNodes, 'recoverable'),
     },
     all_nodes: {
       total: allNodes.length,
@@ -593,6 +615,7 @@ export function calculateWorkflowProgress(session: DAGWorkflowSession): DAGWorkf
       skipped: countByStatus(allNodes, 'skipped'),
       pending: countByStatus(allNodes, 'pending'),
       running: countByStatus(allNodes, ['queued', 'running']),
+      recoverable: countByStatus(allNodes, 'recoverable'),
     },
     current_concurrency: countByStatus(allNodes, 'running'),
     max_concurrency: session.config.max_concurrency,
@@ -611,8 +634,9 @@ function estimateRemainingTime(session: DAGWorkflowSession): number | undefined 
   }
 
   const avgDuration = completedNodes.reduce((sum, n) => sum + (n.duration_ms || 0), 0) / completedNodes.length;
+  // WP2: recoverable nodes are in-progress and should be counted for estimation
   const pendingCount = Object.values(session.node_sessions).filter(n =>
-    ['pending', 'queued'].includes(n.status)
+    ['pending', 'queued', 'recoverable'].includes(n.status)
   ).length;
 
   return Math.round(avgDuration * pendingCount / session.config.max_concurrency);

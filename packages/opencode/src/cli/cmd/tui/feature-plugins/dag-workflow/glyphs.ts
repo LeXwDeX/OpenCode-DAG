@@ -50,4 +50,6 @@ export const GLYPH = {
   treeLast: "`-",
   /** tree connector: middle child (was ├─) */
   treeBranch: "|-",
+  /** status icon: recoverable (WP2 placeholder; WP4 will refine) */
+  iconRecoverable: "?",
 } as const

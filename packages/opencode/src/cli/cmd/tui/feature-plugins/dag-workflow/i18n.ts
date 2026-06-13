@@ -17,7 +17,7 @@ export type Lang = "en" | "zh"
 
 export type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "cancelled" | "paused"
 
-export type NodeStatus = "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+export type NodeStatus = "pending" | "queued" | "running" | "completed" | "failed" | "skipped" | "recoverable"
 
 // Exported for the glyph robustness guard (glyphs.test.ts) which scans every
 // dict value: en must be pure ASCII, zh must avoid EA-Ambiguous punctuation.
@@ -236,6 +236,7 @@ const NODE_STATUS_ZH: Record<NodeStatus, string> = {
   completed: "已完成",
   failed: "失败",
   skipped: "已跳过",
+  recoverable: "可恢复",
 }
 
 export type ViolationType = DAGViolationType

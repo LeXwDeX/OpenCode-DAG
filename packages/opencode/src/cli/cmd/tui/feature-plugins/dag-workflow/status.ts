@@ -28,6 +28,7 @@ export const NODE_STATUS_ICON: Record<DAGNodeStatus, string> = {
   pending: GLYPH.iconPending,
   failed: GLYPH.iconFailed,
   skipped: GLYPH.iconSkipped,
+  recoverable: GLYPH.iconRecoverable,
 }
 
 export const WORKFLOW_STATUS_ICON: Record<DAGWorkflowStatus, string> = {
@@ -56,6 +57,7 @@ export function nodeStatusColor<C>(status: DAGNodeStatus, theme: StatusThemeColo
       return theme.success
     case "running":
     case "queued":
+    case "recoverable":
       return theme.warning
     case "failed":
       return theme.error

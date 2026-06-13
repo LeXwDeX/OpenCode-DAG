@@ -66,12 +66,15 @@ export function areDependenciesSatisfied(
 
 /**
  * Return all nodes that are ready to execute: dependencies satisfied,
- * not running/completed/failed/skipped.
+ * not running/completed/failed/skipped/recoverable.
  * Pure function — no DB, no Effect.
  *
  * WP1 fix: cascade-skipped nodes (status='skipped') must not re-enter the
  * ready set. Previously the filter only excluded running/completed/failed,
  * leaving skipped nodes with satisfied deps as "ready" (a logic gap).
+ *
+ * WP2: recoverable nodes (failure_policy='recoverable' entered non-terminal state)
+ * must NOT re-enter ready set. They require explicit replan to reset to pending.
  */
 export function getReadyNodes(
   nodes: DAGNodeSession[],
@@ -84,8 +87,9 @@ export function getReadyNodes(
     const isNotCompleted = !completedNodeIds.has(node.node_id)
     const isNotFailed = !failedNodeIds.has(node.node_id)
     const isNotSkipped = node.status !== 'skipped'
+    const isNotRecoverable = node.status !== 'recoverable'
     const depsSatisfied = areDependenciesSatisfied(node, completedNodeIds)
-    return isNotRunning && isNotCompleted && isNotFailed && isNotSkipped && depsSatisfied
+    return isNotRunning && isNotCompleted && isNotFailed && isNotSkipped && isNotRecoverable && depsSatisfied
   })
 }
 
@@ -98,15 +102,18 @@ export function getReadyNodes(
  * Returns null if the workflow should NOT converge yet (in-progress nodes exist).
  *
  * Decision logic:
- * - If any node is pending/queued/running → null (not ready)
+ * - If any node is pending/queued/running/recoverable → null (not ready)
  * - If any required node failed → 'failed'
  * - Otherwise → 'completed'
+ *
+ * WP2: recoverable is non-terminal in-progress state — blocks convergence
+ * until agent replan transitions recoverable → pending or recoverable → failed.
  */
 export function computeFinalWorkflowStatus(
   allNodes: DAGNodeSession[],
 ): DAGWorkflowStatus | null {
   const hasInProgress = allNodes.some((n: DAGNodeSession) =>
-    n.status === 'pending' || n.status === 'queued' || n.status === 'running'
+    n.status === 'pending' || n.status === 'queued' || n.status === 'running' || n.status === 'recoverable'
   )
   if (hasInProgress) return null
 
@@ -224,15 +231,19 @@ export function validateReplanPreconditions(
 }
 
 /**
- * Partitions current nodes into frozen (queued/running/completed/failed/skipped) and
+ * Partitions current nodes into frozen (queued/running/completed/failed/skipped/recoverable) and
  * mutable (pending) sets. Frozen nodes cannot be removed or updated by a replan patch.
+ *
+ * WP2: recoverable nodes are frozen — they are mid-recovery and cannot be
+ * silently removed or updated by replan. WP3 may relax this to allow
+ * replan to replace recoverable nodes directly.
  */
 export function classifyReplanNodes(currentNodes: DAGNodeSession[]): {
   frozen: DAGNodeSession[]
   mutable: DAGNodeSession[]
   frozenIds: Set<string>
 } {
-  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
+  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped', 'recoverable']
   const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
   const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
   const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
@@ -374,6 +385,11 @@ export function getValidNextSessionWorkflowStatuses(
 /**
  * Session-layer valid next node statuses (Iron Law #1/#2).
  * Terminal states: completed, failed, skipped — no outgoing transitions.
+ * Non-terminal: recoverable — transitions to pending (reset for rerun) or
+ * failed (abandon recovery). recoverable → running is NOT allowed
+ * (must go through pending reset first; see execution-core iron-law).
+ *
+ * WP2: added running → recoverable and recoverable → {pending, failed}.
  */
 export function getValidNextSessionNodeStatuses(
   currentStatus: DAGNodeStatus,
@@ -384,7 +400,9 @@ export function getValidNextSessionNodeStatuses(
     case "queued":
       return ["running", "skipped"]
     case "running":
-      return ["completed", "failed", "pending"]
+      return ["completed", "failed", "pending", "recoverable"]
+    case "recoverable":
+      return ["pending", "failed"]
     case "completed":
     case "failed":
     case "skipped":

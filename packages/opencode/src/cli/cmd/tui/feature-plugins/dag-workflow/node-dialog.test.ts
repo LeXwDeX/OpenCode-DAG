@@ -20,6 +20,7 @@ describe("WP4 i18n — nodeStatusLabel", () => {
     completed: "completed",
     failed: "failed",
     skipped: "skipped",
+    recoverable: "recoverable",
   }
   const zhExpected: Record<DAGNodeStatus, string> = {
     pending: "等待中",
@@ -28,6 +29,7 @@ describe("WP4 i18n — nodeStatusLabel", () => {
     completed: "已完成",
     failed: "失败",
     skipped: "已跳过",
+    recoverable: "可恢复",
   }
 
   for (const s of Object.keys(enExpected) as DAGNodeStatus[]) {
@@ -40,7 +42,7 @@ describe("WP4 i18n — nodeStatusLabel", () => {
   }
 
   it("covers all DAGNodeStatus values", () => {
-    const allStatuses: DAGNodeStatus[] = ["pending", "queued", "running", "completed", "failed", "skipped"]
+    const allStatuses: DAGNodeStatus[] = ["pending", "queued", "running", "completed", "failed", "skipped", "recoverable"]
     for (const s of allStatuses) {
       const en = nodeStatusLabel("en", s)
       const zh = nodeStatusLabel("zh", s)

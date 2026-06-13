@@ -17,8 +17,8 @@ import { GLYPH } from "./glyphs"
 
 function makeProgress(overrides: Partial<DAGWorkflowProgress> = {}): DAGWorkflowProgress {
   return {
-    required: { total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, running: 0 },
-    all_nodes: { total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, running: 0 },
+    required: { total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, running: 0, recoverable: 0 },
+    all_nodes: { total: 0, completed: 0, failed: 0, skipped: 0, pending: 0, running: 0, recoverable: 0 },
     current_concurrency: 0,
     max_concurrency: 0,
     ...overrides,
@@ -41,8 +41,8 @@ describe("formatProgressSummary", () => {
 
   it("required progress shown when required.total > 0", () => {
     const p = makeProgress({
-      required: { total: 5, completed: 3, failed: 0, skipped: 0, pending: 2, running: 0 },
-      all_nodes: { total: 8, completed: 5, failed: 0, skipped: 0, pending: 3, running: 0 },
+      required: { total: 5, completed: 3, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 0 },
+      all_nodes: { total: 8, completed: 5, failed: 0, skipped: 0, pending: 3, running: 0, recoverable: 0 },
     })
     const out = formatProgressSummary(p, "en")
     expect(out).toContain("required: 3/5")
@@ -50,8 +50,8 @@ describe("formatProgressSummary", () => {
 
   it("failed count shown when required.failed > 0", () => {
     const p = makeProgress({
-      required: { total: 5, completed: 2, failed: 1, skipped: 0, pending: 2, running: 0 },
-      all_nodes: { total: 5, completed: 2, failed: 1, skipped: 0, pending: 2, running: 0 },
+      required: { total: 5, completed: 2, failed: 1, skipped: 0, pending: 2, running: 0, recoverable: 0 },
+      all_nodes: { total: 5, completed: 2, failed: 1, skipped: 0, pending: 2, running: 0, recoverable: 0 },
     })
     const out = formatProgressSummary(p, "en")
     expect(out).toContain("required: 2/5")
@@ -60,8 +60,8 @@ describe("formatProgressSummary", () => {
 
   it("concurrency shown when current_concurrency > 0", () => {
     const p = makeProgress({
-      required: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 1, running: 1 },
-      all_nodes: { total: 5, completed: 2, failed: 0, skipped: 0, pending: 2, running: 1 },
+      required: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 1, running: 1, recoverable: 0 },
+      all_nodes: { total: 5, completed: 2, failed: 0, skipped: 0, pending: 2, running: 1, recoverable: 0 },
       current_concurrency: 2,
       max_concurrency: 3,
     })
@@ -71,7 +71,7 @@ describe("formatProgressSummary", () => {
 
   it("ETA shown when estimated_remaining_ms > 0", () => {
     const p = makeProgress({
-      all_nodes: { total: 10, completed: 5, failed: 0, skipped: 0, pending: 5, running: 0 },
+      all_nodes: { total: 10, completed: 5, failed: 0, skipped: 0, pending: 5, running: 0, recoverable: 0 },
       estimated_remaining_ms: 90_000,
     })
     const out = formatProgressSummary(p, "en")
@@ -80,8 +80,8 @@ describe("formatProgressSummary", () => {
 
   it("no ETA when estimated_remaining_ms is 0", () => {
     const p = makeProgress({
-      required: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 2, running: 0 },
-      all_nodes: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 2, running: 0 },
+      required: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 0 },
+      all_nodes: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 0 },
       estimated_remaining_ms: 0,
     })
     const out = formatProgressSummary(p, "en")
@@ -90,7 +90,7 @@ describe("formatProgressSummary", () => {
 
   it("fallback to X/Y nodes when no required/concurrency/ETA", () => {
     const p = makeProgress({
-      all_nodes: { total: 5, completed: 5, failed: 0, skipped: 0, pending: 0, running: 0 },
+      all_nodes: { total: 5, completed: 5, failed: 0, skipped: 0, pending: 0, running: 0, recoverable: 0 },
     })
     const out = formatProgressSummary(p, "en")
     expect(out).toBe("5/5 nodes")
@@ -103,8 +103,8 @@ describe("formatProgressSummary", () => {
 
   it("zh locale: required → 必需", () => {
     const p = makeProgress({
-      required: { total: 4, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0 },
-      all_nodes: { total: 4, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0 },
+      required: { total: 4, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 0 },
+      all_nodes: { total: 4, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 0 },
     })
     const out = formatProgressSummary(p, "zh")
     expect(out).toContain("必需: 2/4")
@@ -112,8 +112,8 @@ describe("formatProgressSummary", () => {
 
   it("parts are joined by an ASCII pipe separator (no EA-Ambiguous middle dot)", () => {
     const p = makeProgress({
-      required: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1 },
-      all_nodes: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1 },
+      required: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1, recoverable: 0 },
+      all_nodes: { total: 5, completed: 3, failed: 1, skipped: 0, pending: 0, running: 1, recoverable: 0 },
       current_concurrency: 1,
       max_concurrency: 2,
     })

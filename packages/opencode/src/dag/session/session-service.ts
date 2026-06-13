@@ -691,8 +691,12 @@ const make = Effect.gen(function* () {
         updates.start_time = now
       }
       
-      if (input.status === "completed" || input.status === "failed") {
+      // WP2: recoverable is non-terminal — set end_time but NOT completed_at.
+      // completed_at is reserved for truly terminal states (completed/failed).
+      if (input.status === "completed" || input.status === "failed" || input.status === "recoverable") {
         updates.end_time = now
+      }
+      if (input.status === "completed" || input.status === "failed") {
         updates.completed_at = now
       }
       
