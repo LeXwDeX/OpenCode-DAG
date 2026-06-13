@@ -72,16 +72,35 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
 
   function getCurrentSessionID(): string | undefined {
     const cur = props.api.route.current
-    if (cur.name !== "session" || !("params" in cur)) return undefined
-    const id = cur.params?.sessionID
-    return typeof id === "string" ? id : undefined
+    // On session route: read directly.
+    if (cur.name === "session" && "params" in cur) {
+      const id = cur.params?.sessionID
+      if (typeof id === "string") return id
+    }
+    // On DAG route we persist sessionID in route params — read it back.
+    if (cur.name === ROUTE && "params" in cur && cur.params) {
+      const id = cur.params.sessionID
+      if (typeof id === "string") return id
+      // Fallback: extract from persisted returnRoute (legacy / stale).
+      const rr = cur.params.returnRoute as
+        | { name: string; params?: Record<string, unknown> }
+        | undefined
+      if (rr?.name === "session") {
+        const s = rr.params?.sessionID
+        if (typeof s === "string") return s
+      }
+    }
+    return undefined
   }
 
   function navigateToDagWorkflow() {
+    const sessionID = getCurrentSessionID()
     const current = props.api.route.current
+    // Never write returnRoute that points back to DAG itself (loop).
+    const returnRoute = current.name === ROUTE ? undefined : current
     props.api.route.navigate(ROUTE, {
-      sessionID: getCurrentSessionID(),
-      returnRoute: current,
+      ...(sessionID ? { sessionID } : {}),
+      ...(returnRoute ? { returnRoute } : {}),
     })
   }
 
@@ -89,6 +108,8 @@ export function DagWorkflowTab(props: { api: TuiPluginApi }): JSX.Element {
     const sessionID = getCurrentSessionID()
     if (sessionID) {
       props.api.route.navigate("session", { sessionID })
+    } else {
+      props.api.route.navigate("home")
     }
   }
 

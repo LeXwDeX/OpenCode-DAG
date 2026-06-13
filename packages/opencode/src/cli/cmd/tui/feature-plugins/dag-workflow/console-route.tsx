@@ -692,26 +692,32 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   })
 
   function goToSessionTab() {
+    // Priority (BUG-2 fix): always prefer top-level sessionID in DAG route
+    // params. It's populated on every entry into the route and survives
+    // returnRoute lossy/missing serialization. ESC + "Chat" click share this
+    // function so both return paths behave identically.
     const params = routeParams()
-    const returnRoute = params?.returnRoute
     const fallbackSessionID = params?.sessionID
-    if (returnRoute?.name === "session") {
-      // routeNavigate silently no-ops if sessionID is missing; merge the
-      // top-level sessionID param as a backup so Back always works.
-      const sid =
-        (returnRoute.params?.["sessionID"] as string | undefined) ?? fallbackSessionID
-      if (sid) {
-        props.api.route.navigate("session", { sessionID: sid })
-        return
-      }
+    const returnRoute = params?.returnRoute as
+      | { name: string; params?: Record<string, unknown> }
+      | undefined
+    const returnSessionID =
+      returnRoute?.name === "session"
+        ? (returnRoute.params?.["sessionID"] as string | undefined)
+        : undefined
+    const sid = (typeof fallbackSessionID === "string" ? fallbackSessionID : undefined)
+      ?? (typeof returnSessionID === "string" ? returnSessionID : undefined)
+
+    if (sid) {
+      props.api.route.navigate("session", { sessionID: sid })
+      return
     }
+    // Non-session return route (e.g. home) — honour it if present.
     if (returnRoute?.name) {
       props.api.route.navigate(returnRoute.name, returnRoute.params)
-    } else if (fallbackSessionID) {
-      props.api.route.navigate("session", { sessionID: fallbackSessionID })
-    } else {
-      props.api.route.navigate("home")
+      return
     }
+    props.api.route.navigate("home")
   }
 
   return (
