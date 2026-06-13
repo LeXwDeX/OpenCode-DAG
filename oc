@@ -9,17 +9,31 @@ REPO="LeXwDeX/opencode"
 RELEASES_URL="https://github.com/${REPO}/releases"
 INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
 INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
-OC_VERSION="1.3.10"
+OC_VERSION="1.3.11"
 
 # ---------- 插件管理配置 ----------
-OC_CONFIG_FILE="${HOME}/.config/opencode/opencode.json"
+# 动态解析：OPENCODE_CONFIG_DIR 优先，其次 .jsonc > .json，最终回退默认路径
+_resolve_oc_config() {
+    local conf_dir="${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}"
+    [ -f "${conf_dir}/opencode.json" ]  && echo "${conf_dir}/opencode.json"  && return
+    if [ -f "${conf_dir}/opencode.jsonc" ]; then
+        warn "仅存在 opencode.jsonc；脚本会用 json.dump 写回，可能丢失 JSONC 注释"
+        echo "${conf_dir}/opencode.jsonc"
+        return
+    fi
+    echo "${conf_dir}/opencode.json"
+}
+OC_CONFIG_FILE=$(_resolve_oc_config)
 THINK_PKG="think-mcp-tool"
 DCP_PKG="@lexwdex-org/opencode-dcp"
 OC_RAW_URL="https://raw.githubusercontent.com/${REPO}/stable/oc"
 
 # ---------- 系统配置管理 ----------
-AGENTS_REPO="git@github.com:LeXwDeX/opencode-agents.git"
+AGENTS_REPO_SSH="git@github.com:LeXwDeX/opencode-agents.git"
+AGENTS_REPO_HTTPS="https://github.com/LeXwDeX/opencode-agents.git"
 AGENTS_DIR="${HOME}/.config/opencode/agents-repo"
+AGENTS_TARGET="${HOME}/.config/opencode/agents"
+SKILLS_TARGET="${HOME}/.config/opencode/skills"
 OC_ENV_VARS=(
     "OPENCODE_EXPERIMENTAL_SANDBOX=true"
     "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true"
@@ -156,7 +170,7 @@ current_version() {
         wrapper=$(grep -m1 'exec ' "$bin" 2>/dev/null | sed 's/exec //' | tr -d '"' | awk '{print $1}' || true)
         if [ -n "$wrapper" ] && [ -f "$wrapper" ]; then
             local extracted
-            extracted=$(grep -m1 '^OPENCODE_REAL_BIN=' "$wrapper" 2>/dev/null | cut -d'"' -f2 || true)
+            extracted=$(printf '%s\n' "$wrapper" | grep -oE 'OPENCODE_REAL_BIN="[^"]*"|OPENCODE_REAL_BIN='\''[^'\'']*'\''' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
             [ -n "$extracted" ] && [ -x "$extracted" ] && real="$extracted"
         fi
     fi
@@ -180,7 +194,7 @@ gh_api() {
     fi
     local hdr=()
     [ -n "${GITHUB_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $GITHUB_TOKEN")
-    curl -fsSL "${hdr[@]}" -H "Accept: application/vnd.github+json" \
+    curl -fsSL --connect-timeout 5 --max-time 20 "${hdr[@]}" -H "Accept: application/vnd.github+json" \
         "https://api.github.com/${relpath}"
 }
 
@@ -578,6 +592,58 @@ self_update() {
 
 # ---------- AGENTS 管理 ----------
 
+# _agents_sync — 把仓库里的 agents (md) 和 skills 同步到 opencode 实际加载目录
+#   opencode 自动扫描：
+#     <global_config>/agent/*.md  and  <global_config>/agents/**/*.md
+#     <global_config>/skill/**/SKILL.md  and  <global_config>/skills/**/SKILL.md
+_agents_sync() {
+    local src="$AGENTS_DIR"
+    local ok_sync=0
+
+    # agents
+    local agents_src=""
+    for d in agents agent; do
+        if [ -d "${src}/${d}" ]; then
+            agents_src="${src}/${d}"
+            break
+        fi
+    done
+    if [ -n "$agents_src" ]; then
+        mkdir -p "$AGENTS_TARGET"
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -av --delete --quiet "$agents_src/" "$AGENTS_TARGET/" >/dev/null
+        else
+            cp -R "$agents_src/." "$AGENTS_TARGET/"
+        fi
+        ok_sync=$((ok_sync + 1))
+    else
+        warn "仓库内未找到 agent/ 或 agents/ 目录，跳过 agents 同步"
+    fi
+
+    # skills (SKILL.md 可能在根目录或 skills/ subdirectory)
+    local skills_src=""
+    if [ -d "${src}/skills" ]; then
+        skills_src="${src}/skills"
+    elif [ -f "${src}/SKILL.md" ]; then
+        skills_src="${src}"
+    fi
+    if [ -n "$skills_src" ]; then
+        mkdir -p "$SKILLS_TARGET"
+        if command -v rsync >/dev/null 2>&1; then
+            rsync -av --delete --quiet "$skills_src/" "$SKILLS_TARGET/" >/dev/null
+        else
+            cp -R "$skills_src/." "$SKILLS_TARGET/"
+        fi
+        ok_sync=$((ok_sync + 1))
+    else
+        warn "仓库内未找到 skills/ 目录或 SKILL.md，跳过 skills 同步"
+    fi
+
+    if [ "$ok_sync" -gt 0 ]; then
+        ok "已同步到 opencode 生效目录（agents: $AGENTS_TARGET, skills: $SKILLS_TARGET）"
+    fi
+}
+
 # agents_check — 检查 agents 仓库状态，输出 TSV:
 #   installed|<branch>|<short_hash>|<date>|<path>
 # 或
@@ -603,21 +669,36 @@ agents_install_or_update() {
             local hash
             hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
             info "当前 commit: $hash"
+            _agents_sync
         else
             warn "git pull 失败，可能需要手动解决冲突"
         fi
+    elif [ -e "$AGENTS_DIR" ]; then
+        warn "$AGENTS_DIR 已存在但不是 git 仓库"
+        local backup="${AGENTS_DIR}.bak.$(date +%Y%m%d%H%M%S)"
+        info "已备份到 $backup"
+        mv "$AGENTS_DIR" "$backup"
+        _agents_clone
     else
-        info "克隆 AGENTS 仓库到 $AGENTS_DIR..."
-        mkdir -p "$(dirname "$AGENTS_DIR")"
-        if git clone "$AGENTS_REPO" "$AGENTS_DIR" 2>&1; then
-            ok "AGENTS 已安装"
-            local hash
-            hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-            info "当前 commit: $hash"
-        else
-            die "克隆失败，请检查 SSH 密钥和网络连接"
-        fi
+        _agents_clone
     fi
+}
+
+_agents_clone() {
+    info "克隆 AGENTS 仓库到 $AGENTS_DIR..."
+    mkdir -p "$(dirname "$AGENTS_DIR")"
+    if git clone "$AGENTS_REPO_SSH" "$AGENTS_DIR" 2>&1; then
+        ok "AGENTS 已安装（SSH）"
+    elif git clone "$AGENTS_REPO_HTTPS" "$AGENTS_DIR" 2>&1; then
+        warn "SSH 克隆失败，已使用 HTTPS"
+        ok "AGENTS 已安装（HTTPS）"
+    else
+        die "克隆失败，请检查 SSH 密钥、HTTPS 访问或网络连接"
+    fi
+    local hash
+    hash=$(git -C "$AGENTS_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    info "当前 commit: $hash"
+    _agents_sync
 }
 
 # ---------- Config 管理 ----------
@@ -1054,9 +1135,19 @@ env_check_and_inject() {
     local injected=0 skipped=0
     for var_line in "${OC_ENV_VARS[@]}"; do
         local var_name="${var_line%%=*}"
-        if grep -qE "^[[:space:]]*export[[:space:]]+${var_name}=" "$rc_file" 2>/dev/null; then
-            info "已存在: export $var_line"
+        local var_value="${var_line#*=}"
+        local existing
+        existing=$(grep -E "^[[:space:]]*export[[:space:]]+${var_name}=" "$rc_file" 2>/dev/null | tail -1 | sed -E "s/^[[:space:]]*export[[:space:]]+${var_name}=//;s/^[\"']?//" | sed -E "s/['\"\"]?$//")
+        if [ "$existing" = "$var_value" ]; then
+            info "已存在且值正确: export $var_line"
             skipped=$((skipped + 1))
+        elif [ -n "$existing" ]; then
+            # 值不同, 注释旧行并追加新行
+            sed -E "s|^(export[[:space:]]+${var_name}=).*$|# &|g" "$rc_file" > "${rc_file}.oc.tmp"
+            mv "${rc_file}.oc.tmp" "$rc_file"
+            echo "export $var_line" >> "$rc_file"
+            ok "已覆盖: export $var_line (旧值: $existing)"
+            injected=$((injected + 1))
         else
             echo "export $var_line" >> "$rc_file"
             ok "已添加: export $var_line"
@@ -1121,11 +1212,14 @@ PYEOF
             _status_row "×" "Config" "missing" "$C_RED"
         fi
 
-        # 环境变量状态
+        # 环境变量状态（检查值是否等于预期 true/false）
         local env_missing=0
         for var_line in "${OC_ENV_VARS[@]}"; do
             local var_name="${var_line%%=*}"
-            if ! env | grep -q "^${var_name}=" 2>/dev/null; then
+            local expected_value="${var_line#*=}"
+            local actual_value
+            actual_value=$(eval "echo \${$var_name:-}" 2>/dev/null || echo "")
+            if [ "$actual_value" != "$expected_value" ]; then
                 env_missing=$((env_missing + 1))
             fi
         done
@@ -1679,7 +1773,7 @@ fetch_remote_hash() {
     local tag="$1" asset
     asset=$(detect_asset)
     local sums_url="${RELEASES_URL}/download/${tag}/SHA256SUMS"
-    local sums; sums=$(curl -fsSL "$sums_url" 2>/dev/null) || return 1
+    local sums; sums=$(curl -fsSL --connect-timeout 5 --max-time 15 "$sums_url" 2>/dev/null) || return 1
     [ -n "$sums" ] || return 1
     printf '%s\n' "$sums" | awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}'
 }
@@ -1741,19 +1835,9 @@ main() {
     latest=$(latest_tag 2>/dev/null || true)
 
     if [ -z "$latest" ]; then
-        # 在线失败，尝试离线 fallback
-        warn "无法获取最新 release（网络或 API 限流），进入离线模式"
-        local_dir=$(find_local_dir 2>/dev/null || true)
-        [ -z "$local_dir" ] && die "且本地无可用包，无法继续"
-        local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
-        info "本地包 BUNDLED_VERSION=$local_ver"
-        if echo "$cur" | grep -qF "$local_ver"; then
-            ok "已安装版本与本地包一致，无需操作"
-            exit 0
-        fi
-        info "用本地包覆盖安装"
-        install_from_local "$local_dir"
-        exit 0
+        warn "无法获取最新 release（网络或 API 限流）"
+        latest="(offline)"
+        warn "版本升级相关功能不可用，其他功能仍可正常使用"
     fi
 
     while true; do
@@ -1762,20 +1846,48 @@ main() {
         local action; action=$(choose_action "$latest" || true)
         case "${action:-}" in
             *"升级到最新"*)
-                do_upgrade "$latest"
-                cur=$(current_version)
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法在线升级"
+                    local_dir=$(find_local_dir 2>/dev/null || true)
+                    if [ -n "$local_dir" ]; then
+                        local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
+                        info "本地包 BUNDLED_VERSION=$local_ver"
+                        if echo "$cur" | grep -qF "$local_ver"; then
+                            ok "已安装版本与本地包一致，无需操作"
+                        else
+                            install_from_local "$local_dir"
+                            cur=$(current_version)
+                        fi
+                    else
+                        die "且本地无可用包，无法离线升级"
+                    fi
+                else
+                    do_upgrade "$latest"
+                    cur=$(current_version)
+                fi
                 ;;
             *"手工选择"*)
-                local pick; pick=$(choose_release || true)
-                [ -z "${pick:-}" ] && continue
-                do_upgrade "$pick"
-                cur=$(current_version)
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法连接 GitHub 拉取版本列表"
+                else
+                    local pick; pick=$(choose_release || true)
+                    [ -z "${pick:-}" ] && continue
+                    do_upgrade "$pick"
+                    cur=$(current_version)
+                fi
                 ;;
             *"仅查看"*)
-                list_releases | awk -F'\t' '{
-                    mark = ($4=="pre") ? "[预] " : "    ";
-                    printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
-                }' | less -R
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法查询版本列表"
+                else
+                    local pager_cmd="${PAGER:-}"
+                    [ -z "$pager_cmd" ] && { command -v less >/dev/null 2>&1 && pager_cmd="less -R"; } || true
+                    [ -z "$pager_cmd" ] && pager_cmd="cat"
+                    list_releases | awk -F'\t' '{
+                        mark = ($4=="pre") ? "[预] " : "    ";
+                        printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+                    }' | $pager_cmd
+                fi
                 ;;
             *"插件管理"*)
                 plugins_tui
@@ -1784,8 +1896,8 @@ main() {
                 setup_tui
                 ;;
             *"自更新"*)
-                self_update
-                local ret=$?
+                local ret=0
+                self_update || ret=$?
                 if [ $ret -eq 2 ]; then
                     echo
                     info "脚本已更新，请重新运行 oc"
