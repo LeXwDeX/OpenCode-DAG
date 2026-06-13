@@ -591,6 +591,9 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     templateId: string,
     fields: { goal: string; scope: string; context: string },
   ): Promise<void> {
+    // BUG-3 fix: immediately dismiss the last DialogPrompt so the user
+    // sees the workflow list / progress instead of a stuck context input.
+    props.api.ui.dialog.clear()
     const input = buildTemplateInput(fields)
     const result = instantiateDAGTemplate(templateId, input)
     if ("error" in result) {

@@ -9,7 +9,7 @@ import {
 import type { Binding } from "@opentui/keymap"
 import { useTheme, selectedForeground } from "@tui/context/theme"
 import { entries, filter, flatMap, groupBy, pipe } from "remeda"
-import { batch, createEffect, createMemo, For, Show, type JSX, on } from "solid-js"
+import { batch, createEffect, createMemo, createSignal, For, Show, type JSX, on } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTerminalDimensions } from "@opentui/solid"
 import * as fuzzysort from "fuzzysort"
@@ -93,6 +93,26 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
   )
 
   let input: InputRenderable
+  const [inputTarget, setInputTarget] = createSignal<InputRenderable>()
+
+  // BUG-4 fix: targeted ESC binding on the filter input so ESC always
+  // dismisses this DialogSelect, regardless of the base dialog.tsx ESC
+  // binding which is gated by `!renderer.getSelection()?.getSelectedText()`.
+  // When the filter input is focused and holds any text, that condition can
+  // flip to false and the global ESC silently does nothing.
+  useBindings(() => ({
+    target: inputTarget,
+    enabled: inputTarget() !== undefined,
+    priority: 1,
+    bindings: [
+      {
+        key: "escape",
+        desc: "Close dialog",
+        group: "Dialog",
+        cmd: () => dialog.clear(),
+      },
+    ],
+  }))
 
   const actions = createMemo(() => props.actions ?? [])
   const actionBindings = useKeymapSelector((keymap) =>
@@ -373,6 +393,7 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
               focusedTextColor={theme.textMuted}
               ref={(r) => {
                 input = r
+                setInputTarget(r)
                 input.traits = { status: "FILTER" }
                 setTimeout(() => {
                   if (!input) return

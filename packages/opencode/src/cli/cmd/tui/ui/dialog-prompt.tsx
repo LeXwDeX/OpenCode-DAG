@@ -46,6 +46,25 @@ export function DialogPrompt(props: DialogPromptProps) {
     bindings: tuiConfig.keybinds.gather("dialog.prompt", ["dialog.prompt.submit"]),
   }))
 
+  // BUG-4 fix: targeted ESC binding on the textarea so ESC always dismisses
+  // this dialog, regardless of the base dialog.tsx ESC binding which is gated
+  // by `!renderer.getSelection()?.getSelectedText()`. When the managed
+  // textarea has focus and/or a cursor selection, that condition can flip to
+  // false and the global ESC silently does nothing.
+  useBindings(() => ({
+    target: textareaTarget,
+    enabled: textareaTarget() !== undefined,
+    priority: 1,
+    bindings: [
+      {
+        key: "escape",
+        desc: "Close dialog",
+        group: "Dialog",
+        cmd: () => dialog.clear(),
+      },
+    ],
+  }))
+
   onMount(() => {
     dialog.setSize("medium")
     setTimeout(() => {
