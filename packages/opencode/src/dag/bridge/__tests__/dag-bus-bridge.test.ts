@@ -103,6 +103,28 @@ describe("DagEventBridge", () => {
     bridge.dispose()
   })
 
+  test("subscribes node.recoverable → publishes dag.node.updated with status=recoverable", () => {
+    const bridge = new DagEventBridge(dagEventBus as IEventBus, {
+      chatSessionID: "chat-1",
+    })
+    bridge.subscribe(mock.fn)
+
+    dagEventBus.emit({
+      type: "node.recoverable",
+      workflow_id: "wf-1",
+      node_name: "implement",
+      trigger_reason: "exec_failed" as any,
+    })
+
+    expect(mock.events).toHaveLength(1)
+    expect(mock.events[0].type).toBe("dag.node.updated")
+    expect(mock.events[0].properties.workflowID).toBe("wf-1")
+    expect(mock.events[0].properties.nodeID).toBe("implement")
+    expect(mock.events[0].properties.status).toBe("recoverable")
+
+    bridge.dispose()
+  })
+
   test("subscribes node.progress → publishes dag.node.progress", () => {
     const bridge = new DagEventBridge(dagEventBus as IEventBus, {
       chatSessionID: "chat-1",

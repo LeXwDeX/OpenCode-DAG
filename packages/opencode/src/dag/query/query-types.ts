@@ -129,7 +129,7 @@ export interface NodeExecutionTime {
   startTime: number
   endTime: number
   duration: number
-  status: 'pending' | 'running' | 'completed' | 'failed'
+  status: 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'recoverable'
 }
 
 /**
@@ -164,6 +164,7 @@ export interface WorkflowStatistics {
   completedNodes: number
   pendingNodes: number
   failedNodes: number
+  recoverable: number
   currentRunning: number
   averageNodeDuration: number
   totalElapsedTime: number

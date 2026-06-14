@@ -855,9 +855,31 @@ describe('Iron Law #3: buildSessionNodeEvent', () => {
     expect(event).toBeNull()
   })
 
-  it('recoverable transition emits null (no event — non-terminal, no broadcast)', () => {
+  it('recoverable transition emits node.recoverable event', () => {
     const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'recoverable')
-    expect(event).toBeNull()
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.recoverable')
+    expect((event as any).workflow_id).toBe(wfId)
+    expect((event as any).node_name).toBe(nodeName)
+  })
+
+  it('recoverable event carries trigger_reason and error when provided', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'recoverable', {
+      triggerReason: 'timeout' as any,
+      error: 'Node timed out after 300s',
+    })
+    expect(event).not.toBeNull()
+    expect(event!.type).toBe('node.recoverable')
+    expect((event as { trigger_reason?: string }).trigger_reason).toBe('timeout')
+    expect((event as { error?: string }).error).toBe('Node timed out after 300s')
+  })
+
+  it('recoverable event serializes non-string error to JSON', () => {
+    const event = buildSessionNodeEvent(wfId, nodeId, nodeName, 'recoverable', {
+      error: { code: 'ERR_TIMEOUT', retryable: true },
+    })
+    expect(event).not.toBeNull()
+    expect((event as { error?: string }).error).toBe('{"code":"ERR_TIMEOUT","retryable":true}')
   })
 });
 

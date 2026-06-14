@@ -393,7 +393,7 @@ export type NodeExecutionTime = {
   startTime: number
   endTime: number
   duration: number
-  status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped"
+  status: "pending" | "queued" | "running" | "completed" | "failed" | "skipped" | "recoverable"
 }
 
 export type Timeline = {

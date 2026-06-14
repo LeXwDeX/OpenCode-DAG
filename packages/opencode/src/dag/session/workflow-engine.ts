@@ -112,6 +112,7 @@ export interface WorkflowStatusSnapshot {
   totalNodes: number
   completedNodes: number
   failedNodes: number
+  recoverableCount?: number
   runningNodes: number
   readyNodes: number
   violations: DAGViolation[]
@@ -1457,6 +1458,9 @@ const make = Effect.gen(function* () {
           metadata: {
             dag_workflow_id: input.workflowId,
             dag_event: "workflow_failed",
+            dag_failed_nodes: [...input.failedNodes],
+            dag_reason: "terminal_failure",
+            dag_trigger_reason: "exec_failed",
           },
         }],
       }).pipe(Effect.ignore)
@@ -1983,6 +1987,7 @@ const make = Effect.gen(function* () {
 
       const completedNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'completed').length
       const failedNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'failed').length
+      const recoverableCount = allNodes.filter((n: DAGNodeSession) => n.status === 'recoverable').length
       const runningNodes = allNodes.filter((n: DAGNodeSession) => n.status === 'running').length
 
       const completedNodeIds = new Set<string>(
@@ -2005,6 +2010,7 @@ const make = Effect.gen(function* () {
         totalNodes: allNodes.length,
         completedNodes,
         failedNodes,
+        recoverableCount,
         runningNodes,
         readyNodes: readyNodes.length,
         violations,

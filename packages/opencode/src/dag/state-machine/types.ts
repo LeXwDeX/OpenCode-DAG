@@ -337,6 +337,13 @@ export type NodeEvent =
       timeout_sec: number;
     }
   | {
+      type: 'node.recoverable';
+      workflow_id: string;
+      node_name: string;
+      trigger_reason: FallbackTrigger;
+      error?: string;
+    }
+  | {
       type: 'node.reset';
       workflow_id: string;
       node_name: string;

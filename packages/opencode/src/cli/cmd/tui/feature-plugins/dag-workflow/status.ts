@@ -19,6 +19,8 @@ export type StatusThemeColors<C = unknown> = {
   warning: C
   error: C
   textMuted: C
+  /** optional: falls back to `warning` when absent (backward-compatible) */
+  recoverable?: C
 }
 
 export const NODE_STATUS_ICON: Record<DAGNodeStatus, string> = {
@@ -58,7 +60,7 @@ export function nodeStatusColor<C>(status: DAGNodeStatus, theme: StatusThemeColo
     case "running":
     case "queued":
     case "recoverable":
-      return theme.warning
+      return theme.recoverable ?? theme.warning
     case "failed":
       return theme.error
     case "skipped":

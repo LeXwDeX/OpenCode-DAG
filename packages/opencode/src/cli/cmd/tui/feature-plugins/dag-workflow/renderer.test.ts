@@ -88,6 +88,25 @@ describe("formatProgressSummary", () => {
     expect(out).not.toContain("ETA")
   })
 
+  it("recoverable count shown when required.recoverable > 0", () => {
+    const p = makeProgress({
+      required: { total: 5, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 1 },
+      all_nodes: { total: 5, completed: 2, failed: 0, skipped: 0, pending: 2, running: 0, recoverable: 1 },
+    })
+    const out = formatProgressSummary(p, "en")
+    expect(out).toContain("required: 2/5")
+    expect(out).toContain("recoverable: 1")
+  })
+
+  it("zh locale: recoverable → 可恢复", () => {
+    const p = makeProgress({
+      required: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 1, running: 0, recoverable: 1 },
+      all_nodes: { total: 3, completed: 1, failed: 0, skipped: 0, pending: 1, running: 0, recoverable: 1 },
+    })
+    const out = formatProgressSummary(p, "zh")
+    expect(out).toContain("可恢复: 1")
+  })
+
   it("fallback to X/Y nodes when no required/concurrency/ETA", () => {
     const p = makeProgress({
       all_nodes: { total: 5, completed: 5, failed: 0, skipped: 0, pending: 0, running: 0, recoverable: 0 },

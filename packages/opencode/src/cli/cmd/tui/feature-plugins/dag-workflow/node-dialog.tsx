@@ -94,6 +94,11 @@ export function NodeDialog(props: {
               <text fg={theme.text} wrapMode="word">{truncateNodeText(node().logs.join("\n"))}</text>
             </box>
           </Show>
+          <Show when={node().status === "recoverable"}>
+            <text fg={theme.warning}>
+              {t(props.lang, "recoverable_action_hint")}
+            </text>
+          </Show>
           <Show when={node().error_info}>
             <text fg={theme.error}>
               {t(props.lang, "label_error")}: {node().error_info!.type}: {node().error_info!.message}

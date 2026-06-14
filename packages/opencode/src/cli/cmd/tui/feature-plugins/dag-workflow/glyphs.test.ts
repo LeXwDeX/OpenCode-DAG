@@ -64,7 +64,7 @@ const EA_AMBIGUOUS_BLACKLIST = new Set([
   "\u2500", // ─ box drawings horizontal
 ])
 
-const NODE_STATUSES: NodeStatus[] = ["pending", "queued", "running", "completed", "failed", "skipped"]
+const NODE_STATUSES: NodeStatus[] = ["pending", "queued", "running", "completed", "failed", "skipped", "recoverable"]
 const WORKFLOW_STATUSES: WorkflowStatus[] = ["pending", "running", "completed", "failed", "cancelled", "paused"]
 const VIOLATION_SEVERITIES: ViolationSeverity[] = ["info", "warning", "error", "critical"]
 

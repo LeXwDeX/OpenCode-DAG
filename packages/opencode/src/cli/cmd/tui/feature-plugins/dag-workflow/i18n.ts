@@ -119,6 +119,7 @@ export const DICT = {
     toast_replan_range: "Concurrency must be between 1 and 10",
     toast_create_error: "Failed to create workflow",
     toast_action_error: "Action failed",
+    recoverable_action_hint: "Use dagworker replan to replace this node",
   },
   zh: {
     tab_dialogue: "对话",
@@ -217,6 +218,7 @@ export const DICT = {
     toast_replan_range: "并发数必须在 1 到 10 之间",
     toast_create_error: "创建工作流失败",
     toast_action_error: "操作失败",
+    recoverable_action_hint: "使用 dagworker replan 替换此节点",
   },
 } as const
 

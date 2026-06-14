@@ -122,6 +122,7 @@ export function buildSessionNodeEvent(
     diffStats?: DiffStats
     triggerReason?: FallbackTrigger
     upstreamFailedNode?: string
+    error?: unknown
   }
 ): NodeEvent | null {
   switch (newStatus) {
@@ -139,6 +140,14 @@ export function buildSessionNodeEvent(
       return { type: "node.failed", workflow_id: workflowId, node_name: nodeName, trigger_reason: opts?.triggerReason ?? FallbackTrigger.EXEC_FAILED }
     case "skipped":
       return { type: "node.skipped", workflow_id: workflowId, node_name: nodeName, upstream_failed_node: opts?.upstreamFailedNode ?? "" }
+    case "recoverable":
+      return {
+        type: "node.recoverable",
+        workflow_id: workflowId,
+        node_name: nodeName,
+        trigger_reason: opts?.triggerReason ?? FallbackTrigger.EXEC_FAILED,
+        ...(opts?.error !== undefined ? { error: typeof opts.error === "string" ? opts.error : JSON.stringify(opts.error) } : {}),
+      }
     default:
       return null
   }
@@ -703,6 +712,11 @@ const make = Effect.gen(function* () {
       if (input.outputData !== undefined) {
         updates.output = input.outputData
       }
+
+      // G4/WP4: persist error_info when input.error is present (Iron Law #4: persist-first)
+      if (input.error !== undefined) {
+        updates.error_info = input.error
+      }
       
       Database.use((db) => {
         db.update(dagNodes)
@@ -716,6 +730,7 @@ const make = Effect.gen(function* () {
         const event = buildSessionNodeEvent(nodeWorkflowId, input.sessionId, nodeName, input.status, {
           outputSummary: input.outputData,
           upstreamFailedNode: input.upstreamFailedNode,
+          error: input.error,
         })
         if (event) _eventBus.emit(event)
       }

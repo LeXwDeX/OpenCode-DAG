@@ -174,6 +174,9 @@ export function formatProgressSummary(
     if (req.failed > 0) {
       parts.push(`${nodeStatusLabel(lang, "failed")}: ${req.failed}`)
     }
+    if (req.recoverable > 0) {
+      parts.push(`${nodeStatusLabel(lang, "recoverable")}: ${req.recoverable}`)
+    }
   }
   if (progress.current_concurrency > 0) {
     parts.push(`${progress.current_concurrency}/${progress.max_concurrency} ${nodeStatusLabel(lang, "running")}`)

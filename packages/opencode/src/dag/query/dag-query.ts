@@ -238,6 +238,7 @@ export class DAGQuery implements IDAGQuery {
     const completedNodes = nodes.filter(n => n.status === 'completed').length;
     const pendingNodes = nodes.filter(n => n.status === 'pending').length;
     const failedNodes = nodes.filter(n => n.status === 'failed').length;
+    const recoverable = nodes.filter(n => n.status === 'recoverable').length;
     const currentRunning = nodes.filter(n => n.status === 'running').length;
 
     const completedNodesWithTime = nodes.filter(n => n.completed_at != null && n.completed_at > 0);
@@ -259,6 +260,7 @@ export class DAGQuery implements IDAGQuery {
       completedNodes,
       pendingNodes,
       failedNodes,
+      recoverable,
       currentRunning,
       averageNodeDuration,
       totalElapsedTime

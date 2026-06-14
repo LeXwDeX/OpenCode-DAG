@@ -268,6 +268,8 @@ function nodeEventToStatus(event: NodeEvent): string | null {
       return "failed"
     case "node.restarted":
       return "running"
+    case "node.recoverable":
+      return "recoverable"
     default:
       return null
   }
