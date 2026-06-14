@@ -1536,6 +1536,7 @@ const make = Effect.gen(function* () {
         // Downstream pending nodes are preserved (not cascade-skipped) — they remain
         // pending until an agent replan replaces/restarts the recoverable node.
         if (!stepMode.has(workflowId)) {
+          spawnedNodes.delete(nodeId)
           yield* scheduleReadyNodes(workflowId)
           // maybeFinalizeWorkflow returns null because recoverable is non-terminal
           // (computeFinalWorkflowStatus sees recoverable as in-progress → null).

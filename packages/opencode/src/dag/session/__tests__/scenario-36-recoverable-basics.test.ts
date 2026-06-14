@@ -34,7 +34,7 @@ import { Effect } from "effect"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import * as Database from "@/storage/db"
 import { DAGSessionService } from "../session-service"
-import { WorkflowEngine } from "../workflow-engine"
+import { __internal_spawnedNodes, setWorkflowConcurrency, WorkflowEngine } from "../workflow-engine"
 import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGWorkflowSession } from "../types"
 import {
   getReadyNodes,
@@ -67,9 +67,9 @@ function makeNodeConfig(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function setupWorkflow(service: any, name: string, nodes: { id: string; deps: string[]; required: boolean; failurePolicy?: 'fail' | 'recoverable' }[]): { workflowId: string; nodeConfigs: DAGNodeConfig[]; workflow: DAGWorkflowSession } {
+function setupWorkflow(service: any, name: string, nodes: { id: string; deps: string[]; required: boolean; failurePolicy?: 'fail' | 'recoverable' }[], maxConcurrency = 3): { workflowId: string; nodeConfigs: DAGNodeConfig[]; workflow: DAGWorkflowSession } {
   const nodeConfigs = nodes.map((n) => makeNodeConfig(n.id, n.deps, n.required, n.failurePolicy))
-  const config: DAGConfig = { name, nodes: nodeConfigs, max_concurrency: 3 }
+  const config: DAGConfig = { name, nodes: nodeConfigs, max_concurrency: maxConcurrency }
   const workflow = Effect.runSync(
     service.createWorkflow({
       name,
@@ -215,6 +215,32 @@ describe("Scenario 36: WP2 recoverable state machine basics", () => {
     // Workflow should be non-terminal (recoverable + running = in-progress)
     const wf = Effect.runSync(service.getWorkflow(workflowId)) as DAGWorkflowSession
     expect(["running", "paused"]).toContain(wf.status)
+  })
+
+  it("recoverable releases concurrency slot for independent sibling", () => {
+    const { workflowId } = setupWorkflow(service, "test-36-recoverable-slot", [
+      { id: "a", deps: [], required: true, failurePolicy: "recoverable" },
+      { id: "b", deps: [], required: true },
+    ], 1)
+    const nodeIdA = `${workflowId}::a`
+    const nodeIdB = `${workflowId}::b`
+
+    __internal_spawnedNodes().delete(nodeIdA)
+    __internal_spawnedNodes().delete(nodeIdB)
+    setWorkflowConcurrency(workflowId, 1)
+    Effect.runSync(service.updateWorkflowStatus(workflowId, "running"))
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdA, status: "running" }))
+    __internal_spawnedNodes().add(nodeIdA)
+
+    Effect.runSync(engine.handleNodeFailure(workflowId, nodeIdA, new Error("test failure recoverable slot")))
+
+    const nodeA = Effect.runSync(service.getNode(nodeIdA)) as DAGNodeSession
+    expect(nodeA.status).toBe("recoverable")
+    expect(__internal_spawnedNodes().has(nodeIdA)).toBe(false)
+    expect(__internal_spawnedNodes().has(nodeIdB)).toBe(true)
+
+    const wf = Effect.runSync(service.getWorkflow(workflowId)) as DAGWorkflowSession
+    expect(wf.status).not.toBe("failed")
   })
 
   // --------------------------------------------------------------------------
