@@ -5,7 +5,7 @@
  * "Empty scope/context → passed as undefined to template (not empty string)"
  */
 import { describe, it, expect } from "bun:test"
-import { buildTemplateInput, buildPreviewMessage, DagErrorFallback, DAG_SEARCH_MODE } from "./console-route"
+import { buildTemplateInput, buildPreviewMessage, routeWorkflowId, DagErrorFallback, DAG_SEARCH_MODE } from "./console-route"
 
 describe("buildTemplateInput", () => {
   it("includes all three fields when all are non-empty", () => {
@@ -127,6 +127,27 @@ describe("WP-C ConsoleRoute inspect wiring", () => {
     expect(source).toContain("const inspectDiagnostics = useInspectDiagnostics")
     expect(source).toContain("selectedNodeId: selectedNodeID")
     expect(source).toContain("inspect={inspectDiagnostics}")
+  })
+})
+
+describe("ConsoleRoute workflow route param selection", () => {
+  it("accepts canonical workflowId route param", () => {
+    expect(routeWorkflowId({ workflowId: "wf-canonical" })).toBe("wf-canonical")
+  })
+
+  it("accepts event-style workflowID route param from external callers", () => {
+    expect(routeWorkflowId({ workflowID: "wf-event-style" })).toBe("wf-event-style")
+  })
+
+  it("prefers canonical workflowId when both names are present", () => {
+    expect(routeWorkflowId({ workflowId: "wf-canonical", workflowID: "wf-event-style" })).toBe("wf-canonical")
+  })
+
+  it("keeps a route-param resync effect for already-mounted DAG pages", async () => {
+    const source = await Bun.file(new URL("./console-route.tsx", import.meta.url)).text()
+    expect(source).toContain("routeWorkflowId(routeParams())")
+    expect(source).toContain("setCurrentWorkflowID(next)")
+    expect(source).toContain("setSelectedNodeID(null)")
   })
 })
 

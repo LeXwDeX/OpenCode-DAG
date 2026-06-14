@@ -134,6 +134,12 @@ export function buildPreviewMessage(preview: ReplanPreviewMessageInput): string 
   ].join("\n")
 }
 
+export function routeWorkflowId(params: { workflowId?: unknown; workflowID?: unknown } | undefined): string | undefined {
+  if (typeof params?.workflowId === "string" && params.workflowId) return params.workflowId
+  if (typeof params?.workflowID === "string" && params.workflowID) return params.workflowID
+  return undefined
+}
+
 export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   const { theme } = useTheme()
   const i18n = useLang(props.api)
@@ -143,23 +149,31 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       ("params" in props.api.route.current
         ? props.api.route.current.params
         : undefined) as
-        | {
-            sessionID?: string
-            workflowId?: string
-            returnRoute?: { name: string; params?: Record<string, unknown> }
-          }
-        | undefined,
+          | {
+              sessionID?: string
+              workflowId?: string
+              workflowID?: string
+              returnRoute?: { name: string; params?: Record<string, unknown> }
+            }
+          | undefined,
   )
 
   const sessionID = createMemo(() => routeParams()?.sessionID ?? "")
   const [currentWorkflowID, setCurrentWorkflowID] = createSignal<string | undefined>(
-    routeParams()?.workflowId,
+    routeWorkflowId(routeParams()),
   )
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
   const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
   const [actionError, setActionError] = createSignal<string | null>(null)
   const [actionLoading, setActionLoading] = createSignal(false)
+
+  createEffect(() => {
+    const next = routeWorkflowId(routeParams())
+    if (!next || next === currentWorkflowID()) return
+    setCurrentWorkflowID(next)
+    setSelectedNodeID(null)
+  })
 
   async function withLoading<T>(fn: () => Promise<T>): Promise<T> {
     setActionLoading(true)
