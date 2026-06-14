@@ -108,20 +108,92 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Create artifacts directory
-        run: mkdir -p packages/opencode/.artifacts
+        run: mkdir -p packages/opencode/.artifacts/dag-coverage
 
-      - name: Run DAG smoke tests (mock)
+      - name: Run DAG smoke test (mock)
         run: cd packages/opencode && bun test src/dag/__tests__/dag-smoke.test.ts --reporter=junit --reporter-outfile=.artifacts/dag-smoke.xml
 
-      - name: Run DAG module unit tests
-        run: cd packages/opencode && bun test src/dag --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/dag-unit.xml
-
-      - name: Generate DAG coverage report
+      - name: Run DAG scenario tests (scenarios 21-38, integration-level)
         run: |
           cd packages/opencode
-          bun test src/dag --coverage --timeout 30000
+          bun test \
+            src/dag/session/__tests__/scenario-21-replan-history.test.ts \
+            src/dag/session/__tests__/scenario-22-workflow-finalize.test.ts \
+            src/dag/session/__tests__/scenario-23-recovery-resume.test.ts \
+            src/dag/session/__tests__/scenario-24-running-node-resume.test.ts \
+            src/dag/session/__tests__/scenario-25-conditional-skip.test.ts \
+            src/dag/session/__tests__/scenario-26-data-flow.test.ts \
+            src/dag/session/__tests__/scenario-27-subdag-lifecycle.test.ts \
+            src/dag/session/__tests__/scenario-27a-subdag-spawn.test.ts \
+            src/dag/session/__tests__/scenario-28-cross-feature-recovery.test.ts \
+            src/dag/session/__tests__/scenario-29-cross-feature-pairwise.test.ts \
+            src/dag/session/__tests__/scenario-30-cross-feature-triple.test.ts \
+            src/dag/session/__tests__/scenario-31-timeout-enforcement.test.ts \
+            src/dag/session/__tests__/scenario-32-timeout-cascade-finalize.test.ts \
+            src/dag/session/__tests__/scenario-33-control-flow-combinations.test.ts \
+            src/dag/session/__tests__/scenario-34-spawn-running-write-failure.test.ts \
+            src/dag/session/__tests__/scenario-35-failure-notification.test.ts \
+            src/dag/session/__tests__/scenario-36-recoverable-basics.test.ts \
+            src/dag/session/__tests__/scenario-37-recoverable-replan.test.ts \
+            src/dag/session/__tests__/scenario-38-recoverable-e2e-harness.test.ts \
+            src/dag/session/__tests__/scenario-failure-diagnosis.test.ts \
+            src/dag/session/__tests__/scenario-wp2-required-cascade.test.ts \
+            --timeout 60000 --reporter=junit --reporter-outfile=.artifacts/dag-scenarios.xml
+
+      - name: Run DAG engine layer tests (execution-core, replan, session-service, required-nodes)
+        run: |
+          cd packages/opencode
+          bun test \
+            src/dag/session/__tests__/execution-core.test.ts \
+            src/dag/session/__tests__/replan.test.ts \
+            src/dag/session/__tests__/session-service.test.ts \
+            src/dag/session/__tests__/required-nodes-validator.test.ts \
+            src/dag/session/__tests__/node-condition-schema.test.ts \
+            src/dag/session/__tests__/node-input-mapping-schema.test.ts \
+            --reporter=junit --reporter-outfile=.artifacts/dag-engine-layer.xml
+
+      - name: Run remaining DAG tests (bridge, query, templates, recovery, step, subdag, worktree)
+        run: |
+          cd packages/opencode
+          bun test \
+            src/dag/bridge/__tests__/dag-bus-bridge.test.ts \
+            src/dag/query/__tests__/dag-probe.test.ts \
+            src/dag/query/__tests__/dag-query.test.ts \
+            src/dag/integration/templates/__tests__/templates.test.ts \
+            src/dag/session/__tests__/core-start.test.ts \
+            src/dag/session/__tests__/recovery.test.ts \
+            src/dag/session/__tests__/step-workflow.test.ts \
+            src/dag/session/__tests__/subdag-dispatch.test.ts \
+            src/dag/session/__tests__/workflow-engine.test.ts \
+            src/dag/session/__tests__/path-resolve.test.ts \
+            src/dag/session/__tests__/prompt-inject.test.ts \
+            src/dag/session/__tests__/node-condition-eval.test.ts \
+            src/dag/session/__tests__/node-input-mapping-collect.test.ts \
+            src/dag/worktree-manager/__tests__/WorktreeManager.test.ts \
+            src/dag/__tests__/layer-session-prompt.test.ts \
+            --timeout 30000 --reporter=junit --reporter-outfile=.artifacts/dag-other.xml
+
+      - name: DAG session coverage enforcement
+        run: |
+          cd packages/opencode
+          rm -rf coverage .artifacts/dag-coverage/*
+          bun test src/dag/session --coverage --timeout 60000
           mkdir -p .artifacts/dag-coverage
-          cp -r coverage .artifacts/dag-coverage/ || true
+          cp -r coverage .artifacts/dag-coverage/
+          # Extract line coverage and enforce 75% threshold
+          SUMMARY="coverage/coverage-summary.json"
+          if [ -f "$SUMMARY" ]; then
+            PCT=$(jq -r '.total.lines.pct // 0' "$SUMMARY")
+            echo "📊 DAG session line coverage: ${PCT}% (threshold: 75%)"
+            LOW=$(awk "BEGIN {print ($PCT < 75 ? 1 : 0)}")
+            if [ "$LOW" -eq 1 ]; then
+              echo "::error::Coverage ${PCT}% is below the 75% threshold"
+              exit 1
+            fi
+            echo "✅ Coverage ${PCT}% meets threshold"
+          else
+            echo "::warning::No coverage-summary.json generated — skipping threshold check"
+          fi
 
       - name: Upload DAG test artifacts
         if: always()
