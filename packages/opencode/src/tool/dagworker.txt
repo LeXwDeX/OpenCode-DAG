@@ -8,12 +8,12 @@ dagworker — DAG workflow orchestrator tool.
 
 Actions:
 - `start`: Create and fork a workflow; returns `workflowId` immediately; execution runs in background.
-- `status`: Poll a workflow's real-time state — pending/running/completed/failed nodes, violations, duration.
+- `status`: Poll a workflow's real-time state — pending/running/completed/failed nodes, recoverable count, violations, duration.
 - `cancel`: Abort a running workflow.
 - `pause`: Pause a running workflow — running nodes continue but no new nodes are scheduled.
 - `resume`: Resume a paused workflow — status returns to running and ready nodes are scheduled.
 - `list`: See every workflow spawned in the lifetime of this process.
-- `replan`: Restructure a running workflow's tail (add/remove/update pending nodes, optionally change max_concurrency). Terminal/frozen nodes are immutable scaffolding. Writes one atomically-applied row to dag_workflow_history.
+- `replan`: Restructure a running workflow's tail (add/remove/update nodes). recoverable nodes are removable (for retry/replacement); frozen nodes (queued/running/completed/failed/skipped) remain immutable. Terminal workflows cannot be replanned. Writes one atomically-applied row to dag_workflow_history.
 - `template_list`: List built-in workflow templates.
 - `template_show`: Render a built-in template with input without starting it.
 - `template_start`: Render and start a built-in template workflow.
@@ -27,3 +27,4 @@ Failure recovery rules:
 - Missing on-disk JSON is not a blocker. Inspect persisted runtime state first with `list`, `status`, `node_detail`, `logs`, and `history` before asking the user for the original config.
 - `failure_handler` is a workflow-level pre-terminal recovery hook. It can retry only while the workflow is still `running` and the failed node is still `running`; after terminal failure it no longer applies.
 - `failure_handler` fields are `enabled`, `agent`, `diagnosis_timeout_ms`, `on_diagnosis_timeout`, and `max_recoveries`. Do not use `failure_handler.timeout_ms`; node timeouts use `node.timeout_ms`.
+- Failure policy `'recoverable'`: when a node fails, engine transitions `running → recoverable` (non-terminal) instead of `running → failed`. Workflow stays running/paused. Parent agent can later use `replan` to remove recoverable node + add replacement node with corrected `worker_config`. `recoverable → running` is illegal (must reset to `pending` first).

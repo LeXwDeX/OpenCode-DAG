@@ -245,6 +245,7 @@ interface DAGNodeConfig {
     prompt: string              // The task given to the subagent.
     // ...any agent-specific fields...
   }
+  failure_policy?: 'fail' | 'recoverable'  // Default: 'fail'. 'recoverable': node failure → non-terminal recoverable state.
   condition?: DAGNodeCondition  // Optional declarative skip/ready (WP-B1).
   input_mapping?: DAGInputMapping  // Optional declarative upstream data injection (WP-C1).
 }
@@ -258,6 +259,11 @@ interface DAGNodeConfig {
 | `prompt` | string | Task prompt handed to the child subagent. |
 | `use_worktree` | `true` | Opt-in per-node git worktree isolation (default `false`). |
 | `subDagConfig` | `DAGConfig` | Reserved for `worker_type === "dag"` (sub-DAG dispatch, depth ≤ 3). |
+
+#### `failure_policy` (WP2 — node-level failure behavior)
+
+- `'fail'` (default): node failure triggers `running → failed` + cascade skip of downstream pending nodes.
+- `'recoverable'`: node failure triggers `running → recoverable` (non-terminal). Workflow stays running. Parent agent can `replan` to remove recoverable node + add replacement. Downstream pending nodes are NOT cascade-skipped.
 
 #### `condition` (WP-B1 — declarative skip/ready)
 
@@ -318,10 +324,14 @@ This keeps the dependency-resolution logic uniform.
 ```
 pending ─▶ queued ─▶ running ─▶ completed
   │             │                ─▶ failed ─┐
+  │             │                ─▶ recoverable  (failure_policy='recoverable')
   │             │                            │ retry (max_attempts not exhausted)
   │             └─▶ skipped                  │ (the SOLE permitted reversal)
   └─▶ skipped (when required upstream        ▼
          failed or condition is false)     pending
+                                           │
+recoverable ─▶ pending (reset for re-run)  │
+            ─▶ failed  (abandon, terminal) │
 ```
 
 The `queued` state means: dependencies resolved, but the node is waiting for an execution slot (`running_count < max_concurrency`). It is NOT `running` yet.
@@ -337,6 +347,9 @@ The `queued` state means: dependencies resolved, but the node is waiting for an 
 | queued | skipped | Required upstream failed |
 | running | completed | `node_complete` called with `status: "completed"` |
 | running | failed | `node_complete` called with `status: "failed"`, OR subagent idle (`node_complete_missing`), OR outer `catchCause`, OR timeout |
+| running | recoverable | `failure_policy='recoverable'` on node failure |
+| recoverable | pending | Reset for re-run (via replan remove+add, or internal reset) |
+| recoverable | failed | Abandon — terminal, no outgoing transitions |
 | running | pending | Failure diagnosis recovery reset before terminal failure is written |
 
 ## 7. Workflow status state machine
@@ -371,6 +384,8 @@ pending ─▶ running ─▶ completed
 - **completed**: all nodes are `completed` OR optional nodes are `skipped`/`failed` but every `required: true` node succeeded.
 - **failed**: any `required: true` node is `failed`, OR unhandled error propagates out of the executor fiber.
 - **cancelled**: orchestrating agent called `dagworker action=cancel`, OR workflow exceeded `timeout_ms`, OR parent session aborted.
+
+`recoverable` nodes block completion: `computeFinalWorkflowStatus` returns `null` (in-progress) while any node is `recoverable`. The workflow stays `running` until all recoverable nodes are resolved via replan (→ `pending`) or abandoned (→ `failed`). A `required: true` node with `failure_policy='recoverable'` does NOT trigger `required_node_failed` violation — the node enters `recoverable`, not `failed`.
 
 ## 8. Violation types
 
@@ -429,6 +444,7 @@ Every status transition emits an event:
 | `node.completed` | Node marked `completed` |
 | `node.failed` | Node marked `failed` |
 | `node.skipped` | Node marked `skipped` |
+| `node.recoverable` | Node transitioned to `recoverable` (non-terminal, `failure_policy='recoverable'`). Payload includes `trigger_reason`, `error`. |
 
 These flow through the shared `IEventBus` (set on `DAGSessionService` via `setEventBus` in `src/dag/layer.ts`).
 
@@ -486,7 +502,13 @@ Parallel fan-out with exponential retry. `aggregate` runs only when both fixes c
 
 ## 13. Replan Mechanism
 
-`dagworker action=replan patch={...}` restructures the *tail* of a running workflow — the portion that hasn't left `pending` status — without cancelling in-flight nodes. The engine atomically:
+`dagworker action=replan patch={...}` restructures the *tail* of a running workflow without cancelling in-flight nodes. At the moment replan begins, `classifyReplanNodes` partitions nodes into three tiers:
+
+- **Frozen** (immutable): `queued`, `running`, `completed`, `failed`, `skipped` — `remove_nodes` and `update_nodes` rejected.
+- **Removable** (may remove, NOT update): `recoverable` — for retry/replacement pattern. `update_nodes` targeting recoverable is rejected (must use remove+add).
+- **Mutable** (freely modifiable): `pending` — add, remove, or rewire dependencies.
+
+The engine atomically:
 
 1. Deletes the specified pending nodes.
 2. Applies config/dependency patches to the specified pending nodes.
@@ -502,7 +524,7 @@ All five writes happen inside a single `Database.transaction`. If any step throw
 interface ReplanPatch {
   workflow_id: string                          // Required. The workflow to replan.
   add_nodes?: DAGNodeConfig[]                  // New nodes. cfg.id must NOT be namespaced.
-  remove_nodes?: string[]                      // Namespaced node ids (${workflowId}::${cfg.id}). Must be pending.
+  remove_nodes?: string[]                      // Namespaced node ids (${workflowId}::${cfg.id}). Must be pending or recoverable.
   update_nodes?: ReplanNodePatch[]             // Per-node patches. See below.
   new_max_concurrency?: number                 // 1..10. Optional.
   changed_by?: string                          // Free-form audit tag, e.g. "main-agent".
@@ -596,6 +618,12 @@ Hard limits enforced by the engine at `start` time:
 - Exception: node-level `retry` is the sole permitted `failed → pending` reversal, only before retry exhaustion.
 - Exception: `failure_handler` diagnosis reset is a permitted `running → pending` reversal, only before terminal failure is written.
 
+### Recoverable non-terminal
+
+- `recoverable` is non-terminal: outgoing transitions allowed to `pending` (reset for re-run) or `failed` (abandon).
+- `recoverable → running` is illegal — must reset through `pending` first (prevents bypassing validation).
+- `pending → recoverable` is illegal — only `running` can transition to `recoverable` (engine-internal based on `failure_policy`).
+
 ### Explicit completion
 
 - `node_complete` is the only node-result signal the engine recognises. Visible to child sessions only, not to the orchestrating agent.
@@ -604,9 +632,9 @@ Hard limits enforced by the engine at `start` time:
 
 ## 16. Replan constraints
 
-### Frozen vs mutable nodes
+### Three-tier node classification
 
-At the moment replan begins, nodes are classified:
+At the moment replan begins, `classifyReplanNodes` partitions nodes:
 
 | Status | Classification | Patch effect |
 |---|---|---|
@@ -616,6 +644,7 @@ At the moment replan begins, nodes are classified:
 | `completed` | Frozen (terminal) | Rejected |
 | `failed` | Frozen (terminal) | Rejected |
 | `skipped` | Frozen (terminal) | Rejected |
+| `recoverable` | Removable | May remove (for retry/replacement); `update_nodes` targeting recoverable rejected |
 
 Terminal workflows (`completed` / `failed` / `cancelled`) reject replan outright.
 
@@ -628,6 +657,7 @@ Terminal workflows (`completed` / `failed` / `cancelled`) reject replan outright
 | All `dependencies[i]` resolve to a `cfg.id` in the post-patch graph | `unresolved dependency: node 'a' references 'b'` |
 | RequiredNodesValidator passes | `Validation errors: ...` |
 | No `required: true` node in `remove_nodes` | `Cannot remove required nodes: ...` |
+| `required: true` + `failure_policy='recoverable'` does NOT trigger `required_node_failed` | Node enters `recoverable`, not `failed`; workflow stays running until agent decides to replan or abandon |
 | No cycles in post-patch `dependencies[]` | `patch introduces a cycle` |
 
 ### Common mistakes
@@ -635,6 +665,7 @@ Terminal workflows (`completed` / `failed` / `cancelled`) reject replan outright
 - Namespaced IDs missing in `remove_nodes` / `update_nodes[].node_id`: engine resolves by namespaced form; un-namespaced ID silently no-ops (or throws "not found" for required nodes).
 - Duplicate `cfg.id` in post-patch graph: RequiredNodesValidator rejects.
 - Required nodes in `remove_nodes`: always rejected, even if other required nodes completed.
+- Attempting to use `update_nodes` to modify a recoverable node in-place: rejected (`execution-core.ts:293` reason: `"Cannot update frozen or removable nodes"`). Must use remove+add replacement pattern.
 
 ## 17. Failure investigation & recovery
 
@@ -658,23 +689,35 @@ Terminal workflows (`completed` / `failed` / `cancelled`) are frozen. A terminal
 
 When the workflow status is `running` or `paused` and some nodes completed while others failed, check the workflow status before deciding to rebuild — do not rebuild the entire workflow.
 
-**Step 1 — confirm the workflow is not terminal**: `dapworker status`. If status is `failed`/`completed`/`cancelled`, go to Terminal failure handling above. If `running` or `paused`, proceed.
+**Step 1 — confirm the workflow is not terminal**: `dagworker status`. If status is `failed`/`completed`/`cancelled`, go to Terminal failure handling above. If `running` or `paused`, proceed.
 
-**Step 2 — pause if still running**: `dapworker pause`. Running nodes continue; no new nodes are scheduled.
+**Step 2 — pause if still running**: `dagworker pause`. Running nodes continue; no new nodes are scheduled.
 
-**Step 3 — identify node mix**: `dapworker status` lists nodes by status. Determine which are `completed` (preserve), which are `pending` (candidates for `remove_nodes` or `update_nodes`), and which are `failed`/`skipped` (frozen — cannot be removed or updated by replan).
+**Step 3 — identify node mix**: `dagworker status` lists nodes by status. Determine which are `completed` (preserve), which are `pending` (candidates for `remove_nodes` or `update_nodes`), which are `recoverable` (removable for retry/replacement), and which are `failed`/`skipped` (frozen — cannot be removed or updated by replan).
 
 **Step 4 — construct replan patch**:
-- `remove_nodes`: only namespaced IDs of `pending` nodes (typically failed-node's downstream dependents that haven't been scheduled yet).
+- `remove_nodes`: namespaced IDs of `pending` or `recoverable` nodes (typically failed-node's downstream dependents that haven't been scheduled yet, or recoverable failed nodes).
 - `add_nodes`: corrected replacement nodes with fixed config or increased timeout.
 - Do NOT include completed or running nodes in `remove_nodes` or `update_nodes` — they are frozen and rejected.
+- Do NOT include recoverable nodes in `update_nodes` — they are removable but not updatable; use remove+add pattern.
 
-**Step 5 — apply**: `dapworker action=replan patch={...}`, then `dapworker resume` if paused.
+**Step 5 — apply**: `dagworker action=replan patch={...}`, then `dagworker resume` if paused.
 
 Constraints:
-- `required: true` node failures cascade downstream and usually mark the workflow terminal (`required_node_failed` violation → workflow → `failed`). In that case replan is blocked; go to Terminal failure handling.
-- Non-required node failures may leave the workflow `running`/`paused` if other pending nodes remain; replan applies to those remaining pending nodes.
+- `required: true` node failures with `failure_policy='fail'` trigger `required_node_failed` violation → workflow → `failed`; replan is blocked, go to Terminal failure handling.
+- `required: true` node failures with `failure_policy='recoverable'` enter `recoverable` state — no violation; workflow stays running.
+- Non-required node failures may leave the workflow `running`/`paused` if other pending nodes remain; replan applies to those remaining pending and recoverable nodes.
 - Frozen nodes (status `failed`/`completed`/`skipped`/`running`/`queued`) cannot be targeted by `remove_nodes`/`update_nodes`.
+
+### Recoverable node recovery sequence
+
+When a node has `failure_policy='recoverable'` and enters the `recoverable` state:
+
+1. Query workflow status via `dagworker status`; identify node with `status === 'recoverable'`.
+2. Optionally `dagworker pause` to prevent further spawn attempts.
+3. `dagworker action=replan patch={...}`: `remove_nodes=[recoverable node id]` + `add_nodes=[replacement node with corrected worker_config]`.
+4. `dagworker resume`; replacement node enters scheduling immediately (`scheduleReadyNodes` picks it up on next tick).
+5. If the failure was propagated to the parent agent via WP4 bus notification (`dag_event='node_updated'` with `status='recoverable'`), the parent agent can decide whether to retry, replace, or abandon.
 
 ### `failure_handler` (workflow-level pre-terminal recovery)
 
@@ -705,6 +748,9 @@ interface FailureHandlerConfig {
 - Blocking on a missing saved JSON file before using `list` / `status` / `node_detail` / `logs` / `history`.
 - Writing `failure_handler.timeout_ms`. The valid field is `failure_handler.diagnosis_timeout_ms`.
 - Adding `failure_handler` after a workflow is already terminal and expecting it to revive the failed node.
+- Attempting to use `update_nodes` to modify a recoverable node in-place: rejected. Must use `remove_nodes` + `add_nodes` replacement pattern.
+- Expecting `recoverable → running` to work: illegal transition. Must reset to `pending` first.
+- Assuming a `required: true` node with `failure_policy='recoverable'` triggers `required_node_failed`: it does not — the node enters `recoverable`, not `failed`.
 
 ---
 

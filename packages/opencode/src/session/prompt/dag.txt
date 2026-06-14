@@ -16,11 +16,12 @@ Use DAG workflows when user intent matches these patterns (in any language):
 
 ## Node & Workflow Statuses
 
-### Node status: `pending | queued | running | completed | failed | skipped`
+### Node status: `pending | queued | running | completed | failed | skipped | recoverable`
 - `pending`  — waiting on unresolved dependencies.
 - `queued`   — dependencies resolved, waiting for an execution slot (`running_count < max_concurrency`).
 - `running`  — child agent session actively executing.
 - `completed` / `failed` / `skipped` — terminal, immutable. `skipped` is for required-upstream failure or `condition` evaluated to `false`.
+- `recoverable` — execution failed with `failure_policy='recoverable'` → non-terminal, waiting for parent agent replan.
 
 One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fails before exhaustion, `failed → pending` (sole exception to the immutability rule).
 
@@ -31,6 +32,7 @@ One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fai
   - `dagworker resume` moves a paused workflow back to `running` (ready nodes are scheduled again).
   - `dagworker step` stays in `paused` but executes exactly one ready node to completion/failure.
 - A `paused` workflow can still be `cancelled`, but cannot be directly `completed` — it must resume or step first.
+- When any node is in `recoverable`, workflow stays `running` — `computeFinalWorkflowStatus` does not return `completed` or `failed` until all recoverable nodes are resolved.
 
 ## The Tool
 
@@ -39,12 +41,12 @@ One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fai
 | action | purpose |
 |---|---|
 | `start` | Create and fork a workflow; returns `workflowId` immediately; execution runs in background. |
-| `status` | Poll a workflow's real-time state — which nodes are `pending`/`running`/`completed`/`failed`, violations, duration. |
+| `status` | Poll a workflow's real-time state — which nodes are `pending`/`running`/`completed`/`failed`/`recoverable`, recoverable count, violations, duration. |
 | `cancel` | Abort a running workflow. |
 | `pause` | Pause a running workflow; running nodes continue and new nodes are not scheduled. |
 | `resume` | Resume a paused workflow and schedule ready nodes. |
 | `list` | See every workflow spawned in the lifetime of this process. |
-| `replan` | Restructure a running workflow's tail; keeps frozen nodes immutable and writes one audit row. |
+| `replan` | Restructure a running workflow's tail; keeps frozen nodes immutable, recoverable nodes are removable, and writes one audit row. |
 | `template_list` | List built-in workflow templates. |
 | `template_show` | Render a built-in template with input without starting it. |
 | `template_start` | Render and start a built-in template workflow. |
@@ -100,6 +102,7 @@ Minimal template commands:
       "retry": { "max_attempts": 2, "delay_ms": 5000 },
       "worker_type": "string (subagent name, e.g. 'implement')",
       "worker_config": { "agent": "implement", "prompt": "your task prompt" },
+      "failure_policy": "'fail' | 'recoverable' (default: 'fail')",
       "condition": { "ref_node": "upstream_id", "op": "eq|ne|gt|lt|gte|lte|exists|not_exists", "value": "<compare against>" },
       "input_mapping": { "inputKey": { "ref_node": "upstream_id", "ref_path": "$.optional.subfield" } }
     }
@@ -143,7 +146,7 @@ Minimal template commands:
 
 ## The Companion Tool: node_complete
 
-Each workflow node spawns a child agent session using the `worker_type` + `worker_config.prompt` you specify. Inside that child session, the agent sees an extra tool `node_complete` — the **only way** a node signals success or failure. If the subagent finishes its turn without calling `node_complete`, the engine marks the node `failed`.
+Each workflow node spawns a child agent session using the `worker_type` + `worker_config.prompt` you specify. Inside that child session, the agent sees an extra tool `node_complete` — the **only way** a node signals success or failure. If the subagent finishes its turn without calling `node_complete`, the engine marks the node `failed`. The child agent does not control the `recoverable` transition — it is determined by the workflow engine based on `failure_policy` configuration.
 
 ## Replan — Restructure a Running Workflow's Tail
 
@@ -172,13 +175,14 @@ Each workflow node spawns a child agent session using the `worker_type` + `worke
 |---|---|---|
 | Node cap | ≤ 20 nodes per workflow | `max_nodes_exceeded` |
 | Concurrency cap | `max_concurrency` ≤ 10 | `max_concurrency_exceeded` |
-| Required nodes | `required: true` nodes cannot be skipped — failure triggers `required_node_failed` violation | violation recorded |
+| Required nodes | `required: true` nodes cannot be skipped — failure triggers `required_node_failed` violation | violation recorded. Exception: `required: true` + `failure_policy='recoverable'` does NOT trigger `required_node_failed` (node enters `recoverable`, not `failed`) |
 | No cycles | `dependencies[]` must form a DAG | cycle diagnostic at `start` time |
 
 ## Terminal state immutability
 
 - Terminal node states (`completed`, `failed` when retries exhausted, `skipped`) accept no further transitions. Single exception: node-level `retry` (`failed → pending` before exhaustion).
 - Terminal workflow states (`completed`, `failed`, `cancelled`) cannot be retried, replanned, or resumed in place. Start a new workflow for terminal failures.
+- `recoverable` is non-terminal: outgoing transitions restricted to `pending` (reset for re-run) or `failed` (abandon recovery). Direct `recoverable → running` is illegal.
 
 ## Explicit completion
 
@@ -190,6 +194,7 @@ Each workflow node spawns a child agent session using the `worker_type` + `worke
 | Rule | Effect |
 |---|---|
 | Frozen nodes (`queued` / `running` / `completed` / `failed` / `skipped`) | Reject any `remove_nodes` or `update_nodes` targeting them |
+| Recoverable nodes | May `remove_nodes` (for retry/replacement); `update_nodes` targeting recoverable rejected |
 | Terminal workflow (`completed` / `failed` / `cancelled`) | Reject replan outright |
 | `remove_nodes` / `update_nodes[].node_id` | Must use namespaced IDs (`${workflowId}::${cfg.id}`); un-namespaced IDs silently no-op (or throw "not found" for required nodes) |
 | `required: true` nodes | Cannot be in `remove_nodes`, even if other required nodes completed |
@@ -197,16 +202,17 @@ Each workflow node spawns a child agent session using the `worker_type` + `worke
 | `max_concurrency` bump | Must remain ≤ 10 |
 | Duplicate `cfg.id` in post-patch graph | RequiredNodesValidator rejects |
 
-**Trigger keywords**: user says "replan", "revise the plan", "adjust the remaining stages", "add a verification step", or "drop the final stage".
-
 ## Failure investigation and recovery
 
 1. Inspect runtime state before searching for on-disk JSON config: `list` → `status` → `node_detail` → `logs` → `history`.
 2. Check workflow status BEFORE deciding to rebuild:
    - `running` or `paused` with completed + failed nodes → **partial recovery via replan**: keep completed nodes; `remove_nodes` for pending/downstream nodes that depended on the failure; add corrected replacement nodes; then `dagworker resume`.
+   - `running` or `paused` with recoverable nodes → **recoverable recovery**: `pause` workflow; `replan` with `remove_nodes=[recoverable node]` + `add_nodes=[replacement with corrected worker_config]`; then `resume`.
    - Terminal (`failed` / `completed` / `cancelled`) → cannot reuse the workflow; reconstruct the config and `start` a new workflow.
-   - replan only accepts **pending** nodes in `remove_nodes`/`update_nodes`. Frozen nodes (`failed`/`completed`/`skipped`/`running`/`queued`) are rejected.
-   - `required: true` required-node failures cascade downstream and usually make the workflow terminal (required_node_failed violation + workflow → failed); in this case replan is blocked and a fresh workflow is necessary.
+   - `failure_policy='fail'` (or unset): failure cascades → may terminalize the workflow.
+   - `failure_policy='recoverable'`: workflow stays running; replan is the recovery path.
+   - replan accepts **pending** and **recoverable** nodes in `remove_nodes`. Frozen nodes (`failed`/`completed`/`skipped`/`running`/`queued`) are rejected. `update_nodes` targeting recoverable is rejected.
+   - `required: true` node failures with `failure_policy='fail'` trigger `required_node_failed` violation → workflow → `failed`; replan is blocked, requiring a fresh workflow.
 3. `failure_handler` runs only while `workflow.status === "running"` and the failing node is still `running`. It does not apply after terminal failure.
 4. `failure_handler` fields: `enabled`, `agent?`, `diagnosis_timeout_ms?`, `on_diagnosis_timeout?`, `max_recoveries?`. The field `failure_handler.timeout_ms` does not exist; use `node.timeout_ms` for node execution timeout.
 5. `dagworker start` validates `worker_type` BEFORE database writes — an unregistered `worker_type` causes immediate rejection with `"worker_type not found: <name>"`.
