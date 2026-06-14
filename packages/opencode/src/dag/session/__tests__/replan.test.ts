@@ -447,14 +447,74 @@ describe('replan: post-patch validation', () => {
     if (!r.ok) expect(r.reason).toMatch(/unresolved dependency/)
   })
 
-  it('rejects removal of required node', () => {
+  it('rejects removal of required node (non-recoverable)', () => {
     const reqNode = makeNodeConfig({ id: 'req', required: true })
     const otherNode = makeNodeConfig({ id: 'other', required: false })
-    // newConfigNodes after removal: only [otherNode]
+    // currentNodes: req is pending (non-recoverable) → must be rejected
+    const currentNodes = [
+      makeNodeSession(`${WID}::req`, 'pending', { id: 'req', required: true }),
+      makeNodeSession(`${WID}::other`, 'pending', { id: 'other', required: false }),
+    ]
     const r = validateReplanPostConfig(
       [otherNode],
       makePatch({ remove_nodes: [`${WID}::req`] }),
       simpleWorkflow([reqNode, otherNode]),
+      currentNodes,
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toMatch(/required/i)
+  })
+
+  it('allows removal of required recoverable node (retry/replacement pattern)', () => {
+    const reqNode = makeNodeConfig({ id: 'req', required: true, failure_policy: 'recoverable' })
+    const otherNode = makeNodeConfig({ id: 'other', required: false })
+    // replacement required node
+    const reqReplacement = makeNodeConfig({ id: 'req2', required: true, dependencies: ['other'] })
+    // currentNodes: req is recoverable → can be removed
+    const currentNodes = [
+      makeNodeSession(`${WID}::req`, 'recoverable', { id: 'req', required: true, failure_policy: 'recoverable' }),
+      makeNodeSession(`${WID}::other`, 'completed', { id: 'other', required: false }),
+    ]
+    const r = validateReplanPostConfig(
+      [otherNode, reqReplacement],
+      makePatch({ remove_nodes: [`${WID}::req`], add_nodes: [reqReplacement] }),
+      simpleWorkflow([reqNode, otherNode]),
+      currentNodes,
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('allows removal of required recoverable node without replacement (RequiredNodesValidator permits)', () => {
+    const reqA = makeNodeConfig({ id: 'a', required: true })
+    const reqB = makeNodeConfig({ id: 'b', required: true, failure_policy: 'recoverable' })
+    // currentNodes: b is recoverable; after removal, only 'a' remains → RequiredNodesValidator allows
+    const currentNodes = [
+      makeNodeSession(`${WID}::a`, 'completed', { id: 'a', required: true }),
+      makeNodeSession(`${WID}::b`, 'recoverable', { id: 'b', required: true, failure_policy: 'recoverable' }),
+    ]
+    const r = validateReplanPostConfig(
+      [reqA], // newConfigNodes after removing b (no replacement)
+      makePatch({ remove_nodes: [`${WID}::b`] }),
+      simpleWorkflow([reqA, reqB]),
+      currentNodes,
+    )
+    expect(r.ok).toBe(true)
+  })
+
+  it('rejects removal of required running node (non-recoverable even with replacement)', () => {
+    const reqNode = makeNodeConfig({ id: 'req', required: true })
+    const otherNode = makeNodeConfig({ id: 'other', required: false })
+    const replacement = makeNodeConfig({ id: 'req2', required: true })
+    // currentNodes: req is running (not recoverable) → must be rejected
+    const currentNodes = [
+      makeNodeSession(`${WID}::req`, 'running', { id: 'req', required: true }),
+      makeNodeSession(`${WID}::other`, 'pending', { id: 'other', required: false }),
+    ]
+    const r = validateReplanPostConfig(
+      [otherNode, replacement],
+      makePatch({ remove_nodes: [`${WID}::req`], add_nodes: [replacement] }),
+      simpleWorkflow([reqNode, otherNode]),
+      currentNodes,
     )
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toMatch(/required/i)

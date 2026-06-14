@@ -415,4 +415,81 @@ describe("Scenario 37: WP3 recoverable replan — remove+add replacement", () =>
     expect(Effect.runSync(service.getNode(nodeIdB))).toBeFalsy()
     expect(Effect.runSync(service.getNode(nodeIdC))).toBeFalsy()
   })
+
+  // --------------------------------------------------------------------------
+  // (h) WP-P1: required recoverable node can be removed via replan (replace)
+  // --------------------------------------------------------------------------
+  it("(h) WP-P1: required recoverable node → remove+add replacement succeeds", () => {
+    // Setup: A completed, B required+recoverable → replan removes B, adds B2 (required)
+    const { workflowId } = setupWorkflow(service, "test-37h", [
+      { id: "a", deps: [], required: true },
+      { id: "b", deps: ["a"], required: true, failurePolicy: "recoverable" },
+    ])
+    const nodeIdA = `${workflowId}::a`
+    const nodeIdB = `${workflowId}::b`
+
+    // A completed, B recoverable
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdA, status: "running" }))
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdA, status: "completed" }))
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdB, status: "running" }))
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdB, status: "recoverable" }))
+
+    // Replan: remove required recoverable B, add B2 as required replacement
+    const result = Effect.runSync(engine.replanWorkflow(workflowId, {
+      workflow_id: workflowId,
+      remove_nodes: [nodeIdB],
+      add_nodes: [
+        { id: "b2", name: "b2", dependencies: ["a"], required: true, worker_type: "general", worker_config: { prompt: "required replacement" } },
+      ],
+      changed_by: "scenario-37h",
+    })) as ReplanResult
+
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.nodes_removed).toBe(1)
+      expect(result.nodes_added).toBe(1)
+      expect(result.final_total).toBe(2) // A + B2
+    }
+
+    // B removed
+    expect(Effect.runSync(service.getNode(nodeIdB))).toBeFalsy()
+    // B2 exists as pending with required=true
+    const nodeB2 = Effect.runSync(service.getNode(`${workflowId}::b2`)) as DAGNodeSession
+    expect(nodeB2).toBeTruthy()
+    expect(nodeB2.status).toBe("pending")
+    expect(nodeB2.config.required).toBe(true)
+  })
+
+  // --------------------------------------------------------------------------
+  // (i) WP-P1 regression: required non-recoverable node is still rejected
+  // --------------------------------------------------------------------------
+  it("(i) WP-P1 regression: required pending node → remove is still rejected", () => {
+    // Setup: A completed, B required+pending (failure_policy defaults to fail)
+    const { workflowId } = setupWorkflow(service, "test-37i", [
+      { id: "a", deps: [], required: true },
+      { id: "b", deps: ["a"], required: true },
+    ])
+    const nodeIdA = `${workflowId}::a`
+    const nodeIdB = `${workflowId}::b`
+
+    // A completed; B stays pending (default status, not recoverable)
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdA, status: "running" }))
+    Effect.runSync(service.updateNodeStatus({ sessionId: nodeIdA, status: "completed" }))
+    // B stays pending
+
+    // Replan: try to remove required non-recoverable B
+    const result = Effect.runSync(engine.replanWorkflow(workflowId, {
+      workflow_id: workflowId,
+      remove_nodes: [nodeIdB],
+      add_nodes: [
+        { id: "b2", name: "b2", dependencies: ["a"], required: true, worker_type: "general", worker_config: { prompt: "replacement" } },
+      ],
+      changed_by: "scenario-37i",
+    })) as ReplanResult
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toMatch(/required/i)
+    }
+  })
 })

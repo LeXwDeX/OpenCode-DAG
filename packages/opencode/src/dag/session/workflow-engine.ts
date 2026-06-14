@@ -223,6 +223,7 @@ export function validateReplanPostConfig(
   newConfigNodes: DAGNodeConfig[],
   patch: ReplanPatch,
   workflow: { config: DAGConfig },
+  currentNodes?: DAGNodeSession[],
 ): ReplanValidateResult {
   const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
   const limits = validateWorkflowConfigLimits({ nodes: newConfigNodes, max_concurrency: newMaxConcurrency })
@@ -260,13 +261,23 @@ export function validateReplanPostConfig(
   if (!valid) {
     return { ok: false, reason: `Validation errors:\n${errors.join('\n')}` }
   }
-  // Reject removals of required nodes
+  // WP-P1: Reject removals of required nodes except those in recoverable state.
+  // When currentNodes is provided, recoverable required nodes can be removed
+  // (retry/replacement pattern). When absent (backward-compat), all required
+  // node removals are rejected unconditionally.
   const removeCfgIds = new Set((patch.remove_nodes ?? []).map(ns => ns.split('::').slice(1).join('::')))
-  const removedRequireds = workflow.config.nodes
+  const runtimeStatusMap = new Map(
+    (currentNodes ?? []).map(n => {
+      const cfgId = n.node_id.split('::').slice(1).join('::')
+      return [cfgId, n.status] as const
+    }),
+  )
+  const removedRequiredNonRecoverable = workflow.config.nodes
     .filter(n => n.required && removeCfgIds.has(n.id))
+    .filter(n => runtimeStatusMap.get(n.id) !== 'recoverable')
     .map(n => n.id)
-  if (removedRequireds.length > 0) {
-    return { ok: false, reason: `Cannot remove required nodes: ${removedRequireds.join(', ')}` }
+  if (removedRequiredNonRecoverable.length > 0) {
+    return { ok: false, reason: `Cannot remove required nodes: ${removedRequiredNonRecoverable.join(', ')} (only recoverable required nodes can be removed for retry/replacement)` }
   }
   // Cycle check — uses execution-core detectCycle
   if (detectCycle(newConfigNodes)) {
@@ -2058,7 +2069,7 @@ const make = Effect.gen(function* () {
       if (!frozenExistResult.ok) return yield* Effect.fail(new Error(frozenExistResult.reason))
       const applyResult = applyReplanPatchToConfig(workflowId, workflow.config.nodes, patch)
       if (!applyResult.ok) return yield* Effect.fail(new Error(applyResult.reason))
-      const postResult = validateReplanPostConfig(applyResult.newConfigNodes, patch, workflow)
+      const postResult = validateReplanPostConfig(applyResult.newConfigNodes, patch, workflow, currentNodes)
       if (!postResult.ok) return yield* Effect.fail(new Error(postResult.reason))
       const newMaxConcurrency = patch.new_max_concurrency ?? workflow.config.max_concurrency
       const addedNodeIds = (patch.add_nodes ?? []).map((n) => `${workflowId}::${n.id}`)
@@ -2143,7 +2154,7 @@ const make = Effect.gen(function* () {
       const { newConfigNodes } = applyResult
 
       // 7. Post-patch validation
-      const postResult = validateReplanPostConfig(newConfigNodes, patch, workflow)
+      const postResult = validateReplanPostConfig(newConfigNodes, patch, workflow, currentNodes)
       if (!postResult.ok) return yield* Effect.fail(new Error(postResult.reason))
 
       // 8. Build DB inputs
