@@ -2041,11 +2041,12 @@ const make = Effect.gen(function* () {
       const currentNodes = yield* sessionService.listNodes(workflowId)
       const preResult = validateReplanPreconditions(workflow, patch)
       if (!preResult.ok) return yield* Effect.fail(new Error(preResult.reason))
-      const { frozenIds } = classifyReplanNodes(currentNodes)
+      const { frozenIds, removableIds } = classifyReplanNodes(currentNodes)
       const frozenExistResult = validateFrozenAndExistence(
         patch,
         frozenIds,
         new Set(currentNodes.map((n: DAGNodeSession) => n.node_id)),
+        removableIds,
       )
       if (!frozenExistResult.ok) return yield* Effect.fail(new Error(frozenExistResult.reason))
       const applyResult = applyReplanPatchToConfig(workflowId, workflow.config.nodes, patch)
@@ -2115,12 +2116,12 @@ const make = Effect.gen(function* () {
       const preResult = validateReplanPreconditions(workflow, patch)
       if (!preResult.ok) return yield* Effect.fail(new Error(preResult.reason))
 
-      // 3. Classify nodes: frozen vs mutable
-      const { frozenIds } = classifyReplanNodes(currentNodes)
+      // 3. Classify nodes: frozen vs removable (WP3) vs mutable
+      const { frozenIds, removableIds } = classifyReplanNodes(currentNodes)
 
       // 4. Frozen + existence guards
       const currentNodeIds = new Set(currentNodes.map((n: DAGNodeSession) => n.node_id))
-      const frozenExistResult = validateFrozenAndExistence(patch, frozenIds, currentNodeIds)
+      const frozenExistResult = validateFrozenAndExistence(patch, frozenIds, currentNodeIds, removableIds)
       if (!frozenExistResult.ok) return yield* Effect.fail(new Error(frozenExistResult.reason))
 
       // 5. Snapshot old state for history
@@ -2195,6 +2196,11 @@ const make = Effect.gen(function* () {
         updated: updates.length,
         final_total: newConfigNodes.length,
       })
+
+      // 14. WP3: Immediately schedule newly-added replacement nodes (forked to not
+      //     block replan return). Must come AFTER replanInFlight.delete(12, above)
+      //     so scheduleReadyNodes entry guard doesn't short-circuit.
+      yield* scheduleReadyNodes(workflowId).pipe(Effect.forkDetach)
 
       return {
         ok: true as const,

@@ -366,23 +366,28 @@ describe("Scenario 36: WP2 recoverable state machine basics", () => {
   })
 
   // --------------------------------------------------------------------------
-  // (i) classifyReplanNodes: recoverable is in frozen set
+  // (i) classifyReplanNodes: recoverable is removable (WP3 relaxation)
   // --------------------------------------------------------------------------
-  it("(i) classifyReplanNodes: recoverable nodes are frozen (WP2; WP3 may relax)", () => {
+  it("(i) classifyReplanNodes: recoverable nodes are removable (WP3 relaxation)", () => {
     const nodes: DAGNodeSession[] = [
       { node_id: "wf::a", status: "recoverable", config: { required: true } } as unknown as DAGNodeSession,
       { node_id: "wf::b", status: "pending", config: { required: true } } as unknown as DAGNodeSession,
       { node_id: "wf::c", status: "running", config: { required: true } } as unknown as DAGNodeSession,
     ]
-    const { frozen, mutable, frozenIds } = classifyReplanNodes(nodes)
+    const { frozen, removable, mutable, frozenIds, removableIds, mutableIds } = classifyReplanNodes(nodes)
 
-    // frozen should have a and c, mutable should have b
+    // frozen = [c (running)], removable = [a (recoverable)], mutable = [b (pending)]
     const frozenNodeIds = frozen.map((n: DAGNodeSession) => n.node_id)
+    const removableNodeIds = removable.map((n: DAGNodeSession) => n.node_id)
     const mutableNodeIds = mutable.map((n: DAGNodeSession) => n.node_id)
-    expect(frozenNodeIds).toContain("wf::a")
+    expect(frozenNodeIds).not.toContain("wf::a")
     expect(frozenNodeIds).toContain("wf::c")
-    expect(frozenNodeIds).not.toContain("wf::b")
+    expect(removableNodeIds).toContain("wf::a")
+    expect(removableNodeIds).not.toContain("wf::b")
+    expect(removableNodeIds).not.toContain("wf::c")
     expect(mutableNodeIds).toContain("wf::b")
-    expect(frozenIds.has("wf::a")).toBe(true)
+    expect(frozenIds.has("wf::a")).toBe(false)
+    expect(removableIds.has("wf::a")).toBe(true)
+    expect(mutableIds.has("wf::a")).toBe(false)
   })
 })

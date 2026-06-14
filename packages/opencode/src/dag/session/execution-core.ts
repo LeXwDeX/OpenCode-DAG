@@ -231,41 +231,67 @@ export function validateReplanPreconditions(
 }
 
 /**
- * Partitions current nodes into frozen (queued/running/completed/failed/skipped/recoverable) and
- * mutable (pending) sets. Frozen nodes cannot be removed or updated by a replan patch.
+ * Partitions current nodes into three sets:
+ * - frozen: queued/running/completed/failed/skipped (cannot be touched by replan)
+ * - removable: recoverable (WP3 relaxation — can be removed but not updated)
+ * - mutable: pending (can be freely removed or updated)
  *
- * WP2: recoverable nodes are frozen — they are mid-recovery and cannot be
- * silently removed or updated by replan. WP3 may relax this to allow
- * replan to replace recoverable nodes directly.
+ * WP2: recoverable was originally classified as frozen. WP3 relaxes this to
+ * allow parent agents to remove recoverable nodes via replan (remove+add
+ * replacement pattern), while update_nodes targeting recoverable remains
+ * rejected (must use remove+add, not in-place modification).
  */
 export function classifyReplanNodes(currentNodes: DAGNodeSession[]): {
   frozen: DAGNodeSession[]
+  removable: DAGNodeSession[]
   mutable: DAGNodeSession[]
   frozenIds: Set<string>
+  removableIds: Set<string>
+  mutableIds: Set<string>
 } {
-  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped', 'recoverable']
+  const frozenNodeStatuses: DAGNodeStatus[] = ['queued', 'running', 'completed', 'failed', 'skipped']
   const frozenStatusSet = new Set<DAGNodeStatus>(frozenNodeStatuses)
   const frozen = currentNodes.filter((n: DAGNodeSession) => frozenStatusSet.has(n.status))
+  const removable = currentNodes.filter((n: DAGNodeSession) => n.status === 'recoverable')
   const mutable = currentNodes.filter((n: DAGNodeSession) => n.status === 'pending')
-  const frozenIds = new Set(frozen.map((n: DAGNodeSession) => n.node_id))
-  return { frozen, mutable, frozenIds }
+  return {
+    frozen,
+    removable,
+    mutable,
+    frozenIds: new Set(frozen.map((n: DAGNodeSession) => n.node_id)),
+    removableIds: new Set(removable.map((n: DAGNodeSession) => n.node_id)),
+    mutableIds: new Set(mutable.map((n: DAGNodeSession) => n.node_id)),
+  }
 }
 
 /**
  * Rejects patch ops that touch frozen nodes or reference non-existent node IDs.
+ *
+ * WP3: Also rejects update_nodes targeting removable (recoverable) nodes.
+ * Removable nodes can be removed but must not be updated in-place — parent
+ * agents must use remove+add replacement.
+ *
+ * @param removableIds — Optional. Recoverable node IDs that can be removed
+ *   but not updated. Defaults to empty set (backward compatible with WP2 callers).
  */
 export function validateFrozenAndExistence(
   patch: ReplanPatch,
   frozenIds: Set<string>,
   currentNodeIds: Set<string>,
+  removableIds: Set<string> = new Set<string>(),
 ): ReplanValidateResult {
   const touchFrozenRemove = (patch.remove_nodes ?? []).filter(id => frozenIds.has(id))
   if (touchFrozenRemove.length > 0) {
     return { ok: false, reason: `Cannot remove frozen nodes: ${touchFrozenRemove.join(', ')}` }
   }
-  const touchFrozenUpdate = (patch.update_nodes ?? []).filter(u => frozenIds.has(u.node_id))
-  if (touchFrozenUpdate.length > 0) {
-    return { ok: false, reason: `Cannot update frozen nodes: ${touchFrozenUpdate.map(u => u.node_id).join(', ')}` }
+  const touchFrozenOrUpdate = (patch.update_nodes ?? []).filter(
+    u => frozenIds.has(u.node_id) || removableIds.has(u.node_id)
+  )
+  if (touchFrozenOrUpdate.length > 0) {
+    return {
+      ok: false,
+      reason: `Cannot update frozen or removable nodes (must use remove+add replacement): ${touchFrozenOrUpdate.map(u => u.node_id).join(', ')}`,
+    }
   }
   const unknownRemoves = (patch.remove_nodes ?? []).filter(id => !currentNodeIds.has(id))
   if (unknownRemoves.length > 0) {
