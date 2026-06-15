@@ -10,7 +10,7 @@ import type {
   CreateViolationInput,
   UpdateNodeStatusInput,
 } from "./session-service"
-import { DEFAULT_NODE_TIMEOUT_MS, validateFailureHandler, validateInputMapping, validateNodeCondition, validateWorkflowConfigLimits } from "./limits"
+import { DEFAULT_NODE_TIMEOUT_MS, validateFailureHandler, validateInputMapping, validateNodeCondition, validateTimeoutPolicy, validateWorkflowConfigLimits } from "./limits"
 import { buildOutputMap, splitByCondition } from "./condition-eval"
 import { collectInputMapping } from "./input-mapping-collector"
 import { injectCollectedDataToPrompt } from "./prompt-inject"
@@ -43,6 +43,7 @@ import { bootstrapWorkflowFromConfig } from "./core-start"
 import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
 import type { IEventBus } from "../state-machine/IStateMachine"
 import { ProviderID, ModelID } from "@/provider/schema"
+import { Config } from "@/config/config"
 import {
   areDependenciesSatisfied,
   getReadyNodes,
@@ -234,6 +235,11 @@ export function validateReplanPostConfig(
   if (!handlerResult.ok) {
     return { ok: false, reason: handlerResult.reason }
   }
+  // §2.2: 工作流级 timeout_policy 校验
+  const wfTimeoutPolicyResult = validateTimeoutPolicy(workflow.config.timeout_policy)
+  if (!wfTimeoutPolicyResult.ok) {
+    return { ok: false, reason: `workflow: ${wfTimeoutPolicyResult.reason}` }
+  }
   const cfgIdSet = new Set(newConfigNodes.map(n => n.id))
   for (const n of newConfigNodes) {
     for (const dep of n.dependencies) {
@@ -254,6 +260,11 @@ export function validateReplanPostConfig(
     const mapResult = validateInputMapping(n)
     if (!mapResult.ok) {
       return { ok: false, reason: `node '${n.id}': ${mapResult.reason}` }
+    }
+    // §2.2: 节点级 timeout_policy 校验
+    const nodeTimeoutPolicyResult = validateTimeoutPolicy(n.timeout_policy)
+    if (!nodeTimeoutPolicyResult.ok) {
+      return { ok: false, reason: `node '${n.id}': ${nodeTimeoutPolicyResult.reason}` }
     }
   }
   const requiredValidator = new RequiredNodesValidator()
@@ -615,7 +626,12 @@ const make = Effect.gen(function* () {
       // nodeSettledFlag is set to true in Effect.ensuring (ALL exit paths),
       // which also clears the timeout timer so stale firing is prevented.
       // Only active for non-dag nodes (dag nodes use installSubdagLifecycleBridge timeout).
+      //
+      // §2.2 timeout_policy: 当 timeout_policy === 'notify' 时，超时不调用
+      // handleNodeFailure。节点保持 running，仅记录违规 + 向 child session
+      // 注入通知消息，由 agent 自主决定后续走向。
       const nodeTimeoutMs = node.config.timeout_ms
+      const nodeTimeoutPolicy = (node.config.timeout_policy as 'fail' | 'notify' | undefined) ?? 'fail'
 
       if (nodeTimeoutMs) {
         nodeTimeoutId = setTimeout(() => {
@@ -627,13 +643,80 @@ const make = Effect.gen(function* () {
                 Effect.catchCause(() => Effect.succeed(undefined as DAGNodeSession | undefined)),
               )
               if (currentForTimeout && (currentForTimeout.status === "running" || currentForTimeout.status === "pending")) {
-                // Node still active — handleNodeFailure creates the appropriate
-                // violation (execution_failed / required_node_failed) + cascade + finalize.
-                yield* handleNodeFailure(workflowId, node.node_id, new Error(`node exceeded timeout_ms=${nodeTimeoutMs}`))
-                  .pipe(
-                    Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] handleNodeFailure from timeout failed for ${node.node_id}: ${err}`)),
+                if (nodeTimeoutPolicy === 'notify') {
+                  // §2.2 notify 策略：保持 running，不调用 handleNodeFailure。
+                  // 1. 记录 timeout_exceeded 违规（审计）
+                  yield* sessionService.createViolation({
+                    workflowId,
+                    nodeId: node.node_id,
+                    type: "timeout_exceeded",
+                    severity: "warning",
+                    message: `node exceeded timeout_ms=${nodeTimeoutMs} (timeout_policy='notify', node kept running)`,
+                    details: { timeout_ms: nodeTimeoutMs, timeout_policy: 'notify' },
+                  }).pipe(
+                    Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] notify-timeout violation create failed for ${node.node_id}: ${err}`)),
                     Effect.ignore,
                   )
+                  // 2. 向 child session 注入超时通知消息，agent 自主决定后续。
+                  //    metadata.chat_session_id 已在 spawnReadyNode L756-773 持久化。
+                  const childSessionId = (currentForTimeout.metadata as Record<string, unknown> | undefined)?.chat_session_id as string | undefined
+                  const wfForNotify = yield* sessionService.getWorkflow(workflowId).pipe(
+                    Effect.catchCause(() => Effect.succeed(undefined)),
+                  )
+                  if (childSessionId && wfForNotify && _promptOps) {
+                    const timeoutNotice = [
+                      `<dag_node_timeout node_id="${node.node_id}" timeout_ms="${nodeTimeoutMs}">`,
+                      `Node "${node.config.name}" has exceeded its configured timeout of ${nodeTimeoutMs}ms.`,
+                      `The timeout_policy is set to 'notify', so the node remains running and you retain full control.`,
+                      `You MUST eventually settle this node by calling node_complete (the engine marks a node failed if its turn ends without node_complete).`,
+                      `You can now decide:`,
+                      `  - Continue working, then call node_complete with status='completed' when done`,
+                      `  - Call node_complete with status='failed' if you cannot complete`,
+                      `  - Continue working if you estimate you are close to done (the timeout is advisory)`,
+                      `</dag_node_timeout>`,
+                    ].join("\n")
+                    yield* _promptOps.prompt({
+                      sessionID: childSessionId as SessionID,
+                      noReply: true,
+                      agent: node.config.worker_type,
+                      parts: [{
+                        type: "text",
+                        synthetic: true,
+                        text: timeoutNotice,
+                        metadata: {
+                          dag_node_timeout: true,
+                          dag_node_id: node.node_id,
+                          dag_workflow_id: workflowId,
+                          dag_timeout_ms: nodeTimeoutMs,
+                        },
+                      }],
+                    }).pipe(
+                      Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] notify-timeout message injection failed for ${node.node_id}: ${err}`)),
+                      Effect.ignore,
+                    )
+                  }
+                  // 3. 审计日志
+                  if (wfForNotify?.chat_session_id) {
+                    yield* safeAppendLog({
+                      nodeId: node.node_id,
+                      workflowId,
+                      chatSessionId: wfForNotify.chat_session_id,
+                      logLevel: 'warn',
+                      logMessage: `Node timeout (notify policy): ${node.node_id} exceeded timeout_ms=${nodeTimeoutMs}, kept running, agent notified`,
+                      executionPhase: 'timeout_notify',
+                      logData: { timeout_ms: nodeTimeoutMs, timeout_policy: 'notify' },
+                    })
+                  }
+                  // 节点保持 running，不调用 handleNodeFailure。
+                  // agent 的 prompt fiber 仍在运行，收到通知后自主决定。
+                } else {
+                  // 默认 'fail' 策略：当前行为——handleNodeFailure 创建违规 + cascade + finalize。
+                  yield* handleNodeFailure(workflowId, node.node_id, new Error(`node exceeded timeout_ms=${nodeTimeoutMs}`))
+                    .pipe(
+                      Effect.tapError((err: unknown) => Effect.logWarning(`[DAG] handleNodeFailure from timeout failed for ${node.node_id}: ${err}`)),
+                      Effect.ignore,
+                    )
+                }
               } else if (currentForTimeout && (currentForTimeout.status === "failed" || currentForTimeout.status === "skipped")) {
                 // Node already failed/skipped (retry exhaustion handled it). Supplementary
                 // timeout_exceeded audit record only — no status change, no cascade.
@@ -851,14 +934,11 @@ const make = Effect.gen(function* () {
 
       const parts = yield* _promptOps.resolvePromptParts(promptInstruction)
 
-      // Resolve optional model override from worker_config.model ("providerID/modelID")
-      const modelOverride = (() => {
-        const raw = node.config.worker_config?.model
-        if (typeof raw !== "string") return undefined
-        const [provider, model] = raw.split("/")
-        if (!provider || !model) return undefined
-        return { providerID: ProviderID.make(provider), modelID: ModelID.make(model) }
-      })()
+      // Resolve optional model override. Priority (highest first):
+      //   1. worker_config.model_level → looked up in Config.dag.model_levels (§4.2)
+      //   2. worker_config.model ("providerID/modelID")
+      // Both are optional; absent → agent default model.
+      const modelOverride = yield* resolveNodeModel(node.config.worker_config)
 
       // T1+T2: Retry loop with timeout enforcement
       const maxRetries = node.max_retries ?? 0
@@ -885,6 +965,9 @@ const make = Effect.gen(function* () {
         }
         
         const timeoutMs = node.config.timeout_ms ?? DEFAULT_NODE_TIMEOUT_MS
+        // §2.2 timeout_policy: 当为 'notify' 时，prompt 不应用 timeoutOrElse。
+        // 超时由 nodeTimeoutMs 的 setTimeout 处理（仅通知，不 fail prompt）。
+        // agent 的 prompt fiber 持续运行，收到超时通知后自主决定是否结束。
         // #6 prompt_started
         yield* safeAppendLog({
           nodeId: node.node_id,
@@ -893,20 +976,25 @@ const make = Effect.gen(function* () {
           logLevel: 'info',
           logMessage: `Prompt started for node ${node.node_id}, attempt ${attempt + 1}`,
           executionPhase: 'prompt_started',
-          logData: { attempt: attempt + 1, timeout_ms: timeoutMs },
+          logData: { attempt: attempt + 1, timeout_ms: timeoutMs, timeout_policy: nodeTimeoutPolicy },
         })
-        const result = yield* _promptOps.prompt({
+        const promptEffect = _promptOps.prompt({
           sessionID: childSession.id,
           messageID: MessageID.ascending(),
           agent: agent.name,
           ...(modelOverride ? { model: modelOverride } : {}),
           parts,
-        }).pipe(
-          Effect.timeoutOrElse({
-            duration: timeoutMs,
-            orElse: () => Effect.fail(new Error(`node timed out after ${timeoutMs}ms`))
-          }),
-          Effect.result
+        })
+
+        const result = yield* (nodeTimeoutPolicy === 'notify'
+          ? promptEffect.pipe(Effect.result)
+          : promptEffect.pipe(
+              Effect.timeoutOrElse({
+                duration: timeoutMs,
+                orElse: () => Effect.fail(new Error(`node timed out after ${timeoutMs}ms`))
+              }),
+              Effect.result,
+            )
         )
         
         if (Result.isSuccess(result)) {
@@ -2265,4 +2353,53 @@ const make = Effect.gen(function* () {
 export const WorkflowEngine = {
   make,
   get: (workflowId: string) => engineRegistry.get(workflowId),
+}
+
+/**
+ * §4.2 model_level / model 解析（纯运行时辅助）。
+ *
+ * 解析优先级（最高在前）：
+ *   1. worker_config.model_level → 查 Config.dag.model_levels[level] 得到 "provider/model"
+ *   2. worker_config.model ("providerID/modelID")
+ *   3. 都缺省 → undefined（走 agent 默认模型）
+ *
+ * 读 Config.Service 是 best-effort：服务不可用或配置缺失时静默回退。
+ * 返回的 providerID/modelID 对供 promptOps.prompt 使用。
+ */
+function resolveNodeModel(
+  workerConfig: Record<string, unknown> | undefined,
+): Effect.Effect<{ providerID: ProviderID; modelID: ModelID } | undefined, never, never> {
+  return Effect.gen(function* () {
+    // 先尝试 model_level
+    const rawLevel = workerConfig?.model_level
+    if (typeof rawLevel === "string" && rawLevel.length > 0) {
+      const configService = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
+      if (configService) {
+        const cfg = yield* configService.get().pipe(
+          Effect.catchCause(() => Effect.succeed(undefined as Config.Info | undefined)),
+        )
+        const dagModelLevels = (cfg?.dag as { model_levels?: Record<string, string> } | undefined)?.model_levels
+        const resolved = dagModelLevels?.[rawLevel]
+        if (typeof resolved === "string" && resolved.length > 0) {
+          const [provider, model] = resolved.split("/")
+          if (provider && model) {
+            return { providerID: ProviderID.make(provider), modelID: ModelID.make(model) }
+          }
+        }
+        // model_level 声明了但配置中无对应条目：交由 §4.3 bootstrap_check 在启动期拦截；
+        // 运行时静默回退到 worker_config.model（不 fail，保持调度连续性）。
+      }
+    }
+
+    // 回退到 worker_config.model
+    const rawModel = workerConfig?.model
+    if (typeof rawModel === "string") {
+      const [provider, model] = rawModel.split("/")
+      if (provider && model) {
+        return { providerID: ProviderID.make(provider), modelID: ModelID.make(model) }
+      }
+    }
+
+    return undefined
+  })
 }

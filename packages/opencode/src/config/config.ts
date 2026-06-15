@@ -26,6 +26,7 @@ import { NonNegativeInt, PositiveInt, type DeepMutable } from "@opencode-ai/core
 import { ConfigAgent } from "./agent"
 import { ConfigAttachment } from "./attachment"
 import { ConfigCommand } from "./command"
+import { ConfigDAG } from "./dag"
 import { ConfigFormatter } from "./formatter"
 import { ConfigLayout } from "./layout"
 import { ConfigLSP } from "./lsp"
@@ -256,6 +257,10 @@ export const Info = Schema.Struct({
       url: Schema.optional(Schema.String).annotate({ description: "Enterprise URL" }),
     }),
   ),
+  dag: Schema.optional(ConfigDAG.Info).annotate({
+    description:
+      "DAG workflow engine configuration: model tiers (low/medium/high), default timeout policies, and bootstrap check toggle.",
+  }),
   tool_output: Schema.optional(
     Schema.Struct({
       max_lines: Schema.optional(PositiveInt).annotate({

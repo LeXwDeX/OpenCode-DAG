@@ -142,17 +142,28 @@ export type BootstrapWorkflowResult = {
 }
 
 /**
+ * §4.3 可选的初始化检查函数签名。
+ * 由调用方（dagworker.ts tool 路径）注入，保持 core 函数对 Config/Provider 层的解耦。
+ * 返回 `{ ok: true }` 继续启动；返回 `{ ok: false }` 中止启动并返回错误。
+ */
+export type BootstrapCheckFn = (dagConfig: DAGConfig) => Effect.Effect<
+  | { ok: true; warnings: string[] }
+  | { ok: false; errors: string[]; warnings: string[] }
+>
+
+/**
  * Tool.Context-free workflow bootstrap (WP-D1 core, WP-D2 sub-DAG entry).
  *
  * Single source for the full workflow startup sequence:
- *   Step 0 — recursion depth check (WP-D2, §3.3: depth > MAX_SUB_DAG_DEPTH = 3 → fail)
- *   Step 1 — RequiredNodesValidator
- *   Step 2 — validateWorkerTypes (WP-D2: "dag" skipped, subDagConfig validated)
- *   Step 3 — DB createWorkflow row
- *   Step 4 — DB createNode rows
- *   Step 5 — WorkflowEngine.make + setPromptOps
- *   Step 6 — registerEngine + startWorkflow
- *   Step 7 — forkDetach daemon
+ *   Step 0   — recursion depth check (WP-D2, §3.3: depth > MAX_SUB_DAG_DEPTH = 3 → fail)
+ *   Step 0.5 — §4.3 初始化检查（可选，由调用方注入 bootstrapCheckFn）
+ *   Step 1   — RequiredNodesValidator
+ *   Step 2   — validateWorkerTypes (WP-D2: "dag" skipped, subDagConfig validated)
+ *   Step 3   — DB createWorkflow row
+ *   Step 4   — DB createNode rows
+ *   Step 5   — WorkflowEngine.make + setPromptOps
+ *   Step 6   — registerEngine + startWorkflow
+ *   Step 7   — forkDetach daemon
  *
  * @param dagConfig         The DAG workflow configuration.
  * @param chatSessionId     The chat session under which the workflow is scoped.
@@ -165,6 +176,9 @@ export type BootstrapWorkflowResult = {
  * @param parentNodeId      Optional (WP-D2): parent node ID for sub-DAG context.
  * @param depth             Optional (WP-D2, INFO-3): current nesting depth (default 0).
  *                          Root workflow = 0. Sub-DAG at level 1 = 1. Limit = MAX_SUB_DAG_DEPTH (3).
+ * @param bootstrapCheckFn  Optional (§4.3): config availability check function.
+ *                          When provided, runs before Step 1. On failure, aborts bootstrap
+ *                          with a descriptive error (caller can drive QA from the error message).
  */
 export const bootstrapWorkflowFromConfig = (args: {
   dagConfig: DAGConfig
@@ -175,6 +189,7 @@ export const bootstrapWorkflowFromConfig = (args: {
   parentWorkflowId?: string
   parentNodeId?: string
   depth?: number
+  bootstrapCheckFn?: BootstrapCheckFn
 }) =>
   Effect.gen(function* () {
     const {
@@ -186,6 +201,7 @@ export const bootstrapWorkflowFromConfig = (args: {
       parentWorkflowId,
       parentNodeId,
       depth = 0,
+      bootstrapCheckFn,
     } = args
 
     // Step 0: WP-D2 recursion depth check (§3.3: depth > MAX_SUB_DAG_DEPTH → fail).
@@ -196,6 +212,32 @@ export const bootstrapWorkflowFromConfig = (args: {
           `Sub-DAG recursion depth ${depth} exceeds maximum ${MAX_SUB_DAG_DEPTH} (§3.3). Refactor workflow to use fewer nesting levels.`,
         ),
       )
+    }
+
+    // Step 0.5: §4.3 初始化检查（可选）。
+    // 由调用方注入 bootstrapCheckFn（通常从 opencode.json dag.bootstrap_check 读取配置 + provider 列表）。
+    // 保持 core 函数对 Config/Provider 层的解耦（架构约束：DAG session 层不直接依赖 opencode 配置层）。
+    if (bootstrapCheckFn) {
+      const checkResult = yield* bootstrapCheckFn(dagConfig).pipe(
+        Effect.catchCause((cause) =>
+          Effect.succeed({
+            ok: false as const,
+            errors: [`bootstrap check threw: ${String(cause)}`],
+            warnings: [],
+          }),
+        ),
+      )
+      if (!checkResult.ok) {
+        const errorsText = checkResult.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")
+        return yield* Effect.fail(
+          new Error(`DAG bootstrap check failed (§4.3):\n${errorsText}\n\nPlease check dag config in opencode.json or select models interactively.`),
+        )
+      }
+      // 非阻断性 warnings 记录到日志
+      if (checkResult.warnings.length > 0) {
+        const warningsText = checkResult.warnings.map((w, i) => `⚠️ ${w}`).join("\n")
+        log.warn(`DAG bootstrap check warnings:\n${warningsText}`)
+      }
     }
 
     // Step 1: RequiredNodesValidator (+ log.warn for warnings, INFO-5 compliant).
@@ -243,7 +285,7 @@ export const bootstrapWorkflowFromConfig = (args: {
     // Step 5: Build engine + inject promptOps.
     const workflowEngine = yield* WorkflowEngine.make
     workflowEngine.setPromptOps(promptOps)
-    const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, dagConfig)
+    const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, dagConfig, undefined, dagSessionService, promptOps)
 
     // Step 6: Register engine in module-level registry + startWorkflow (status→running + scheduleReadyNodes).
     // All state changes go through the engine's state-machine API (architecture constraint 5).

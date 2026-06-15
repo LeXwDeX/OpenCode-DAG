@@ -241,6 +241,19 @@ export interface DAGNodeConfig {
    */
   input_mapping?: DAGInputMapping;
   /**
+   * 节点超时策略（§2.2 超时状态管理）。
+   *
+   * - `'fail'`（缺省）= 当前行为：超时触发后调用 handleNodeFailure，节点 running→failed + cascade。
+   * - `'notify'` = 超时后**不改变节点状态**（保持 running），仅：
+   *     1. 记录 `timeout_exceeded` 违规（severity=warning，审计用）
+   *     2. 向节点的 child session 注入一条 `<dag_node_timeout>` 通知消息
+   *     3. Agent 收到通知后自主决定：继续工作、调用 node_complete 完成/失败、或忽略超时。
+   *   节点的 prompt fiber 不被超时中断——agent 保持对节点的完全控制权。
+   *
+   * 缺省 = `'fail'`（向后兼容，旧 DAG 零变化）。
+   */
+  timeout_policy?: 'fail' | 'notify';
+  /**
    * 节点失败策略（WP2 recoverable 状态机）。
    *
    * - `'fail'`（缺省）= 当前行为，节点执行失败立即 running → failed + cascade skip 下游。
@@ -295,6 +308,19 @@ export interface DAGConfig {
   max_concurrency: number;
   /** 工作流级别的超时（毫秒） */
   timeout_ms?: number;
+  /**
+   * 工作流级别超时策略（§2.2 超时状态管理）。
+   *
+   * - `'fail'`（缺省）= 当前行为：超时后调用 cancelWorkflow，工作流 running→cancelled。
+   * - `'notify'` = 超时后**不 cancel**（保持 running），仅：
+   *     1. 记录 `timeout_exceeded` 违规（severity=warning）
+   *     2. 向 parent chat session 注入 `<dag_workflow_timeout>` 通知消息
+   *     3. Agent 收到通知后自主决定：pause、cancel、replan、或继续等待。
+   *   工作流的所有 running 节点不受影响，继续各自执行。
+   *
+   * 缺省 = `'fail'`（向后兼容，旧 DAG 零变化）。
+   */
+  timeout_policy?: 'fail' | 'notify';
   /**
    * Failure handler configuration (WP-E1).
    *

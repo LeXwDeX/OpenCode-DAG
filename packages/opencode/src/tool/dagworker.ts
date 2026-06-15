@@ -16,11 +16,13 @@
 
 import * as Tool from "./tool"
 import DESCRIPTION from "./dagworker.txt"
-import { Schema, Effect } from "effect"
+import { Schema, Effect, Option } from "effect"
 import { Session } from "@/session/session"
 import { Agent } from "@/agent/agent"
 import { SettingsHook } from "@/hook/settings"
 import { EffectBridge } from "@/effect/bridge"
+import { Config } from "@/config/config"
+import { Provider } from "@/provider/provider"
 import { WorkflowEngine, getReadyNodes } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import { DAGSessionService } from "../dag/session/session-service"
@@ -29,7 +31,9 @@ import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, Repla
 import {
   bootstrapWorkflowFromConfig,
   type WorkerTypeAgentRegistry,
+  type BootstrapCheckFn,
 } from "../dag/session/core-start"
+import { runBootstrapCheck, buildBootstrapCheckQAPrompt } from "../dag/session/dag-config-check"
 // Re-export for backward compatibility: existing consumers (dagworker.test.ts
 // and any future code) continue to import these from "./dagworker".
 export { validateWorkerTypes, type WorkerTypeAgentRegistry } from "../dag/session/core-start"
@@ -169,6 +173,10 @@ function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, 
  * **promptOps extraction** is adapter-only logic here (not in core) because
  * `ctx.extra?.promptOps` is the turn-binding point the core function abstracts
  * over. If absent, fails with the same error as before (backward compat).
+ *
+ * §4.3 初始化检查：当 opencode.json `dag.bootstrap_check === true` 时，
+ * 从 Config + Provider 服务构建 BootstrapCheckFn 注入 core 函数。
+ * 检查失败时 core 函数 fail，返回的错误消息包含可用模型分级供 agent 驱动 QA。
  */
 export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromConfig")(function* (args: {
   workflowConfig: DAGConfig
@@ -185,14 +193,70 @@ export const startWorkflowFromConfig = Effect.fn("dagworker.startWorkflowFromCon
     )
   }
 
+  // §4.3 构建初始化检查函数（best-effort，Config/Provider 服务不可用时返回 undefined）。
+  const effectiveBootstrapCheckFn = yield* buildBootstrapCheckFn()
+
   return yield* bootstrapWorkflowFromConfig({
     dagConfig: workflowConfig,
     chatSessionId: ctx.sessionID,
     promptOps,
     dagSessionService,
     agentService,
+    bootstrapCheckFn: effectiveBootstrapCheckFn,
   })
 })
+
+/**
+ * 构建 §4.3 初始化检查函数。
+ * 当 Config/Provider 服务不可用时返回 undefined（跳过检查，向后兼容）。
+ */
+function buildBootstrapCheckFn(): Effect.Effect<BootstrapCheckFn | undefined, never> {
+  return Effect.gen(function* () {
+    // 检查 Config 服务是否可用（serviceOption 不 fail，返回 Option）
+    const configService = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
+    if (!configService) return undefined
+
+    // 读取当前配置
+    const opencodeConfig = yield* configService.get().pipe(
+      Effect.catchCause(() => Effect.succeed(undefined as Config.Info | undefined)),
+    )
+
+    // 如果 dag.bootstrap_check 未启用，不注入检查函数（向后兼容）
+    if (!opencodeConfig?.dag?.bootstrap_check) return undefined
+
+    // 获取已注册的 provider 列表（best-effort）
+    const providerService = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
+    let registeredProviders: string[] = []
+    if (providerService) {
+      const providerMap = yield* providerService.list().pipe(
+        Effect.catchCause(() => Effect.succeed({} as Record<string, unknown>)),
+      )
+      registeredProviders = Object.keys(providerMap)
+    }
+
+    // 返回检查函数（闭包捕获 config 和 providers）
+    return ((dagConfig: DAGConfig) =>
+      Effect.gen(function* () {
+        const result = yield* runBootstrapCheck({
+          dagConfig,
+          opencodeConfig,
+          registeredProviders,
+        })
+        if (result.ok) {
+          return { ok: true as const, warnings: result.warnings }
+        }
+        // 构建包含可用模型分级的 QA 提示（agent 可据此枚举模型供用户选择）
+        const qaPrompt = buildBootstrapCheckQAPrompt(result)
+        return {
+          ok: false as const,
+          errors: [qaPrompt],
+          warnings: result.warnings,
+        }
+      })) satisfies BootstrapCheckFn
+  }).pipe(
+    Effect.catchCause(() => Effect.succeed(undefined)),
+  )
+}
 
 export const DAGWorkerTool = Tool.define(
   id,

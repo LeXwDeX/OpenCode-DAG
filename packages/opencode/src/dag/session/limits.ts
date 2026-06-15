@@ -243,6 +243,32 @@ export function validateInputMapping(
 }
 
 /**
+ * §2.2 timeout_policy schema 校验（节点级 + 工作流级）。
+ *
+ * 校验内容：
+ * 1. 缺省向后兼容：timeout_policy 为 undefined / null / 未提供 → OK（默认 'fail'）。
+ * 2. 值必须是 'fail' 或 'notify'（白名单）。
+ *
+ * 调用方：
+ * - `createWorkflow`（session-service.ts）— 对工作流级和每个节点级配置
+ * - `validateReplanPostConfig`（workflow-engine.ts）
+ *
+ * Reason strings 稳定共享。
+ */
+export function validateTimeoutPolicy(
+  policy: unknown,
+): { ok: true } | { ok: false; reason: string } {
+  if (policy === undefined || policy === null) return { ok: true }
+  if (policy !== 'fail' && policy !== 'notify') {
+    return {
+      ok: false,
+      reason: `timeout_policy must be 'fail' or 'notify', got ${typeof policy === 'string' ? `'${policy}'` : typeof policy}`,
+    }
+  }
+  return { ok: true }
+}
+
+/**
  * WP-E1: Failure handler schema validation (no runtime evaluation).
  *
  * Validates:

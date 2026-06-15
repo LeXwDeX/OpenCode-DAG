@@ -13,6 +13,20 @@ import type { PromptOps } from "@/session/prompt-ops"
 export type RecoverResult = { scanned: number; marked: number; resumed: number }
 
 /**
+ * BUGFIX (running→pending 误判): 活性检查替代进程级单次执行锁。
+ *
+ * 早期修复尝试用一个进程级布尔锁（`recoveryScanCompleted`）让首次扫描后
+ * 所有后续调用返回缓存结果。但全局锁有两个致命缺陷：
+ *   1. 破坏测试隔离（同模块内多个 test 共享锁，首个 test 后其余全部拿到缓存）；
+ *   2. 生产中进程长期运行后若新工作流崩溃，无法再被恢复（锁已闭合）。
+ *
+ * 正确的修复是 per-workflow 活性检查：recovery 函数本身已具备幂等性
+ * （`WorkflowEngine.get(wf.id) !== undefined` 入口 guard + 节点 chat_session_id
+ * 活性检查），足以区分"layer 重建竞态"与"真正崩溃"。全局锁是多余的，
+ * 已移除。layer 重建导致的重复调用由活性检查自然吸收。
+ */
+
+/**
  * Pure recovery function: scan all workflows, find orphaned ones (status='running'
  * but no engine in memory), and either resume them (when promptOps is provided,
  * WP-A2) or mark them failed with audit violations (legacy fallback).
@@ -42,6 +56,9 @@ export function recoverOrphanedWorkflows(
   promptOps?: PromptOps,
 ): Effect.Effect<RecoverResult> {
   return Effect.gen(function* () {
+    // BUGFIX: 全局单次执行锁已移除（见上方设计注释）。
+    // 幂等性由 per-workflow 活性检查 + engine-registry guard 承载。
+
     const workflows = yield* service.listAllWorkflows()
     const orphans = workflows.filter(w =>
       w.status === 'running' && WorkflowEngine.get(w.id) === undefined
@@ -54,6 +71,30 @@ export function recoverOrphanedWorkflows(
       // skip the entire rebuild + daemon fork (idempotency). This guard lives here
       // (not inside registerEngine) per architecture constraint.
       if (WorkflowEngine.get(wf.id) !== undefined) continue
+
+      // BUGFIX (running→pending 误判): 活性检查。
+      // 在判定为孤儿前，检查工作流是否有正在运行的节点。
+      // 如果节点有 metadata.chat_session_id，说明该节点可能已 spawn 了 child session。
+      // 这种情况下，engine 不在 registry 但 child session 可能仍在工作——
+      // 不应重置这些节点。只有当节点无活跃 child session 时才视为真正的孤儿。
+      const nodes = yield* service.listNodes(wf.id).pipe(
+        Effect.catchCause(() => Effect.succeed([] as DAGNodeSession[])),
+      )
+      const runningNodes = nodes.filter(n => n.status === 'running')
+      const nodesWithChildSession = runningNodes.filter(
+        n => (n.metadata as Record<string, unknown> | undefined)?.chat_session_id,
+      )
+
+      // 如果有 running 节点携带了 chat_session_id，说明它们曾经成功 spawn 过 child session。
+      // engine 缺失可能是 layer 重建竞态，而非真正的进程崩溃。
+      // 保守策略：跳过这些工作流，让它们自然完成（executor daemon 或 prompt 自然结束）。
+      // 只有当没有任何 running 节点有 child session 时，才判定为真正的孤儿。
+      if (runningNodes.length > 0 && nodesWithChildSession.length > 0) {
+        yield* Effect.logWarning(
+          `[DAG recovery] Skipping workflow ${wf.id}: ${nodesWithChildSession.length} running node(s) have active child sessions — likely layer-rebuild race, not a crash. Nodes preserved.`,
+        )
+        continue
+      }
 
       if (promptOps) {
         // WP-A2 resume assembly attempt
@@ -72,7 +113,8 @@ export function recoverOrphanedWorkflows(
       }
     }
 
-    return { scanned: workflows.length, marked, resumed }
+    const result: RecoverResult = { scanned: workflows.length, marked, resumed }
+    return result
   })
 }
 
@@ -179,7 +221,7 @@ function resumeOrphanWorkflow(
     yield* engine.scheduleReadyNodes(wf.id)
 
     // 6. Fork detached daemon for ongoing polling (ensuring cleanup on exit)
-    const executor = createWorkflowExecutor(engine, wf.config)
+    const executor = createWorkflowExecutor(engine, wf.config, undefined, service, promptOps)
     yield* executor.start(wf.id).pipe(Effect.forkDetach)
 
     return true
@@ -198,6 +240,11 @@ function resumeOrphanWorkflow(
  * Called between registerEngine (step 4) and scheduleReadyNodes (step 5)
  * so the scheduler picks them up for re-spawn.
  *
+ * BUGFIX (running→pending 误判): 只有当 running 节点**没有** child session
+ * （metadata.chat_session_id）时才重置。携带 child session 的节点说明它们曾经
+ * 成功 spawn 过 agent——重置会遗弃正在工作的 child session 并 spawn 重复 session。
+ * 这些节点保留 running 状态，等待其自然收敛（child session 完成后 node_complete 会被调用）。
+ *
  * Per INFO 5: appends a recovery_reset log entry per reset node.
  * Original running logs are preserved (audit integrity).
  */
@@ -209,6 +256,23 @@ function resetRunningNodes(
     const nodes = yield* service.listNodes(wf.id)
     for (const node of nodes) {
       if (node.status !== 'running') continue
+
+      // BUGFIX: 跳过携带活跃 child session 的节点——它们不是真正的孤儿。
+      const hasChildSession = (node.metadata as Record<string, unknown> | undefined)?.chat_session_id
+      if (hasChildSession) {
+        yield* service.appendNodeLog({
+          nodeId: node.node_id,
+          workflowId: wf.id,
+          chatSessionId: wf.chat_session_id,
+          logLevel: 'info',
+          logMessage: `Recovery preserved: running node has active child session, not reset to pending (avoiding duplicate spawn).`,
+          executionPhase: 'recovery_preserved',
+        }).pipe(
+          Effect.tapError(err => Effect.logWarning(`[DAG recovery] failed to append recovery_preserved log for ${node.node_id}: ${err}`)),
+          Effect.ignore,
+        )
+        continue
+      }
 
       yield* service.updateNodeStatus({
         sessionId: node.node_id,
