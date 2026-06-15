@@ -57,7 +57,7 @@ export const DICT = {
     node_subsession_unavailable: "[Sub-session not available]",
     node_enter_subsession: "[Enter Sub-Session ->]",
     action_close: "[Close]",
-    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
+    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle View  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
     label_focus: "Focus:",
     focus_history: "History",
     focus_graph: "Graph",

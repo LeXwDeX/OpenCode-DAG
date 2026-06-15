@@ -117,7 +117,7 @@ describe("WP4 i18n — t() dict lookup", () => {
     node_enter_subsession: ["[Enter Sub-Session ->]", "[进入子会话 ->]"],
     action_close: ["[Close]", "[关闭]"],
     hint_hotkey_bar: [
-      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle  [Leader+p] Pause  [[/]] Sidebar  [Esc] Back",
+      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle View  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
       "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     ],
     label_focus: ["Focus:", "焦点："],

@@ -330,6 +330,24 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     filterWorkflows(workflowList(), statusFilter(), search()),
   )
 
+  // TUI-3: 进入 DAG 页面时默认聚焦最新 RUNNING 任务。
+  // - 有多个 running → 选 created_at 最大的（最新启动的）
+  // - 无 running → 选最新的任意状态
+  // - 已有选中（路由参数或用户手动选）→ 不覆盖
+  createEffect(() => {
+    const list = workflowList()
+    if (list.length === 0) return
+    if (currentWorkflowID()) return // 已有选中，不覆盖
+    const pickLatest = (arr: typeof list) =>
+      arr.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0))[0]
+    const running = list.filter((w) => w.status === "running")
+    const target = running.length > 0 ? pickLatest(running) : pickLatest(list)
+    if (target) {
+      setCurrentWorkflowID(target.id)
+      setSelectedNodeID(null)
+    }
+  })
+
   const selectedNode = createMemo<DAGNodeSession | null>(() => {
     const id = selectedNodeID()
     if (!id) return null
@@ -666,10 +684,21 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       if (!selectedNodeID()) moveNodeSelection(1)
       return
     }
-    // graph focus → enter the node's sub-session if available
+    // graph focus → enter the node's sub-session if available.
+    // TUI-2: 传 returnRoute 指回当前 DAG route，让子 session 的返回逻辑能回到 DAG
+    // 而非总回 chat session。携带 sessionID + workflowId 保持 DAG 上下文完整。
     const sid = selectedNode()?.metadata?.chat_session_id
     if (typeof sid === "string") {
-      props.api.route.navigate("session", { sessionID: sid })
+      props.api.route.navigate("session", {
+        sessionID: sid,
+        returnRoute: {
+          name: ROUTE,
+          params: {
+            sessionID: sessionID(),
+            workflowId: currentWorkflowID(),
+          },
+        },
+      })
     }
   }
 
@@ -709,31 +738,27 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
   })
 
   function goToSessionTab() {
-    // Priority (BUG-2 fix): always prefer top-level sessionID in DAG route
-    // params. It's populated on every entry into the route and survives
-    // returnRoute lossy/missing serialization. ESC + "Chat" click share this
-    // function so both return paths behave identically.
+    // 上下文感知返回（TUI-2）：优先回到进入 DAG 前的路由（returnRoute/n）。
+    // - 若 returnRoute 存在（如从 session tab 进 DAG），回到那个路由
+    // - 若无 returnRoute 但有顶层 sessionID，回 session tab
+    // - 否则回 home
+    // 这让"从 DAG 进子 session 再 Escape"能回到 DAG（而非总回 session chat）。
     const params = routeParams()
-    const fallbackSessionID = params?.sessionID
     const returnRoute = params?.returnRoute as
       | { name: string; params?: Record<string, unknown> }
       | undefined
-    const returnSessionID =
-      returnRoute?.name === "session"
-        ? (returnRoute.params?.["sessionID"] as string | undefined)
-        : undefined
-    const sid = (typeof fallbackSessionID === "string" ? fallbackSessionID : undefined)
-      ?? (typeof returnSessionID === "string" ? returnSessionID : undefined)
-
-    if (sid) {
-      props.api.route.navigate("session", { sessionID: sid })
-      return
-    }
-    // Non-session return route (e.g. home) — honour it if present.
+    // 1. returnRoute 优先（用户明确从某处来，回某处）
     if (returnRoute?.name) {
       props.api.route.navigate(returnRoute.name, returnRoute.params)
       return
     }
+    // 2. sessionID fallback（DAG 默认挂在某个 session 下）
+    const fallbackSessionID = params?.sessionID
+    if (typeof fallbackSessionID === "string" && fallbackSessionID) {
+      props.api.route.navigate("session", { sessionID: fallbackSessionID })
+      return
+    }
+    // 3. 兜底
     props.api.route.navigate("home")
   }
 

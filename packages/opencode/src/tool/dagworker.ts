@@ -130,30 +130,90 @@ function formatOutput(text: string): string {
   ].join("\n")
 }
 
-function formatWorkflowStatus(workflowId: string, workflow: DAGWorkflowSession, status: WorkflowStatusSnapshot): string {
+/**
+ * 将毫秒时长格式化为人类直读字符串（整数秒精度，供 agent 直接使用，无需自己做 epoch 数学）。
+ *
+ * - < 1s   → "0s"
+ * - < 1min → "12s"
+ * - >=1min → "3m 12s" / "1h 5m 12s"
+ *
+ * 这是超时误判 bug 的根治点：agent（LLM）对裸 epoch 毫秒数（如 1781533800017）
+ * 做减法极易出错，产生幻觉式耗时判断。harness 直接输出精确到秒的已过时长，
+ * agent 只需读字符串即可正确感知时间。
+ */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms)) return "unknown"
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 1) return "0s"
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
+
+/**
+ * 格式化 workflow status 输出（agent 可读文本）。
+ *
+ * 时间呈现铁律（超时误判 bug 根治）：所有耗时字段都由 harness 预计算为
+ * 精确到秒的人类可读字符串（formatDuration），agent 无需对裸 epoch ms
+ * 做任何数学运算。workflow 级输出 created(ISO) + elapsed；
+ * per-node 摘要输出每个节点的 status + elapsed + since_update，
+ * 让 agent 一眼看清"哪个节点跑了多久""哪个节点多久没动"。
+ */
+function formatWorkflowStatus(
+  workflowId: string,
+  workflow: DAGWorkflowSession,
+  status: WorkflowStatusSnapshot,
+  nodes: DAGNodeSession[],
+): string {
+  const now = Date.now()
+  const wfElapsedMs = workflow.end_time != null
+    ? workflow.end_time - workflow.start_time
+    : now - workflow.start_time
   const lines = [
     `Workflow ${workflowId}:`,
     `  Name: ${workflow.config.name}`,
     `  Status: ${status.status}`,
-    `  Total Nodes: ${status.totalNodes}`,
-    `  Completed: ${status.completedNodes}`,
-    `  Failed: ${status.failedNodes}`,
-    `  Running: ${status.runningNodes}`,
-    `  Ready: ${status.readyNodes}`,
+    `  Created: ${new Date(workflow.created_at).toISOString()}`,
+    `  Elapsed: ${formatDuration(wfElapsedMs)}${workflow.duration_ms != null ? ` (final, duration=${formatDuration(workflow.duration_ms)})` : ""}`,
+    `  Nodes: ${status.totalNodes} total | ${status.completedNodes} completed | ${status.failedNodes} failed | ${status.runningNodes} running | ${status.readyNodes} ready`,
     `  Violations: ${status.violations_count}`,
   ]
-  
+
   if (status.violations.length > 0) {
     lines.push("  Violation Details:")
     status.violations.forEach((v, i) => {
       lines.push(`    ${i + 1}. [${v.severity}] ${v.type}: ${v.message}`)
     })
   }
-  
-  if (workflow.duration_ms !== null) {
-    lines.push(`  Duration: ${workflow.duration_ms}ms`)
+
+  // Per-node 摘要：每个节点一行，含 status + 已运行时长 + 距上次更新时长。
+  // 这是 agent 判断"是否卡住/超时"的直接依据——无需自己算 epoch 差值。
+  if (nodes.length > 0) {
+    lines.push("", "  Nodes:")
+    for (const node of nodes) {
+      const nodeElapsedMs = node.start_time != null
+        ? (node.end_time ?? node.completed_at ?? now) - node.start_time
+        : null
+      const sinceUpdateMs = now - node.updated_at
+      const cfgId = node.node_id.includes("::") ? node.node_id.split("::")[1] : node.node_id
+      const parts = [`    - ${cfgId} [${node.status}]`]
+      if (nodeElapsedMs != null) {
+        parts.push(`elapsed=${formatDuration(nodeElapsedMs)}`)
+      }
+      // running 节点额外给 since_update（"多久没动"），是判断卡死的关键信号
+      if (node.status === "running" || node.status === "queued") {
+        parts.push(`since_update=${formatDuration(sinceUpdateMs)}`)
+      }
+      if (node.retry_count > 0) {
+        parts.push(`retries=${node.retry_count}/${node.max_retries}`)
+      }
+      lines.push(parts.join(" "))
+    }
   }
-  
+
   return lines.join("\n")
 }
 
@@ -375,7 +435,7 @@ export const DAGWorkerTool = Tool.define(
             violations_count: violations.length,
             timestamp: Date.now(),
           }
-          const statusText = formatWorkflowStatus(workflowId, workflow, status)
+          const statusText = formatWorkflowStatus(workflowId, workflow, status, allNodes)
           
           return {
             title: `Workflow Status: ${workflowId}`,
@@ -698,6 +758,14 @@ export const DAGWorkerTool = Tool.define(
           if (!node) {
             return yield* Effect.fail(new Error(`Node not found: ${params.node_id}`))
           }
+          // 时间字段：同时提供 ISO 字符串（人类可读）+ 预计算差值（ms），
+          // 避免 agent 对裸 epoch ms 做数学运算导致耗时幻觉（超时误判 bug 根因）。
+          const now = Date.now()
+          const elapsedMs = node.start_time != null
+            ? (node.end_time ?? node.completed_at ?? now) - node.start_time
+            : null
+          const ageMs = now - node.created_at
+          const sinceUpdateMs = now - node.updated_at
           return {
             title: `Node: ${node.node_id}`,
             output: JSON.stringify({
@@ -709,11 +777,19 @@ export const DAGWorkerTool = Tool.define(
               timeout_ms: node.timeout_ms,
               duration_ms: node.duration_ms,
               error_info: node.error_info ?? null,
-              start_time: node.start_time,
-              end_time: node.end_time,
-              completed_at: node.completed_at,
-              created_at: node.created_at,
-              updated_at: node.updated_at,
+              // 人类可读时间（ISO）
+              start_time: node.start_time != null ? new Date(node.start_time).toISOString() : null,
+              end_time: node.end_time != null ? new Date(node.end_time).toISOString() : null,
+              completed_at: node.completed_at != null ? new Date(node.completed_at).toISOString() : null,
+              created_at: new Date(node.created_at).toISOString(),
+              updated_at: new Date(node.updated_at).toISOString(),
+              // 预计算差值（agent 无需做 epoch 数学）
+              elapsed_ms: elapsedMs,
+              elapsed_human: elapsedMs != null ? formatDuration(elapsedMs) : null,
+              age_ms: ageMs,
+              age_human: formatDuration(ageMs),
+              since_update_ms: sinceUpdateMs,
+              since_update_human: formatDuration(sinceUpdateMs),
             }, null, 2),
             metadata: {
               nodeId: node.node_id,
