@@ -15,7 +15,7 @@ import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { GLYPH } from "./glyphs"
 import type { Lang } from "./i18n"
-import { t, nodeStatusLabel } from "./i18n"
+import { t, nodeStatusLabel, formatNodeError } from "./i18n"
 
 /**
  * NodeDialog — renders node detail with optional "Enter Sub-Session" action.
@@ -100,9 +100,14 @@ export function NodeDialog(props: {
             </text>
           </Show>
           <Show when={node().error_info}>
-            <text fg={theme.error}>
-              {t(props.lang, "label_error")}: {node().error_info!.type}: {node().error_info!.message}
-            </text>
+            <box gap={0}>
+              <text fg={theme.error}>
+                {t(props.lang, "label_error")}
+              </text>
+              <text fg={theme.error} wrapMode="word">
+                {formatNodeError(props.lang, node().error_info)}
+              </text>
+            </box>
           </Show>
 
           {/* Enter Sub-Session button */}
@@ -138,7 +143,17 @@ export function formatNodeTime(value: number | string | null | undefined): strin
 }
 
 export function formatNodeDuration(value: number | null | undefined): string {
-  return value === null || value === undefined ? "-" : `${value}ms`
+  // 人类可读时长（整数秒精度），而非裸 "1800000ms"。
+  // TUI 是给人看的，ms 数字不可读；与 dagworker 的 formatDuration 一致。
+  if (value === null || value === undefined) return "-"
+  const totalSec = Math.round(value / 1000)
+  if (totalSec < 1) return `${value}ms`
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
 }
 
 export function truncateNodeText(value: unknown): string {

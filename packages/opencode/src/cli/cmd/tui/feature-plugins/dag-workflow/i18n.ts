@@ -306,6 +306,100 @@ export function nodeStatusLabel(lang: Lang, s: NodeStatus): string {
   return lang === "zh" ? NODE_STATUS_ZH[s] : s
 }
 
+/**
+ * 将节点 error_info 渲染为用户可读的错误说明（TUI-ERR 友好化）。
+ *
+ * error_info 在 DB 里实际是字符串（引擎存的是 error.message），
+ * 形如 "node exceeded timeout_ms=1800000"。直接显示英文技术消息对中文用户
+ * 不可读（用户反馈"点进去就是一串英文"）。本函数：
+ * 1. 防御性处理：兼容 string / DAGNodeError 对象 / null
+ * 2. 按已知模式匹配，给出中英文友好描述 + 提取关键参数（如超时毫秒→分钟）
+ * 3. 未知错误回退到原始消息（不丢失信息）
+ *
+ * 返回单行字符串，供 NodeDialog 直接渲染。
+ */
+export function formatNodeError(lang: Lang, errorInfo: unknown): string {
+  // 提取原始消息文本
+  let raw = ""
+  if (typeof errorInfo === "string") {
+    raw = errorInfo
+  } else if (errorInfo && typeof errorInfo === "object") {
+    const obj = errorInfo as { message?: string; type?: string; details?: unknown }
+    raw = obj.message ?? obj.type ?? JSON.stringify(obj)
+  }
+  if (!raw) return ""
+
+  // 已知错误模式的友好映射
+  // 超时：node exceeded timeout_ms=NNNN
+  const timeoutMatch = raw.match(/node exceeded timeout_ms[=\s]*(\d+)/i)
+  if (timeoutMatch) {
+    const ms = Number(timeoutMatch[1])
+    const dur = ms > 0 ? formatMsHuman(ms) : `${ms}ms`
+    return lang === "zh"
+      ? `节点超时（配置阈值 ${dur}）。可在节点配置中调大 timeout_ms，或设置 timeout_policy='notify' 让超时仅通知而不失败。`
+      : `Node timeout (threshold ${dur}). Increase timeout_ms in node config, or set timeout_policy='notify' to make timeout advisory.`
+  }
+
+  // timed out（prompt 超时）
+  if (/timed out/i.test(raw)) {
+    const tm = raw.match(/(\d+)\s*ms/)
+    const dur = tm ? formatMsHuman(Number(tm[1])) : ""
+    return lang === "zh"
+      ? `执行超时${dur ? `（${dur}）` : ""}。agent 未在时限内完成，可重试或调整任务复杂度。`
+      : `Execution timed out${dur ? ` (${dur})` : ""}. Retry or reduce task complexity.`
+  }
+
+  // 未知 worker_type
+  const workerMatch = raw.match(/unknown worker_type:\s*(\S+)/i)
+  if (workerMatch) {
+    const wt = workerMatch[1]
+    return lang === "zh"
+      ? `未知的 worker_type "${wt}"。请在 opencode.json 的 agent.* 中注册该 agent，或修改节点的 worker_type。`
+      : `Unknown worker_type "${wt}". Register it in opencode.json agent.* or change node's worker_type.`
+  }
+
+  // worktree 创建失败
+  if (/worktree creation failed/i.test(raw)) {
+    return lang === "zh"
+      ? `工作树创建失败。可能是磁盘空间不足或 git 分支冲突，检查 git 状态后重试。`
+      : `Worktree creation failed. Check disk space / git branch conflicts.`
+  }
+
+  // 孤儿进程
+  if (/orphaned by process restart|orphan/i.test(raw)) {
+    return lang === "zh"
+      ? `进程重启导致节点成为孤儿（未正常完成）。可重新运行或从子会话恢复。`
+      : `Node orphaned by process restart. Re-run or resume from sub-session.`
+  }
+
+  // subdag 配置
+  if (/subDagConfig|worker_type.*dag/i.test(raw)) {
+    return lang === "zh"
+      ? `子 DAG 配置错误：worker_type="dag" 需要有效的 worker_config.subDagConfig。`
+      : `Sub-DAG config error: worker_type="dag" requires valid worker_config.subDagConfig.`
+  }
+
+  // 未知错误：保留原始英文（不丢失诊断信息），加前缀说明
+  return lang === "zh"
+    ? `节点执行失败：${raw}`
+    : raw
+}
+
+/**
+ * 毫秒 → 人类可读时长（整数秒精度）。
+ * 供 formatNodeError 把 timeout_ms 渲染为 "30m 0s" 而非 "1800000ms"。
+ */
+function formatMsHuman(ms: number): string {
+  const totalSec = Math.round(ms / 1000)
+  if (totalSec < 1) return `${ms}ms`
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${m}m ${s}s`
+  if (m > 0) return `${m}m ${s}s`
+  return `${s}s`
+}
+
 export function resolveLang(api: TuiPluginApi): Lang {
   const v = (api.tuiConfig as { lang?: unknown }).lang
   return v === "zh" ? "zh" : "en"

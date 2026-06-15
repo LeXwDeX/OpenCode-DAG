@@ -859,7 +859,16 @@ export function useWorkflowList(props: {
     initial: [],
     fetch: async () => {
       const sid = props.session_id()
-      const res = await props.client.dag.listWorkflows(sid ? { chatSessionId: sid } : {})
+      // 先按 sessionID 过滤。若结果为空（可能 sessionID 是 DAG 节点的子 session，
+      // workflow 挂在顶层 session 而非子 session），fallback 到全部 workflow。
+      // 这修复了"从子 session 返回 DAG 时节点树空白"的 bug（sessionID 上下文错配）。
+      if (sid) {
+        const filtered = await props.client.dag.listWorkflows({ chatSessionId: sid })
+        const filteredData = Array.isArray(filtered.data) ? filtered.data.map((w) => mapWorkflow(w)) : []
+        if (filteredData.length > 0) return filteredData
+        // sessionID 过滤为空 → fallback 全部（避免空白列表）
+      }
+      const res = await props.client.dag.listWorkflows({})
       const data = res.data
       if (Array.isArray(data)) return data.map((w) => mapWorkflow(w))
       return []
