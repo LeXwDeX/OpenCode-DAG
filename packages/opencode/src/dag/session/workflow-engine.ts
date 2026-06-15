@@ -40,6 +40,7 @@ import { WorktreeManagerTag } from "../worktree-manager/tags"
 import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
 import { bootstrapWorkflowFromConfig } from "./core-start"
+import { readDagDefaultsFromService } from "./dag-config-check"
 import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
 import type { IEventBus } from "../state-machine/IStateMachine"
 import { ProviderID, ModelID } from "@/provider/schema"
@@ -630,8 +631,14 @@ const make = Effect.gen(function* () {
       // §2.2 timeout_policy: 当 timeout_policy === 'notify' 时，超时不调用
       // handleNodeFailure。节点保持 running，仅记录违规 + 向 child session
       // 注入通知消息，由 agent 自主决定后续走向。
-      const nodeTimeoutMs = node.config.timeout_ms
-      const nodeTimeoutPolicy = (node.config.timeout_policy as 'fail' | 'notify' | undefined) ?? 'fail'
+      //
+      // §4.1 I1: timeout_ms / timeout_policy 缺省时回退到 Config.dag.default_*。
+      // best-effort 读 Config.Service；服务不可用或字段缺失 → 回退硬编码默认。
+      const dagDefaults = yield* readDagDefaultsFromService()
+      const nodeTimeoutMs = node.config.timeout_ms ?? dagDefaults.defaultNodeTimeoutMs
+      const nodeTimeoutPolicy = (node.config.timeout_policy as 'fail' | 'notify' | undefined)
+        ?? dagDefaults.defaultTimeoutPolicy
+        ?? 'fail'
 
       if (nodeTimeoutMs) {
         nodeTimeoutId = setTimeout(() => {
@@ -964,7 +971,7 @@ const make = Effect.gen(function* () {
           })
         }
         
-        const timeoutMs = node.config.timeout_ms ?? DEFAULT_NODE_TIMEOUT_MS
+        const timeoutMs = nodeTimeoutMs ?? DEFAULT_NODE_TIMEOUT_MS
         // §2.2 timeout_policy: 当为 'notify' 时，prompt 不应用 timeoutOrElse。
         // 超时由 nodeTimeoutMs 的 setTimeout 处理（仅通知，不 fail prompt）。
         // agent 的 prompt fiber 持续运行，收到超时通知后自主决定是否结束。

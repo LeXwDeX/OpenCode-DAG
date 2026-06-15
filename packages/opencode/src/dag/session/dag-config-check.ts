@@ -24,8 +24,8 @@
  * 所有 QA 交互由调用方驱动（保证 agent 的控制权，§4.3 总体逻辑）。
  */
 
-import { Effect } from "effect"
-import type { Config } from "@/config/config"
+import { Effect, Option } from "effect"
+import { Config } from "@/config/config"
 import type { DAGConfig, DAGNodeConfig } from "./types"
 
 /**
@@ -68,6 +68,34 @@ export function readConfigDAGSnapshot(config: Config.Info | undefined): ConfigDA
     defaultWorkflowTimeoutMs: dagConfig?.default_workflow_timeout_ms,
     bootstrapCheckEnabled: dagConfig?.bootstrap_check ?? false,
   }
+}
+
+/**
+ * 从 Config.Service 读取 DAG 默认值（best-effort Effect helper）。
+ *
+ * 供 workflow-engine（节点级）和 core-start（工作流级）在 Effect 上下文中调用，
+ * 用于将 ConfigDAG 的 `default_*` 字段接入引擎作为缺省回退。
+ *
+ * - Config.Service 不可用 → 返回全 undefined 快照（调用方回退到硬编码默认）。
+ * - Config.Service 可用但 dag 字段缺失 → readConfigDAGSnapshot 返回 'fail'/undefined。
+ * - 任何异常 → 静默回退（不阻塞调度）。
+ *
+ * 返回值字段语义：
+ * - `defaultNodeTimeoutMs`：节点未声明 timeout_ms 时的回退（undefined = 用 DEFAULT_NODE_TIMEOUT_MS）
+ * - `defaultWorkflowTimeoutMs`：工作流未声明 timeout_ms 时的回退（undefined = 用 executor 默认）
+ * - `defaultTimeoutPolicy`：节点/工作流未声明 timeout_policy 时的回退（'fail' | 'notify'）
+ */
+export function readDagDefaultsFromService(): Effect.Effect<ConfigDAGSnapshot, never, never> {
+  return Effect.gen(function* () {
+    const configService = Option.getOrUndefined(yield* Effect.serviceOption(Config.Service))
+    if (!configService) {
+      return readConfigDAGSnapshot(undefined)
+    }
+    const cfg = yield* configService.get().pipe(
+      Effect.catchCause(() => Effect.succeed(undefined as Config.Info | undefined)),
+    )
+    return readConfigDAGSnapshot(cfg)
+  })
 }
 
 /** ConfigDAG 的最小类型（从 Config.Info.dag 提取） */

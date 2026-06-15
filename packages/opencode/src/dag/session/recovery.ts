@@ -8,6 +8,7 @@ import type { UpdateNodeStatusInput } from "./session-service"
 import type { DAGNodeSession, DAGWorkflowSession } from "./types"
 import { WorkflowEngine, registerEngine, unregisterEngine, setWorkflowConcurrency } from "./workflow-engine"
 import { createWorkflowExecutor } from "./workflow-executor"
+import { readDagDefaultsFromService } from "./dag-config-check"
 import type { PromptOps } from "@/session/prompt-ops"
 
 export type RecoverResult = { scanned: number; marked: number; resumed: number }
@@ -221,7 +222,16 @@ function resumeOrphanWorkflow(
     yield* engine.scheduleReadyNodes(wf.id)
 
     // 6. Fork detached daemon for ongoing polling (ensuring cleanup on exit)
-    const executor = createWorkflowExecutor(engine, wf.config, undefined, service, promptOps)
+    //    §4.1 I1: 同 core-start，接入 Config.dag 默认值作为工作流级 timeout 回退。
+    const recoveryDefaults = yield* readDagDefaultsFromService()
+    const executor = createWorkflowExecutor(
+      engine,
+      wf.config,
+      recoveryDefaults.defaultWorkflowTimeoutMs,
+      service,
+      promptOps,
+      recoveryDefaults.defaultTimeoutPolicy,
+    )
     yield* executor.start(wf.id).pipe(Effect.forkDetach)
 
     return true

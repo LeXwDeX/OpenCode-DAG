@@ -44,6 +44,7 @@ import { createWorkflowExecutor } from "./workflow-executor"
 import type { DAGConfig, DAGNodeConfig } from "./types"
 import { RequiredNodesValidator } from "./required-nodes-validator"
 import { MAX_SUB_DAG_DEPTH } from "./limits"
+import { readDagDefaultsFromService } from "./dag-config-check"
 
 const log = Log.create({ service: "dag.core-start" })
 
@@ -283,9 +284,19 @@ export const bootstrapWorkflowFromConfig = (args: {
     }
 
     // Step 5: Build engine + inject promptOps.
+    // §4.1 I1: best-effort 读 Config.dag 默认值，作为工作流级 timeout_ms / timeout_policy 的回退。
+    // Config.Service 不可用或字段缺失 → 回退到 executor 的硬编码默认（向后兼容）。
+    const dagDefaults = yield* readDagDefaultsFromService()
     const workflowEngine = yield* WorkflowEngine.make
     workflowEngine.setPromptOps(promptOps)
-    const executor: WorkflowExecutor = createWorkflowExecutor(workflowEngine, dagConfig, undefined, dagSessionService, promptOps)
+    const executor: WorkflowExecutor = createWorkflowExecutor(
+      workflowEngine,
+      dagConfig,
+      dagDefaults.defaultWorkflowTimeoutMs,
+      dagSessionService,
+      promptOps,
+      dagDefaults.defaultTimeoutPolicy,
+    )
 
     // Step 6: Register engine in module-level registry + startWorkflow (status→running + scheduleReadyNodes).
     // All state changes go through the engine's state-machine API (architecture constraint 5).

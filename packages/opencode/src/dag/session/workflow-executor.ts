@@ -60,10 +60,18 @@ export function createWorkflowExecutor(
   maxRuntimeMs: number = DEFAULT_MAX_RUNTIME_MS,
   sessionService?: IDAGSessionService,
   promptOps?: PromptOps,
+  /**
+   * §4.1 I1: 工作流级 timeout_policy 缺省时的回退（来自 Config.dag.default_timeout_policy）。
+   * 优先级：config.timeout_policy > fallbackTimeoutPolicy > 'fail'。
+   * 缺省 = 'fail'（向后兼容）。
+   */
+  fallbackTimeoutPolicy?: 'fail' | 'notify',
 ): WorkflowExecutor {
   // WP1-A: config.timeout_ms takes precedence over param default
   const effectiveTimeout = config.timeout_ms ?? maxRuntimeMs
-  const timeoutPolicy = (config.timeout_policy as 'fail' | 'notify' | undefined) ?? 'fail'
+  const timeoutPolicy = (config.timeout_policy as 'fail' | 'notify' | undefined)
+    ?? fallbackTimeoutPolicy
+    ?? 'fail'
   return {
     start(workflowId: string): Effect.Effect<void, never, never> {
       return Effect.gen(function* () {
@@ -146,9 +154,9 @@ function notifyWorkflowTimeout(
       Effect.ignore,
     )
 
-    // 2. 审计日志
+    // 2. 审计日志。工作流级事件无对应 node，用哨兵值标记（避免与真实 nodeId 混淆）。
     yield* sessionService.appendNodeLog({
-      nodeId: workflowId,
+      nodeId: '__workflow__',
       workflowId,
       chatSessionId: workflow.chat_session_id,
       logLevel: 'warn',
