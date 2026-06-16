@@ -1,6 +1,5 @@
 import HomeFooter from "../feature-plugins/home/footer"
 import HomeTips from "../feature-plugins/home/tips"
-import SessionQuota from "../feature-plugins/session/quota"
 import SidebarContext from "../feature-plugins/sidebar/context"
 import SidebarGoal from "../feature-plugins/sidebar/goal"
 import SidebarMcp from "../feature-plugins/sidebar/mcp"
@@ -29,7 +28,6 @@ export function internalTuiPlugins(
   return [
     HomeFooter,
     HomeTips,
-    SessionQuota,
     SidebarContext,
     SidebarGoal,
     SidebarMcp,

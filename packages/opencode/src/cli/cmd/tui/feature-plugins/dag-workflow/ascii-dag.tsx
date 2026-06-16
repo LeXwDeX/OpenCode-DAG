@@ -15,6 +15,7 @@ import type { DAGNodeSession, DAGNodeStatus } from "@/dag/session/types"
 import { useTheme } from "@tui/context/theme"
 import { GLYPH } from "./glyphs"
 import { NODE_STATUS_ICON, nodeStatusColor } from "./status"
+import { useSpinner } from "./use-spinner"
 import { nodeStatusLabel, type Lang } from "./i18n"
 
 /**
@@ -109,6 +110,10 @@ export function AsciiDag(props: {
   const { theme } = useTheme()
   const nodeHeight = () => props.nodeHeight ?? 3
 
+  // 统一 spinner：有 running 节点时才转
+  const hasRunning = createMemo(() => props.nodes.some((n) => n.status === "running"))
+  const spinnerFrame = useSpinner(hasRunning)
+
   const layers = createMemo(() => topologicalLayers(props.nodes))
   const nodeWidth = createMemo(() =>
     calculateAsciiDagNodeWidth({
@@ -138,7 +143,10 @@ export function AsciiDag(props: {
                 {(nodeID) => {
                   const node = () => nodeMap()[nodeID]
                   if (!node()) return null
+                  const isRunning = () => node().status === "running"
                   const sIcon = () => nodeStatusIcon(node().status)
+                  // running 显示 spinner 帧；其他显示静态图标
+                  const displayIcon = () => (isRunning() ? spinnerFrame() : sIcon().icon)
                   const isSelected = () => props.selectedNodeID === nodeID
                   return (
                     <box
@@ -152,7 +160,7 @@ export function AsciiDag(props: {
                       flexShrink={0}
                     >
                       <box flexDirection="row" gap={1}>
-                        <text fg={nodeStatusColor(node().status, theme)}>{sIcon().icon}</text>
+                        <text fg={nodeStatusColor(node().status, theme)}>{displayIcon()}</text>
                         <text fg={theme.text}>
                           {node().config?.name ?? nodeID}
                         </text>

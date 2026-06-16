@@ -32,6 +32,10 @@ import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js"
 type Client = TuiPluginApi["client"]
 type EventBus = TuiPluginApi["event"]
 
+// 轮询间隔（ms）：当 workflow 处于 running/paused 等非终态时，定时刷新兜底。
+// 事件驱动是首选，轮询作为保险——防止事件链路任何一环静默失败导致 UI 停滞。
+const POLL_INTERVAL_MS = 2000
+
 // ============================================================================
 // createPolledResource 工厂（6 个单-data hook 共用 load/gen/cancellation/cleanup）
 
@@ -61,6 +65,8 @@ export function createPolledResource<T>(config: {
   params: Accessor<unknown>
   skipWhen?: (params: unknown) => boolean
   events?: EventSubscription[]
+  /** 可选：返回 true 时启动轮询（如 workflow 非终态）。事件 + 轮询双保险。 */
+  pollWhen?: () => boolean
   client: Client
   event: EventBus
 }): PolledResource<T> {
@@ -104,6 +110,30 @@ export function createPolledResource<T>(config: {
       if (sub.filter?.(e.properties as Record<string, unknown>) ?? true) void load()
     }),
   )
+
+  // 轮询兜底：当 pollWhen() 返回 true 时，每 POLL_INTERVAL_MS 刷新一次。
+  // 解决事件链路静默断裂导致 UI 停滞的问题（反复出现的刷新失效根因）。
+  if (config.pollWhen) {
+    let timer: ReturnType<typeof setInterval> | undefined
+    createEffect(() => {
+      const shouldPoll = config.pollWhen!()
+      if (shouldPoll && !cancelled) {
+        if (!timer) {
+          timer = setInterval(() => {
+            if (!cancelled) void load()
+          }, POLL_INTERVAL_MS)
+        }
+      } else {
+        if (timer) {
+          clearInterval(timer)
+          timer = undefined
+        }
+      }
+    })
+    onCleanup(() => {
+      if (timer) clearInterval(timer)
+    })
+  }
 
   onCleanup(() => {
     cancelled = true
@@ -855,26 +885,28 @@ export function useWorkflowList(props: {
   event: EventBus
   session_id: Accessor<string>
 }): WorkflowListApi {
+  // 用 signal 跟踪当前列表状态，供 pollWhen 读取（避免循环引用）
+  const [hasActive, setHasActive] = createSignal(false)
   const r = createPolledResource<DAGWorkflowSession[]>({
     initial: [],
     fetch: async () => {
       const sid = props.session_id()
-      // 先按 sessionID 过滤。若结果为空（可能 sessionID 是 DAG 节点的子 session，
-      // workflow 挂在顶层 session 而非子 session），fallback 到全部 workflow。
-      // 这修复了"从子 session 返回 DAG 时节点树空白"的 bug（sessionID 上下文错配）。
-      if (sid) {
-        const filtered = await props.client.dag.listWorkflows({ chatSessionId: sid })
-        const filteredData = Array.isArray(filtered.data) ? filtered.data.map((w) => mapWorkflow(w)) : []
-        if (filteredData.length > 0) return filteredData
-        // sessionID 过滤为空 → fallback 全部（避免空白列表）
+      // 项目隔离（BUG-7）：按 sessionID 过滤，确保只显示当前项目的 workflow。
+      // 不再 fallback 到全部 workflow——那会导致跨项目数据泄露。
+      // sessionID 为空（如从 home 进 DAG）时返回空列表而非全部。
+      if (!sid) {
+        setHasActive(false)
+        return []
       }
-      const res = await props.client.dag.listWorkflows({})
-      const data = res.data
-      if (Array.isArray(data)) return data.map((w) => mapWorkflow(w))
-      return []
+      const filtered = await props.client.dag.listWorkflows({ chatSessionId: sid })
+      const result = Array.isArray(filtered.data) ? filtered.data.map((w) => mapWorkflow(w)) : []
+      // 更新轮询信号：有 running/paused 则继续轮询
+      setHasActive(result.some((w) => w.status === "running" || w.status === "paused"))
+      return result
     },
     params: props.session_id,
     events: [{ name: "dag.workflow.updated" }],
+    pollWhen: hasActive,
     client: props.client,
     event: props.event,
   })
@@ -899,6 +931,8 @@ export function useWorkflowDetail(props: {
   const [nodes, setNodes] = createSignal<DAGNodeSession[]>([])
   const [error, setError] = createSignal<string | null>(null)
   const [loading, setLoading] = createSignal(false)
+  // 轮询信号：workflow 非终态时持续刷新（事件 + 轮询双保险）
+  const [shouldPoll, setShouldPoll] = createSignal(false)
   let cancelled = false
   let gen = 0
 
@@ -910,6 +944,7 @@ export function useWorkflowDetail(props: {
       setNodes([])
       setError(null)
       setLoading(false)
+      setShouldPoll(false)
       return
     }
     const my = ++gen
@@ -922,9 +957,13 @@ export function useWorkflowDetail(props: {
       if (detail?.workflow) {
         setWorkflow(mapWorkflow(detail.workflow, ns))
         setNodes(ns)
+        // 非终态 → 启动轮询兜底
+        const st = detail.workflow.status
+        setShouldPoll(st === "running" || st === "paused" || st === "pending")
       } else {
         setWorkflow(null)
         setNodes([])
+        setShouldPoll(false)
       }
       setError(null)
     } catch (e) {
@@ -947,10 +986,30 @@ export function useWorkflowDetail(props: {
   const offN = props.event.on("dag.node.updated", (e) => {
     if (matches(e.properties.workflowID)) void load()
   })
+
+  // 轮询兜底：解决事件链路静默断裂导致 UI 停滞的反复 bug
+  let pollTimer: ReturnType<typeof setInterval> | undefined
+  createEffect(() => {
+    const need = shouldPoll()
+    if (need && !cancelled) {
+      if (!pollTimer) {
+        pollTimer = setInterval(() => {
+          if (!cancelled) void load()
+        }, POLL_INTERVAL_MS)
+      }
+    } else {
+      if (pollTimer) {
+        clearInterval(pollTimer)
+        pollTimer = undefined
+      }
+    }
+  })
+
   onCleanup(() => {
     cancelled = true
     offW()
     offN()
+    if (pollTimer) clearInterval(pollTimer)
   })
 
   return { workflow, nodes, error, loading, refresh: () => void load() }

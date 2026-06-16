@@ -741,8 +741,8 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     // 上下文感知返回（TUI-2）：优先回到进入 DAG 前的路由（returnRoute/n）。
     // - 若 returnRoute 存在（如从 session tab 进 DAG），回到那个路由
     // - 若无 returnRoute 但有顶层 sessionID，回 session tab
+    // - 若选中了 workflow，用该 workflow 的 chat_session_id 回 session
     // - 否则回 home
-    // 这让"从 DAG 进子 session 再 Escape"能回到 DAG（而非总回 session chat）。
     const params = routeParams()
     const returnRoute = params?.returnRoute as
       | { name: string; params?: Record<string, unknown> }
@@ -758,7 +758,13 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       props.api.route.navigate("session", { sessionID: fallbackSessionID })
       return
     }
-    // 3. 兜底
+    // 3. 从当前选中的 workflow 提取 chat_session_id（修复 ESC 无响应边界）
+    const wf = currentWorkflow()
+    if (wf?.chat_session_id) {
+      props.api.route.navigate("session", { sessionID: wf.chat_session_id })
+      return
+    }
+    // 4. 兜底
     props.api.route.navigate("home")
   }
 
@@ -856,7 +862,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
               }
           >
             <Show
-              when={currentWorkflow()}
+              when={currentWorkflowID()}
               fallback={
                 <box flexGrow={1} alignItems="center" justifyContent="center">
                   <text fg={theme.textMuted}>
@@ -867,7 +873,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 </box>
               }
             >
-            {(wf) => (
+              {/* 内层 Show：currentWorkflowID 有值但 currentWorkflow 尚在 loading 时
+                  显示 loading，避免把 null 传给 DagWorkflowRenderer */}
+              <Show
+                when={currentWorkflow()}
+                fallback={
+                  <box flexGrow={1} alignItems="center" justifyContent="center">
+                    <text fg={theme.textMuted}>{i18n().t("label_loading")}</text>
+                  </box>
+                }
+              >
               <box flexGrow={1} minHeight={0} gap={1}>
                 <DagProgressBar
                   lang={i18n().lang}
@@ -877,9 +892,9 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                 />
                 <ControlBar
                   lang={i18n().lang}
-                  workflowId={wf().id}
-                  currentStatus={() => wf().status}
-                  onAction={(action) => handleControlAction(action, wf().id)}
+                  workflowId={currentWorkflowID()!}
+                  currentStatus={() => currentWorkflow()?.status ?? "pending"}
+                  onAction={(action) => handleControlAction(action, currentWorkflowID()!)}
                   actionLoading={actionLoading}
                 />
                 {/* 只保留 stickyScroll={false}：与 sticky 起始锚点同时声明会互相矛盾，曾致点击抖动（BUG-1） */}
@@ -889,7 +904,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                     fallback={
                       <DagWorkflowRenderer
                         lang={i18n().lang}
-                        workflow={wf()}
+                        workflow={currentWorkflow()!}
                         nodes={nodes()}
                         selectedNodeId={selectedNodeID()}
                         onNodeSelect={(nodeId) => {
@@ -915,7 +930,7 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   </Show>
                 </scrollbox>
               </box>
-            )}
+              </Show>
             </Show>
           </Show>
         </box>
@@ -1036,8 +1051,11 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         </box>
       </Show>
 
-      {/* 底部快捷键提示 */}
+      {/* 底部快捷键提示 — height/flexShrink 钉死高度，避免 J/K 导航时 selectedNodeID
+          的 Show 切换导致重排抖动 */}
       <box
+        height={3}
+        flexShrink={0}
         flexDirection="row"
         justifyContent="space-between"
         paddingTop={1}
@@ -1049,9 +1067,12 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
         <text fg={theme.textMuted}>{i18n().t("hint_hotkey_bar")}</text>
         <box flexDirection="row" gap={2}>
           <text fg={theme.primary}>{i18n().t("label_focus")} {focusPane() === "list" ? i18n().t("focus_history") : i18n().t("focus_graph")}</text>
-          <Show when={selectedNodeID()}>
-            <text fg={theme.primary}>{i18n().t("label_node")} {selectedNodeID()}</text>
-          </Show>
+          {/* 用固定宽度占位避免 selectedNodeID 切换导致抖动 */}
+          <text fg={theme.primary}>
+            {selectedNodeID()
+              ? `${i18n().t("label_node")} ${selectedNodeID()}`
+              : `${i18n().t("label_node")} -`}
+          </text>
         </box>
       </box>
     </box>

@@ -6,7 +6,7 @@
  * 包含：DagWorkflowRenderer（节点树，按拓扑层级缩进展示全部节点）
  *       DagProgressBar（进度条）
  */
-import { createMemo, For, Show, type JSX } from "solid-js"
+import { createMemo, For, Show, type Accessor, type JSX } from "solid-js"
 import type {
   DAGNodeSession,
   DAGWorkflowSession,
@@ -18,6 +18,7 @@ import { useTheme } from "@tui/context/theme"
 import { topologicalLayers } from "./ascii-dag"
 import { GLYPH } from "./glyphs"
 import { nodeStatusColor, nodeStatusIconChar, workflowStatusColor } from "./status"
+import { useSpinner, SPINNER_FRAMES } from "./use-spinner"
 import type { Lang } from "./i18n"
 import { t, nodeStatusLabel, workflowStatusLabel } from "./i18n"
 
@@ -37,12 +38,15 @@ function DagNodeRow(props: {
   isLast: boolean
   selected: boolean
   lang: Lang
+  spinnerFrame: Accessor<string>
   onSelect: () => void
 }) {
   const { theme } = useTheme()
   const connector = () => (props.isLast ? GLYPH.treeLast : GLYPH.treeBranch)
   const iconColor = createMemo(() => nodeStatusColor(props.node.status, theme))
-  const icon = createMemo(() => nodeStatusIconChar(props.node.status))
+  const isRunning = createMemo(() => props.node.status === "running")
+  // running 节点显示动画 spinner；其他状态显示静态图标
+  const icon = createMemo(() => (isRunning() ? props.spinnerFrame() : nodeStatusIconChar(props.node.status)))
   const statusLabel = createMemo(() => nodeStatusLabel(props.lang, props.node.status))
 
   return (
@@ -83,6 +87,10 @@ export function DagWorkflowRenderer(props: {
   const { theme } = useTheme()
   const wfColor = createMemo(() => workflowStatusColor(props.workflow.status, theme))
   const wfStatusLabel = createMemo(() => workflowStatusLabel(props.lang, props.workflow.status))
+
+  // 统一管理 spinner：只有存在 running 节点时才启动定时器（按需）
+  const hasRunning = createMemo(() => props.nodes.some((n) => n.status === "running"))
+  const spinnerFrame = useSpinner(hasRunning)
 
   // 按拓扑层级排列全部节点，depth = 层级索引（reachable 的所有节点都会出现）
   const orderedNodes = createMemo<{ node: DAGNodeSession; depth: number }[]>(() => {
@@ -137,6 +145,7 @@ export function DagWorkflowRenderer(props: {
                   return !next || next.depth !== entry.depth
                 })()}
                 lang={props.lang}
+                spinnerFrame={spinnerFrame}
                 selected={props.selectedNodeId === entry.node.node_id}
                 onSelect={() => props.onNodeSelect(entry.node.node_id)}
               />
