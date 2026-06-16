@@ -100,38 +100,75 @@ export function createPolledResource<T>(config: {
     }
   }
 
-  createEffect(() => {
-    config.params()
-    void load()
-  })
-
+  // 事件订阅：任何匹配的事件触发立即 load
   const offs = (config.events ?? []).map((sub) =>
     config.event.on(sub.name as EventSubscription["name"] & Parameters<EventBus["on"]>[0], (e) => {
       if (sub.filter?.(e.properties as Record<string, unknown>) ?? true) void load()
     }),
   )
 
-  // 轮询兜底：当 pollWhen() 返回 true 时，每 POLL_INTERVAL_MS 刷新一次。
-  // 解决事件链路静默断裂导致 UI 停滞的问题（反复出现的刷新失效根因）。
   if (config.pollWhen) {
-    let timer: ReturnType<typeof setInterval> | undefined
+    // ── 轮询模式：用 setTimeout 递归，彻底避免 double-fetch ──
+    // - 下一次 tick 仅在 *当前 load 完成后* 才启动倒计时
+    // - 当 params effect 已触发 load 时，timer 在 load 完成后自然延迟，不会重叠
+    // - 同一时刻最多只有一个 in-flight load（gen 令牌兜底并发安全）
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let pollingActive = false
+
+    const scheduleNext = () => {
+      if (cancelled || !pollingActive) return
+      timer = setTimeout(async () => {
+        if (cancelled || !pollingActive) return
+        try {
+          await load()
+        } finally {
+          scheduleNext() // 完成后递归：下一次 tick 从 load 完成开始计时
+        }
+      }, POLL_INTERVAL_MS)
+    }
+
+    const startPolling = () => {
+      if (pollingActive) return
+      pollingActive = true
+      scheduleNext()
+    }
+
+    const stopPolling = () => {
+      pollingActive = false
+      if (timer) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
+
+    // params 变化触发立即 load 后，重启 polling timer 避免重复
+    createEffect(() => {
+      config.params()
+      void load().finally(() => {
+        // load 完成后重置 polling 周期
+        if (pollingActive) {
+          stopPolling()
+          startPolling()
+        }
+      })
+    })
+
+    // pollWhen 控制 polling 启停
     createEffect(() => {
       const shouldPoll = config.pollWhen!()
       if (shouldPoll && !cancelled) {
-        if (!timer) {
-          timer = setInterval(() => {
-            if (!cancelled) void load()
-          }, POLL_INTERVAL_MS)
-        }
+        startPolling()
       } else {
-        if (timer) {
-          clearInterval(timer)
-          timer = undefined
-        }
+        stopPolling()
       }
     })
-    onCleanup(() => {
-      if (timer) clearInterval(timer)
+
+    onCleanup(stopPolling)
+  } else {
+    // ── 无轮询模式：仅 params 变化触发立即 load ──
+    createEffect(() => {
+      config.params()
+      void load()
     })
   }
 
@@ -974,11 +1011,7 @@ export function useWorkflowDetail(props: {
     }
   }
 
-  createEffect(() => {
-    props.workflowId()
-    void load()
-  })
-
+  // 事件订阅：dag.workflow.updated / dag.node.updated 匹配当前 workflowID 时立即 load
   const matches = (wfID: string) => wfID === props.workflowId()
   const offW = props.event.on("dag.workflow.updated", (e) => {
     if (matches(e.properties.workflowID)) void load()
@@ -987,21 +1020,56 @@ export function useWorkflowDetail(props: {
     if (matches(e.properties.workflowID)) void load()
   })
 
-  // 轮询兜底：解决事件链路静默断裂导致 UI 停滞的反复 bug
-  let pollTimer: ReturnType<typeof setInterval> | undefined
+  // 轮询兜底：setTimeout 递归避免 double-fetch（同 createPolledResource 模式）
+  // - params effect 触发 load 后，polling timer 在 load 完成后才重新倒计时
+  // - 同一时刻最多一个 in-flight load（gen 令牌兜底并发安全）
+  let pollTimer: ReturnType<typeof setTimeout> | undefined
+  let pollingActive = false
+
+  const scheduleNext = () => {
+    if (cancelled || !pollingActive) return
+    pollTimer = setTimeout(async () => {
+      if (cancelled || !pollingActive) return
+      try {
+        await load()
+      } finally {
+        scheduleNext()
+      }
+    }, POLL_INTERVAL_MS)
+  }
+
+  const startPolling = () => {
+    if (pollingActive) return
+    pollingActive = true
+    scheduleNext()
+  }
+
+  const stopPolling = () => {
+    pollingActive = false
+    if (pollTimer) {
+      clearTimeout(pollTimer)
+      pollTimer = undefined
+    }
+  }
+
+  // params（workflowId）变化：立即 load，load 完成后重启 polling timer
+  createEffect(() => {
+    props.workflowId()
+    void load().finally(() => {
+      if (pollingActive) {
+        stopPolling()
+        startPolling()
+      }
+    })
+  })
+
+  // shouldPoll 控制 polling 启停
   createEffect(() => {
     const need = shouldPoll()
     if (need && !cancelled) {
-      if (!pollTimer) {
-        pollTimer = setInterval(() => {
-          if (!cancelled) void load()
-        }, POLL_INTERVAL_MS)
-      }
+      startPolling()
     } else {
-      if (pollTimer) {
-        clearInterval(pollTimer)
-        pollTimer = undefined
-      }
+      stopPolling()
     }
   })
 
@@ -1009,7 +1077,7 @@ export function useWorkflowDetail(props: {
     cancelled = true
     offW()
     offN()
-    if (pollTimer) clearInterval(pollTimer)
+    stopPolling()
   })
 
   return { workflow, nodes, error, loading, refresh: () => void load() }
