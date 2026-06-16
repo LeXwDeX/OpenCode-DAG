@@ -1,0 +1,19 @@
+# CodeQL 配置 — 显式指定只分析 TypeScript/JavaScript Actions 代码。
+# 防止 default-setup 自动检测到临时 .py 文件后启用 Python 分析导致 CI 失败。
+# 参考: https://docs.github.com/code-security/code-scanning/creating-an-advanced-setup-for-code-scanning/customizing-your-advanced-setup-for-code-scanning
+name: "opencode-codeql"
+
+# 只扫描源代码目录，排除 notes/scripts/examples/reproduction 等辅助文件
+paths:
+  - packages
+  - sdks
+  - .github/actions
+paths-ignore:
+  - "**/node_modules"
+  - "**/dist"
+  - "**/build"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/__tests__/**"
+  - "**/*.stories.tsx"
+  - "**/*.stories.ts"
