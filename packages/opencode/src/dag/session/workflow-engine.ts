@@ -41,7 +41,7 @@ import type { IWorktreeManager } from "../worktree-manager/IWorktreeManager"
 import type { WorktreeInfo } from "../worktree-manager/types"
 import { bootstrapWorkflowFromConfig } from "./core-start"
 import { readDagDefaultsFromService } from "./dag-config-check"
-import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS } from "./limits"
+import { MAX_SUB_DAG_DEPTH, DEFAULT_SUB_DAG_TIMEOUT_MS, MAX_CONCURRENCY } from "./limits"
 import type { IEventBus } from "../state-machine/IStateMachine"
 import { ProviderID, ModelID } from "@/provider/schema"
 import { Config } from "@/config/config"
@@ -1052,21 +1052,32 @@ const make = Effect.gen(function* () {
         return
       }
       if (postPromptNode?.status === 'running') {
-        yield* sessionService.updateNodeStatus({
-          sessionId: node.node_id,
-          status: 'failed',
-          error: 'node did not call node_complete tool'
-        } satisfies UpdateNodeStatusInput).pipe(
-          Effect.tapError((err) => Effect.logWarning(`[DAG] status update failed: ${err}`)),
-          Effect.ignore
+        // FIX: Use handleNodeFailure instead of direct status write.
+        // This ensures:
+        //   1. failure_handler diagnosis triggers (if configured)
+        //   2. cascade skip downstream fires
+        //   3. maybeFinalizeWorkflow is called
+        //   4. violation is created
+        //   5. scheduleReadyNodes is triggered
+        // Without this, nodes that forget to call node_complete get stuck
+        // in 'running' forever with no recovery path (v13 proxy-core bug).
+        yield* handleNodeFailure(
+          workflowId,
+          node.node_id,
+          new Error('node did not call node_complete tool'),
+        ).pipe(
+          Effect.tapError((err: unknown) =>
+            Effect.logWarning(`[DAG] handleNodeFailure on node_complete_missing failed for ${node.node_id}: ${err}`),
+          ),
+          Effect.ignore,
         )
-        // #10 node_complete_missing
+        // #10 node_complete_missing (supplementary log - handleNodeFailure also logs the failure)
         yield* safeAppendLog({
           nodeId: node.node_id,
           workflowId,
           chatSessionId: workflow.chat_session_id,
           logLevel: 'warn',
-          logMessage: `Node did not call node_complete tool: ${node.node_id}`,
+          logMessage: `Node did not call node_complete tool: ${node.node_id} (routed through handleNodeFailure for full DAG semantics)`,
           executionPhase: 'node_complete_missing',
         })
       }
@@ -1331,7 +1342,7 @@ const make = Effect.gen(function* () {
         .filter(id => id.startsWith(`${workflowId}::`))
         .filter(id => !runningNodeIds.has(id) && !completedNodeIds.has(id) && !failedNodeIds.has(id) && !skippedNodeIds.has(id))
         .length
-      const maxConcurrency = concurrencyRegistry.get(workflowId) ?? Number.POSITIVE_INFINITY
+      const maxConcurrency = concurrencyRegistry.get(workflowId) ?? MAX_CONCURRENCY
       const budget = computeSpawnBudget(maxConcurrency, runningNodeIds.size, inFlightCount)
       if (budget <= 0) {
         // No spawn budget, but if skips occurred, check for workflow convergence

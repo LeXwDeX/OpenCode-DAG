@@ -29,6 +29,13 @@ import { DAG_CONDITION_OPS } from "./types"
 export const MAX_SUB_DAG_DEPTH = 3
 
 /**
+ * 最大并发 worker 数（由 `validateWorkflowConfigLimits` 强制约束）。
+ * 用作运行时并发上限的 fallback，防止 registry miss 时 fallback 到 POSITIVE_INFINITY
+ * 导致瞬间 spawn 所有节点、打爆 LLM provider 速率限制。
+ */
+export const MAX_CONCURRENCY = 10
+
+/**
  * Default timeout for a sub-DAG lifecycle bridge (WP-D3, §7 WP-D3).
  *
  * If a sub-DAG node (worker_type="dag") does not produce a terminal workflow event
@@ -78,8 +85,8 @@ export function validateWorkflowConfigLimits(
   if (typeof config.max_concurrency !== "number" || !Number.isFinite(config.max_concurrency)) {
     return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
   }
-  if (config.max_concurrency < 1 || config.max_concurrency > 10) {
-    return { ok: false, reason: `max_concurrency must be 1..10, got ${config.max_concurrency}` }
+  if (config.max_concurrency < 1 || config.max_concurrency > MAX_CONCURRENCY) {
+    return { ok: false, reason: `max_concurrency must be 1..${MAX_CONCURRENCY}, got ${config.max_concurrency}` }
   }
   return { ok: true }
 }
