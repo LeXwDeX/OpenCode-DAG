@@ -7,4 +7,15 @@
     "github-triage": false,
     "github-pr-search": false,
   },
+  "dag": {
+    "model_levels": {
+      "low": "local-proxy-compatible/deepseek-v4-flash",
+      "medium": "local-proxy-compatible/deepseek-v4-pro",
+      "high": "local-proxy-compatible/qwen3.7-max"
+    },
+    "default_timeout_policy": "notify",
+    "default_node_timeout_ms": 1800000,
+    "default_workflow_timeout_ms": 3600000,
+    "bootstrap_check": true
+  }
 }
