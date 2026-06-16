@@ -27,7 +27,7 @@ import { WorkflowEngine, getReadyNodes } from "../dag/session/workflow-engine"
 import type { WorkflowStatusSnapshot } from "../dag/session/workflow-engine"
 import { DAGSessionService } from "../dag/session/session-service"
 import type { IDAGSessionService } from "../dag/session/session-service"
-import type { DAGConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, ReplanPatch, ReplanResult } from "../dag/session/types"
+import type { DAGConfig, DAGNodeConfig, DAGNodeSession, DAGViolation, DAGWorkflowSession, ReplanPatch, ReplanResult } from "../dag/session/types"
 import {
   bootstrapWorkflowFromConfig,
   type WorkerTypeAgentRegistry,
@@ -44,6 +44,7 @@ import {
   instantiateDAGTemplate,
   type DAGTemplateInput,
 } from "../dag/integration/templates"
+import { normalizeDagConfig, normalizeDagNode } from "../dag/session/normalize"
 
 /**
  * worker_type resolution
@@ -367,6 +368,17 @@ export const DAGWorkerTool = Tool.define(
             )
           }
 
+          // 归一化：补安全缺省（dependencies/required/max_concurrency），
+          // 硬校验关键字段（id/name/worker_type/worker_config），把"运行时
+          // undefined.filter 崩溃"转成"入口即拒绝并指名道姓"。
+          const normalized = normalizeDagConfig(workflowConfig)
+          if (!normalized.ok) {
+            return yield* Effect.fail(
+              new Error(`Invalid workflow configuration:\n${normalized.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")}`)
+            )
+          }
+          workflowConfig = normalized.config
+
           const started = yield* startWorkflowFromConfig({
             workflowConfig,
             ctx,
@@ -543,6 +555,26 @@ export const DAGWorkerTool = Tool.define(
           }
           if (!parsedPatch.workflow_id) {
             return yield* Effect.fail(new Error("patch.workflow_id is required"))
+          }
+
+          // 归一化 add_nodes：补安全缺省（dependencies/required）+ 硬校验关键字段。
+          // 防御 LLM 生成 replan patch 时漏填 dependencies 导致引擎崩溃。
+          if (Array.isArray(parsedPatch.add_nodes) && parsedPatch.add_nodes.length > 0) {
+            const nodeErrors: string[] = []
+            const normalizedAddNodes = parsedPatch.add_nodes.map((rawNode, i) => {
+              const r = normalizeDagNode(rawNode, i)
+              if (!r.ok) {
+                nodeErrors.push(...r.errors)
+                return null
+              }
+              return r.node
+            })
+            if (nodeErrors.length > 0) {
+              return yield* Effect.fail(
+                new Error(`Invalid replan add_nodes:\n${nodeErrors.map((e, i) => `${i + 1}. ${e}`).join("\n")}`)
+              )
+            }
+            parsedPatch.add_nodes = normalizedAddNodes as DAGNodeConfig[]
           }
 
           // WP3: Registry-required pattern (aligns with dag-mutation.ts:142-154 HTTP handler).
@@ -724,8 +756,15 @@ export const DAGWorkerTool = Tool.define(
           if ("error" in instantiated) {
             return yield* Effect.fail(new Error(instantiated.error))
           }
+          // 归一化（与 start 入口一致）：防御模板工厂的结构缺陷
+          const normalizedTpl = normalizeDagConfig(instantiated)
+          if (!normalizedTpl.ok) {
+            return yield* Effect.fail(
+              new Error(`Template '${params.template_id}' produced invalid config:\n${normalizedTpl.errors.map((e, i) => `${i + 1}. ${e}`).join("\n")}`)
+            )
+          }
           const started = yield* startWorkflowFromConfig({
-            workflowConfig: instantiated,
+            workflowConfig: normalizedTpl.config,
             ctx,
             dagSessionService,
             agentService,
