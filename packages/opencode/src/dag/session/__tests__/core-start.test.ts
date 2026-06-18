@@ -131,6 +131,119 @@ describe("core-start: bootstrapWorkflowFromConfig", () => {
     })
   })
 
+  describe("C2 fix: failure_handler.agent fail-fast validation", () => {
+    // 历史 bug：validateFailureHandler (limits.ts) 只校验 agent 是非空字符串，
+    // 不校验 agent 是否注册。运行时 handleNodeFailure 才发现 agent 缺失，
+    // 此时 workflow 已被 pause，fallback 到 cascade。
+    // 现在 bootstrapWorkflowFromConfig Step 2.5 对 failure_handler.agent 做
+    // 与 worker_type 同级的 registry 校验。
+
+    it("rejects bootstrap when failure_handler.agent is not registered", async () => {
+      const dagSessionService = Effect.runSync(DAGSessionService.make)
+      const agentService = makeAgentService(["general"])
+
+      const dagConfig: DAGConfig = {
+        name: "fh-agent-missing",
+        nodes: [makeNodeConfig("A")],
+        max_concurrency: 1,
+        failure_handler: { enabled: true, agent: "nonexistent-diagnoser" },
+      }
+
+      const result = await Effect.runPromiseExit(
+        bootstrapWorkflowFromConfig({
+          dagConfig,
+          chatSessionId: "session-fh-missing",
+          promptOps: mockPromptOps(),
+          dagSessionService,
+          agentService,
+        }),
+      )
+
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") {
+        const msg = String(result.cause)
+        expect(msg).toContain("failure_handler.agent")
+        expect(msg).toContain("nonexistent-diagnoser")
+        expect(msg).toContain("not a registered agent")
+      }
+    })
+
+    it("passes when failure_handler.agent is registered", async () => {
+      const dagSessionService = Effect.runSync(DAGSessionService.make)
+      const agentService = makeAgentService(["general", "diagnoser"])
+
+      const dagConfig: DAGConfig = {
+        name: "fh-agent-ok",
+        nodes: [makeNodeConfig("A")],
+        max_concurrency: 1,
+        failure_handler: { enabled: true, agent: "diagnoser" },
+      }
+
+      const result = await Effect.runPromiseExit(
+        bootstrapWorkflowFromConfig({
+          dagConfig,
+          chatSessionId: "session-fh-ok",
+          promptOps: mockPromptOps(),
+          dagSessionService,
+          agentService,
+        }),
+      )
+
+      expect(result._tag).toBe("Success")
+    })
+
+    it("skips failure_handler.agent validation when handler disabled", async () => {
+      const dagSessionService = Effect.runSync(DAGSessionService.make)
+      const agentService = makeAgentService(["general"])
+      // agent 字段指向未注册的 agent，但 enabled:false → 不校验
+
+      const dagConfig: DAGConfig = {
+        name: "fh-disabled",
+        nodes: [makeNodeConfig("A")],
+        max_concurrency: 1,
+        failure_handler: { enabled: false, agent: "nonexistent-diagnoser" },
+      }
+
+      const result = await Effect.runPromiseExit(
+        bootstrapWorkflowFromConfig({
+          dagConfig,
+          chatSessionId: "session-fh-disabled",
+          promptOps: mockPromptOps(),
+          dagSessionService,
+          agentService,
+        }),
+      )
+
+      expect(result._tag).toBe("Success")
+    })
+
+    it("uses default diagnosis agent when failure_handler.agent omitted", async () => {
+      // failure_handler.enabled:true 但 agent 字段缺省 → 不触发 Step 2.5 校验
+      // (运行时 handleNodeFailure 会 fallback 到 "general")
+      const dagSessionService = Effect.runSync(DAGSessionService.make)
+      const agentService = makeAgentService(["general"])
+
+      const dagConfig: DAGConfig = {
+        name: "fh-no-agent-field",
+        nodes: [makeNodeConfig("A")],
+        max_concurrency: 1,
+        failure_handler: { enabled: true },
+      }
+
+      const result = await Effect.runPromiseExit(
+        bootstrapWorkflowFromConfig({
+          dagConfig,
+          chatSessionId: "session-fh-no-agent",
+          promptOps: mockPromptOps(),
+          dagSessionService,
+          agentService,
+        }),
+      )
+
+      expect(result._tag).toBe("Success")
+    })
+  })
+
   describe("bootstrap happy path (headless, no Tool.Context)", () => {
     it("creates DB workflow + node rows, registers engine, and ignores external abort signals", async () => {
       const dagSessionService = Effect.runSync(DAGSessionService.make)

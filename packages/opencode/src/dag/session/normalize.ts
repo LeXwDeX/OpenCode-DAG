@@ -134,7 +134,11 @@ export function normalizeDagConfig(raw: unknown): NormalizeResult {
       worker_type: typeof rawNode.worker_type === "string" ? rawNode.worker_type : "",
       worker_config: isObject(rawNode.worker_config) ? rawNode.worker_config : {},
       ...(rawNode.description !== undefined ? { description: String(rawNode.description) } : {}),
-      ...(rawNode.timeout_ms !== undefined ? { timeout_ms: rawNode.timeout_ms as number } : {}),
+      // C3: validate timeout_ms value domain before passthrough
+      ...(() => {
+        const t = validateTimeoutMs(rawNode.timeout_ms, prefix, errors)
+        return t !== undefined ? { timeout_ms: t } : {}
+      })(),
       ...(rawNode.retry !== undefined ? { retry: rawNode.retry as DAGNodeConfig["retry"] } : {}),
       ...(rawNode.condition !== undefined ? { condition: rawNode.condition as DAGNodeConfig["condition"] } : {}),
       ...(rawNode.input_mapping !== undefined ? { input_mapping: rawNode.input_mapping as DAGNodeConfig["input_mapping"] } : {}),
@@ -148,13 +152,23 @@ export function normalizeDagConfig(raw: unknown): NormalizeResult {
     return { ok: false, errors }
   }
 
+  // C3: validate workflow-level timeout_ms value domain BEFORE assembling config.
+  // Must run before the config assembly so invalid timeout_ms is rejected,
+  // not silently omitted. Placed after the node-level errors checkpoint so
+  // both node-level and workflow-level timeout_ms errors surface together.
+  const validatedWorkflowTimeoutMs = validateTimeoutMs(raw.timeout_ms, "workflow", errors)
+  if (errors.length > 0) {
+    return { ok: false, errors }
+  }
+
   // 组装归一化后的 config（浅拷贝顶层 + 替换 nodes）
   const config: DAGConfig = {
     name: raw.name as string,
     nodes: normalizedNodes,
     max_concurrency: maxConcurrency,
     ...(raw.description !== undefined ? { description: String(raw.description) } : {}),
-    ...(raw.timeout_ms !== undefined ? { timeout_ms: raw.timeout_ms as number } : {}),
+    // C3: use validated workflow-level timeout_ms
+    ...(validatedWorkflowTimeoutMs !== undefined ? { timeout_ms: validatedWorkflowTimeoutMs } : {}),
     ...(raw.timeout_policy !== undefined ? { timeout_policy: raw.timeout_policy as DAGConfig["timeout_policy"] } : {}),
     ...(raw.failure_handler !== undefined ? { failure_handler: raw.failure_handler as DAGConfig["failure_handler"] } : {}),
   }
@@ -193,6 +207,11 @@ export function normalizeDagNode(rawNode: unknown, index: number): { ok: true; n
     errors.push(`${prefix} 'worker_config' is required and must be a JSON object`)
   }
 
+  // C3: validate timeout_ms value domain BEFORE the errors checkpoint below.
+  // Must run before `if (errors.length > 0) return` so invalid timeout_ms
+  // rejects the node rather than silently being omitted from the returned config.
+  const validatedTimeoutMs = validateTimeoutMs(rawNode.timeout_ms, prefix, errors)
+
   if (errors.length > 0) {
     return { ok: false, errors }
   }
@@ -207,7 +226,8 @@ export function normalizeDagNode(rawNode: unknown, index: number): { ok: true; n
     worker_type: rawNode.worker_type as string,
     worker_config: (rawNode.worker_config as Record<string, unknown>) ?? {},
     ...(rawNode.description !== undefined ? { description: String(rawNode.description) } : {}),
-    ...(rawNode.timeout_ms !== undefined ? { timeout_ms: rawNode.timeout_ms as number } : {}),
+    // C3: use validated timeout_ms (already checked above)
+    ...(validatedTimeoutMs !== undefined ? { timeout_ms: validatedTimeoutMs } : {}),
     ...(rawNode.retry !== undefined ? { retry: rawNode.retry as DAGNodeConfig["retry"] } : {}),
     ...(rawNode.condition !== undefined ? { condition: rawNode.condition as DAGNodeConfig["condition"] } : {}),
     ...(rawNode.input_mapping !== undefined ? { input_mapping: rawNode.input_mapping as DAGNodeConfig["input_mapping"] } : {}),
@@ -222,4 +242,34 @@ export function normalizeDagNode(rawNode: unknown, index: number): { ok: true; n
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+/**
+ * C3 fix: 校验 timeout_ms 值域。
+ *
+ * 历史 bug：normalize 透传 timeout_ms 但不校验值域。`timeout_ms: 0` 会让
+ * setTimeout(fn, 0) 立即触发超时；负数/NaN 行为未定义。
+ *
+ * 合法值：正整数（> 0）。非数字、非整数、≤0 拒绝。
+ *
+ * @param value 原始 timeout_ms
+ * @param label 错误信息前缀（如 "node[2]" 或 "workflow"）
+ * @param errors 收集错误的数组；校验失败时 push 原因
+ * @returns 如果合法返回 value，否则返回 undefined（调用方据此不写入字段）
+ */
+function validateTimeoutMs(
+  value: unknown,
+  label: string,
+  errors: string[],
+): number | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    errors.push(`${label} 'timeout_ms' must be a finite number, got ${value}`)
+    return undefined
+  }
+  if (!Number.isInteger(value) || value <= 0) {
+    errors.push(`${label} 'timeout_ms' must be a positive integer, got ${value}`)
+    return undefined
+  }
+  return value
 }

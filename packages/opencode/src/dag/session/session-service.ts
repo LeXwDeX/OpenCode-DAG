@@ -548,7 +548,10 @@ const make = Effect.gen(function* () {
           output: null,
           error_info: null,
           retry_count: input.retryCount ?? 0,
-          max_retries: input.maxRetries ?? 3,
+          // C1 fix: default max_retries to 0 (was 3). Aligns with core-start.ts
+          // (cfg.retry?.max_attempts ?? 0) so all creation paths agree on the
+          // default. Silent 3x retry could triple LLM calls on transient errors.
+          max_retries: input.maxRetries ?? 0,
           timeout_ms: input.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS,
           required_nodes: [],
           dependencies: input.dependencyNodes ?? [],
@@ -562,7 +565,7 @@ const make = Effect.gen(function* () {
           completed_at: null,
         }).run()
       })
-      
+
       return {
         node_id: nodeId,
         workflow_id: input.workflowId,
@@ -570,7 +573,7 @@ const make = Effect.gen(function* () {
         status: "pending" as const,
         output: input.inputData ?? null,
         retry_count: input.retryCount ?? 0,
-        max_retries: input.maxRetries ?? 3,
+        max_retries: input.maxRetries ?? 0,
         timeout_ms: input.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS,
         required_nodes: [],
         dependencies: input.dependencyNodes ?? [],

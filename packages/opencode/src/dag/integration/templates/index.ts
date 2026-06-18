@@ -72,8 +72,21 @@ function brief(input: DAGTemplateInput): string {
   return parts.join(" | ")
 }
 
-const SAFE_BUILTIN_AGENTS: ReadonlySet<string> = new Set(["general", "explore"])
-
+/**
+ * B1 fix: 模板不再降级 worker_type。
+ *
+ * 历史 bug：mkNode 曾用 SAFE_BUILTIN_AGENTS 把非 general/explore 的
+ * worker_type 强制降级为 general，导致 8/10 模板的 archgate/implement/
+ * verify/review/patcher 流水线语义全部丢失（声称的流水线实际全是 general）。
+ *
+ * 现在透传 worker_type。启动期由 validateWorkerTypes (core-start.ts) 做
+ * fail-fast 校验——若用户未注册对应 agent，dagworker start 会返回明确
+ * 错误并列出已注册 agent 名，而非静默降级。
+ *
+ * SAFE_BUILTIN_AGENTS 仅保留给 product-e2e-harness 这类明确只用内置
+ * agent 的 dogfood 模板做显式标注（不再用于降级），其他模板直接声明
+ * 真实 agent。
+ */
 function mkNode(
   id: string,
   workerType: string,
@@ -81,14 +94,13 @@ function mkNode(
   prompt: string,
   required = true,
 ): DAGNodeConfig {
-  const resolved = SAFE_BUILTIN_AGENTS.has(workerType) ? workerType : "general"
   return {
     id,
     name: id,
     dependencies: deps,
     required,
-    worker_type: resolved,
-    worker_config: { agent: resolved, prompt },
+    worker_type: workerType,
+    worker_config: { agent: workerType, prompt },
   }
 }
 
@@ -127,9 +139,9 @@ const productDocAnalysis: DAGTemplate = {
 const architectureDesign: DAGTemplate = {
   id: "architecture-design",
   name: "Architecture Design",
-  description: "Architecture gate review followed by implementation (general pipeline).",
+  description: "Architecture gate review followed by implementation (archgate → implement pipeline).",
   tags: ["arch", "design", "implement"],
-  requiredAgents: ["general"],
+  requiredAgents: ["archgate", "implement"],
   create(input) {
     return {
       name: "architecture-design",
@@ -155,9 +167,9 @@ const architectureDesign: DAGTemplate = {
 const interfaceDesign: DAGTemplate = {
   id: "interface-design",
   name: "Interface Design",
-  description: "Architecture gate, interface implementation, and verification (general pipeline).",
+  description: "Architecture gate, interface implementation, and verification (archgate → implement → verify pipeline).",
   tags: ["arch", "interfaces", "tdd"],
-  requiredAgents: ["general"],
+  requiredAgents: ["archgate", "implement", "verify"],
   create(input) {
     return {
       name: "interface-design",
@@ -189,9 +201,9 @@ const interfaceDesign: DAGTemplate = {
 const tddImplementationAndCoverage: DAGTemplate = {
   id: "tdd-implementation-and-coverage",
   name: "TDD Implementation & Coverage",
-  description: "Implement interfaces + tests, then implementation, then verify (general pipeline).",
+  description: "Implement interfaces + tests, then implementation, then verify (implement → implement → verify pipeline).",
   tags: ["tdd", "implement", "verify"],
-  requiredAgents: ["general"],
+  requiredAgents: ["implement", "verify"],
   create(input) {
     return {
       name: "tdd-implementation-and-coverage",
@@ -223,9 +235,9 @@ const tddImplementationAndCoverage: DAGTemplate = {
 const designPatternReview: DAGTemplate = {
   id: "design-pattern-review",
   name: "Design Pattern Review",
-  description: "Architecture gate review followed by design-pattern review (general pipeline).",
+  description: "Architecture gate review followed by design-pattern review (archgate → review pipeline).",
   tags: ["arch", "review", "patterns"],
-  requiredAgents: ["general"],
+  requiredAgents: ["archgate", "review"],
   create(input) {
     return {
       name: "design-pattern-review",
@@ -251,9 +263,9 @@ const designPatternReview: DAGTemplate = {
 const responsibilityReview: DAGTemplate = {
   id: "responsibility-review",
   name: "Responsibility Review",
-  description: "Architecture gate review followed by responsibility/separation review.",
+  description: "Architecture gate review followed by responsibility/separation review (archgate → review pipeline).",
   tags: ["arch", "review", "srp"],
-  requiredAgents: ["general"],
+  requiredAgents: ["archgate", "review"],
   create(input) {
     return {
       name: "responsibility-review",
@@ -279,9 +291,9 @@ const responsibilityReview: DAGTemplate = {
 const patcherAssembly: DAGTemplate = {
   id: "patcher-assembly",
   name: "Patcher Assembly",
-  description: "Single-node general workflow producing a consolidated diff patch.",
+  description: "Single-node workflow producing a consolidated diff patch (patcher agent).",
   tags: ["patcher", "diff"],
-  requiredAgents: ["general"],
+  requiredAgents: ["patcher"],
   create(input) {
     return {
       name: "patcher-assembly",
@@ -301,9 +313,9 @@ const patcherAssembly: DAGTemplate = {
 const comprehensiveReview: DAGTemplate = {
   id: "comprehensive-review",
   name: "Comprehensive Review",
-  description: "General pipeline for full-spectrum code review.",
+  description: "Full-spectrum code review pipeline (verify → review → archgate).",
   tags: ["verify", "review", "arch"],
-  requiredAgents: ["general"],
+  requiredAgents: ["verify", "review", "archgate"],
   create(input) {
     return {
       name: "comprehensive-review",
@@ -335,9 +347,9 @@ const comprehensiveReview: DAGTemplate = {
 const integrationTest: DAGTemplate = {
   id: "integration-test",
   name: "Integration Test",
-  description: "Single-node general workflow that runs integration tests.",
+  description: "Single-node workflow that runs integration tests (verify agent).",
   tags: ["verify", "tests", "integration"],
-  requiredAgents: ["general"],
+  requiredAgents: ["verify"],
   create(input) {
     return {
       name: "integration-test",

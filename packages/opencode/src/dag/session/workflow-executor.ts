@@ -17,8 +17,23 @@ const log = Log.create({ service: "dag.executor" })
 const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000
 
 /**
+ * A2 fix: polling interval.
+ *
+ * Historical bug: executor polled every 100ms, causing ~600 scheduleReadyNodes
+ * calls per minute (each doing a full listNodes scan). Since handleNodeCompletion
+ * and handleNodeFailure already call scheduleReadyNodes on the event path, the
+ * 100ms poll was redundant ~99% of the time — pure busy-waiting.
+ *
+ * Now polls every 5s as a SAFETY-NET only (catches edge cases where an
+ * event-driven schedule was missed, e.g. a bug in a completion callback).
+ * Normal operation is event-driven; this poll just guarantees forward progress
+ * even if an event is dropped. 5s × listNodes is ~600x cheaper than 100ms.
+ */
+const SAFETY_POLL_INTERVAL_MS = 5000
+
+/**
  * DAG 工作流执行器接口
- * 
+ *
  * 负责协调工作流的整体执行生命周期：
  * - 监控工作流状态
  * - 调度和执行就绪节点
@@ -27,19 +42,19 @@ const DEFAULT_MAX_RUNTIME_MS = 10 * 60 * 1000
  */
 export interface WorkflowExecutor {
   /**
-    * 启动工作流执行
-    */
+   * 启动工作流执行
+   */
   start(workflowId: string): Effect.Effect<void, never, never>
-  
+
   /**
-    * 获取当前工作流状态
-    */
+   * 获取当前工作流状态
+   */
   getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never>
 }
 
 /**
  * 创建 WorkflowExecutor 实例
- * 
+ *
  * 执行循环包含超时保护和 cancelled 检测：
  * - 超过 effectiveTimeout 自动中止（timeout_policy='fail'）或通知（timeout_policy='notify'）
  * - 工作流状态变为 cancelled 立即退出
@@ -53,6 +68,10 @@ export interface WorkflowExecutor {
  * - 'notify' = 超时后不 cancel，向 parent session 注入通知消息，工作流保持 running。
  *   notify 模式下，执行器超时后退出轮询循环（停止主动调度），但工作流状态不变，
  *   仍可被 agent 通过 dagworker pause/cancel/replan 手动控制。
+ *
+ * A2 fix: 轮询频率从 100ms 降到 5s（SAFETY_POLL_INTERVAL_MS）。主调度路径是
+ * 事件驱动（handleNodeCompletion/Failure 内部调用 scheduleReadyNodes），
+ * 此处的轮询仅作为安全网兜底，确保即使事件遗漏也不会永久卡死。
  */
 export function createWorkflowExecutor(
   engine: WorkflowEngine,
@@ -77,7 +96,7 @@ export function createWorkflowExecutor(
       return Effect.gen(function* () {
         const startedAt = Date.now()
         let timeoutNotified = false
-        
+
         while (true) {
           // Timeout guard
           if (Date.now() - startedAt > effectiveTimeout) {
@@ -99,20 +118,24 @@ export function createWorkflowExecutor(
               break
             }
           }
-          
+
           const status = yield* engine.getWorkflowStatus(workflowId)
-          
+
           // Terminal state check: completed / failed / cancelled
           if (status.status === "completed" || status.status === "failed" || status.status === "cancelled") {
             break
           }
-          
+
+          // A2: safety-net schedule. Primary scheduling is event-driven
+          // (handleNodeCompletion/Failure call scheduleReadyNodes). This poll
+          // only catches missed events. Redundant calls are idempotent
+          // (spawnedNodes.has guard in scheduleReadyNodes).
           yield* engine.scheduleReadyNodes(workflowId)
-          yield* Effect.sleep(100)
+          yield* Effect.sleep(SAFETY_POLL_INTERVAL_MS)
         }
       }).pipe(Effect.ensuring(Effect.sync(() => unregisterEngine(workflowId))))
     },
-    
+
     getStatus(workflowId: string): Effect.Effect<WorkflowStatusSnapshot, never> {
       return engine.getWorkflowStatus(workflowId)
     },

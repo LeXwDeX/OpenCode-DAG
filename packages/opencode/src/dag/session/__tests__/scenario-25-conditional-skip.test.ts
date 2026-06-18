@@ -167,6 +167,15 @@ describe("WP-B3: Conditional skip + downstream cascade", () => {
       value: "yes",
     })
 
+    // D1 fix: violation details now include runtime evaluation snapshot.
+    // Users can see the actual ref_node output ("no") and the declared value
+    // ("yes") that caused the condition to evaluate false — no need to
+    // cross-reference node_log to diagnose why B was skipped.
+    expect((condViolation!.details as Record<string, unknown>)["ref_node_id"]).toBe("A")
+    expect((condViolation!.details as Record<string, unknown>)["ref_node_output"]).toBe("no")
+    expect((condViolation!.details as Record<string, unknown>)["declared_value"]).toBe("yes")
+    expect((condViolation!.details as Record<string, unknown>)["evaluated_result"]).toBe(false)
+
     // Log: condition_skip executionPhase
     const logs = Effect.runSync(service.listNodeLogs(`${wid}::B`))
     const condLogs = logs.filter((l) => l.execution_phase === "condition_skip")

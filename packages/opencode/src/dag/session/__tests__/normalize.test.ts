@@ -237,3 +237,80 @@ describe("normalizeDagConfig — 模拟真实 LLM 失败模式", () => {
     }
   })
 })
+
+// ============================================================================
+// C3 fix: timeout_ms 值域校验
+// 历史 bug：normalize 透传 timeout_ms 但不校验，timeout_ms:0 会立即触发超时，
+// 负数行为未定义。现在拒绝 0/负数/非整数/NaN。
+// ============================================================================
+describe("normalizeDagConfig — timeout_ms 值域校验 (C3)", () => {
+  const baseNode = {
+    id: "a", name: "A", worker_type: "general", worker_config: { prompt: "x" },
+  }
+
+  it("节点级 timeout_ms = 0 → 拒绝", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [{ ...baseNode, timeout_ms: 0 }],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.join("\n")).toContain("timeout_ms")
+  })
+
+  it("节点级 timeout_ms = -1 → 拒绝", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [{ ...baseNode, timeout_ms: -1 }],
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  it("节点级 timeout_ms = 1.5 (非整数) → 拒绝", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [{ ...baseNode, timeout_ms: 1.5 }],
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  it("节点级 timeout_ms = NaN → 拒绝", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [{ ...baseNode, timeout_ms: NaN }],
+    })
+    expect(r.ok).toBe(false)
+  })
+
+  it("节点级 timeout_ms = 30000 (正整数) → 通过", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [{ ...baseNode, timeout_ms: 30000 }],
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.config.nodes[0].timeout_ms).toBe(30000)
+  })
+
+  it("工作流级 timeout_ms = 0 → 拒绝", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1, timeout_ms: 0,
+      nodes: [baseNode],
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.join("\n")).toContain("workflow")
+  })
+
+  it("工作流级 timeout_ms 缺省 → 通过（不写字段）", () => {
+    const r = normalizeDagConfig({
+      name: "wf", max_concurrency: 1,
+      nodes: [baseNode],
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(r.config.timeout_ms).toBeUndefined()
+  })
+
+  it("normalizeDagNode (replan add_nodes) timeout_ms = 0 → 拒绝", () => {
+    const r = normalizeDagNode({ ...baseNode, timeout_ms: 0 }, 0)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.errors.join("\n")).toContain("timeout_ms")
+  })
+})

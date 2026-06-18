@@ -45,7 +45,7 @@ One permitted reversal: **retry**. When `retry.max_attempts > 1` and attempt fai
 | `cancel` | Abort a running workflow. |
 | `pause` | Pause a running workflow; running nodes continue and new nodes are not scheduled. |
 | `resume` | Resume a paused workflow and schedule ready nodes. |
-| `list` | See every workflow spawned in the lifetime of this process. |
+| `list` | See every workflow persisted in the database (includes workflows from previous process lifetimes). |
 | `replan` | Restructure a running workflow's tail; keeps frozen nodes immutable, recoverable nodes are removable, and writes one audit row. |
 | `template_list` | List built-in workflow templates. |
 | `template_show` | Render a built-in template with input without starting it. |

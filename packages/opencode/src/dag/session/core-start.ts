@@ -259,6 +259,33 @@ export const bootstrapWorkflowFromConfig = (args: {
     // Step 2: fail-fast worker_type validation (in core — single source).
     yield* validateWorkerTypes(agentService, dagConfig.nodes)
 
+    // Step 2.5 (C2 fix): fail-fast failure_handler.agent validation.
+    // validateFailureHandler (limits.ts) only checks the agent field is a
+    // non-empty string — it does NOT verify the agent exists in the registry.
+    // Previously this surfaced at runtime inside handleNodeFailure (workflow-
+    // engine.ts), AFTER the workflow had already been paused, forcing an
+    // awkward cascade fallback. Now we fail at startup alongside worker_type
+    // validation, giving the user an actionable error before any node runs.
+    const failureHandler = dagConfig.failure_handler
+    if (failureHandler?.enabled && typeof failureHandler.agent === "string") {
+      const diagAgent = yield* agentService.get(failureHandler.agent).pipe(
+        Effect.catchCause(() => Effect.succeed(undefined)),
+      )
+      if (!diagAgent) {
+        const registered = yield* agentService.list().pipe(
+          Effect.catchCause(() => Effect.succeed([] as Agent.Info[])),
+        )
+        const names = registered.map((a) => a.name).sort()
+        return yield* Effect.fail(
+          new Error(
+            `failure_handler.agent '${failureHandler.agent}' is not a registered agent. ` +
+            `Currently registered agents: ${names.length ? names.join(", ") : "<none>"}. ` +
+            `Register the agent in opencode.json agent.* or set a valid agent name.`,
+          ),
+        )
+      }
+    }
+
     // Step 3: DB createWorkflow row (iron law #4: persist first).
     const workflow = yield* dagSessionService.createWorkflow({
       chatSessionId,

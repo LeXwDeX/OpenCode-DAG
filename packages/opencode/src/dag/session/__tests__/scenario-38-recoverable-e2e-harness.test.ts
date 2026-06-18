@@ -342,15 +342,23 @@ describe("Scenario 38: WP6 recoverable E2E harness", () => {
     expect(changeDetails.removed).toContain(nodeIdB)
     expect(changeDetails.removed).toContain(nodeIdC)
 
-    // ASSERT: WP1 notification NEVER triggered throughout the entire flow
-    const allNotifyCalls = mockPromptOps.promptCalls.filter(
-      (c) => c.sessionID === parentSessionID && c.noReply === true,
+    // ASSERT: WP1 FAILURE notification NEVER triggered throughout the entire flow.
+    // B3 fix: workflow converged to completed, so a completion notification IS
+    // expected (notifyParentOfCompletion). The assertion must distinguish failure
+    // notifications (dag_workflow_failed) from completion notifications
+    // (dag_workflow_completed) — only the failure kind must be absent here.
+    const failureNotifyCalls = mockPromptOps.promptCalls.filter(
+      (c) => c.sessionID === parentSessionID && c.noReply === true &&
+        c.parts.some((p) => p.type === "text" && (p as { text?: string }).text?.includes("dag_workflow_failed")),
     )
-    expect(allNotifyCalls.length).toBe(0)
-    const allLoopCalls = mockPromptOps.loopCalls.filter(
-      (c) => c.sessionID === parentSessionID,
+    expect(failureNotifyCalls.length).toBe(0)
+
+    // Completion notification is expected and acceptable (B3 symmetric behavior).
+    const completionNotifyCalls = mockPromptOps.promptCalls.filter(
+      (c) => c.sessionID === parentSessionID && c.noReply === true &&
+        c.parts.some((p) => p.type === "text" && (p as { text?: string }).text?.includes("dag_workflow_completed")),
     )
-    expect(allLoopCalls.length).toBe(0)
+    expect(completionNotifyCalls.length).toBeLessThanOrEqual(1)
   })
 
   // --------------------------------------------------------------------------

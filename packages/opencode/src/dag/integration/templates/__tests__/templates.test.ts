@@ -232,24 +232,40 @@ describe("DAG Template Registry", () => {
     })
   })
 
-  describe("WP2-A: mkNode fallback to SAFE_BUILTIN_AGENTS", () => {
-    it("all template instances only use general or explore worker_types", () => {
+  describe("B1 fix: mkNode transparently passes worker_type (no silent downgrade)", () => {
+    // 历史 bug：mkNode 曾把非 general/explore 的 worker_type 降级为 general，
+    // 导致模板的 archgate/implement/verify/review/patcher 流水线语义丢失。
+    // 现在透传——requiredAgents 声明的 agent 必须真实出现在节点 worker_type 中。
+
+    it("no template node is silently downgraded to general unless it declared general", () => {
       for (const id of DAG_TEMPLATE_IDS) {
         const templ = getDAGTemplate(id)
         if (!templ) continue
         const cfg = templ.create({ goal: "test" })
         for (const node of cfg.nodes) {
-          expect(["general", "explore"]).toContain(node.worker_type)
+          // worker_type 必须出现在模板声明的 requiredAgents 里
+          expect(
+            templ.requiredAgents,
+            `template ${id} node ${node.id} worker_type=${node.worker_type} not in requiredAgents ${JSON.stringify(templ.requiredAgents)}`,
+          ).toContain(node.worker_type)
         }
       }
     })
 
-    it("all requiredAgents only contain general or explore", () => {
-      for (const templ of listDAGTemplates()) {
-        for (const agent of templ.requiredAgents) {
-          expect(["general", "explore"]).toContain(agent)
-        }
-      }
+    it("templates that declare specialized agents actually use them (not all general)", () => {
+      // architecture-design 声明 archgate+implement，节点必须包含这两个
+      const arch = getDAGTemplate("architecture-design")!
+      const archCfg = arch.create({ goal: "test" })
+      const archWorkerTypes = new Set(archCfg.nodes.map((n) => n.worker_type))
+      expect(archWorkerTypes.has("archgate")).toBe(true)
+      expect(archWorkerTypes.has("implement")).toBe(true)
+
+      // tdd-implementation-and-coverage 声明 implement+verify
+      const tdd = getDAGTemplate("tdd-implementation-and-coverage")!
+      const tddCfg = tdd.create({ goal: "test" })
+      const tddWorkerTypes = new Set(tddCfg.nodes.map((n) => n.worker_type))
+      expect(tddWorkerTypes.has("implement")).toBe(true)
+      expect(tddWorkerTypes.has("verify")).toBe(true)
     })
 
     it("product-doc-analysis preserves explore worker_type", () => {
@@ -257,6 +273,20 @@ describe("DAG Template Registry", () => {
       if (!templ) throw new Error("template not found")
       const cfg = templ.create({ goal: "test" })
       expect(cfg.nodes[0].worker_type).toBe("explore")
+    })
+
+    it("requiredAgents is non-empty and every declared agent is actually used by some node", () => {
+      for (const templ of listDAGTemplates()) {
+        expect(templ.requiredAgents.length, `template ${templ.id}`).toBeGreaterThan(0)
+        const cfg = templ.create({ goal: "test" })
+        const usedWorkerTypes = new Set(cfg.nodes.map((n) => n.worker_type))
+        for (const declared of templ.requiredAgents) {
+          expect(
+            usedWorkerTypes.has(declared),
+            `template ${templ.id} declared agent '${declared}' not used by any node`,
+          ).toBe(true)
+        }
+      }
     })
   })
 

@@ -235,9 +235,9 @@ describe("Scenario 35: DAG workflow failure notification to parent session", () 
   })
 
   // --------------------------------------------------------------------------
-  // (c) workflow completed → no notification
+  // (c) workflow completed → completion notification (B3 fix: symmetric with failure)
   // --------------------------------------------------------------------------
-  it("(c) workflow completed → no notification", () => {
+  it("(c) workflow completed → completion notification", () => {
     const { workflowId, workflow } = setupWorkflow(service, "test-35c", [
       { id: "a", deps: [], required: true },
     ])
@@ -254,9 +254,16 @@ describe("Scenario 35: DAG workflow failure notification to parent session", () 
     const wf = Effect.runSync(service.getWorkflow(workflowId)) as DAGWorkflowSession
     expect(wf.status).toBe("completed")
 
-    // Verify NO notification was sent to parent
+    // B3 fix: completion now emits a symmetric notification (was: no notification)
     const notifyCalls = mockPromptOps.promptCalls.filter((c) => c.sessionID === parentSessionID && c.noReply === true)
-    expect(notifyCalls.length).toBe(0)
+    expect(notifyCalls.length).toBe(1)
+    const textPart = notifyCalls[0].parts.find((p) => p.type === "text")
+    expect(textPart!.text).toContain("dag_workflow_completed")
+    expect(textPart!.text).toContain("completed successfully")
+
+    // parent is idle (default mock) → loop reactivated, mirrors failure path (a)
+    const loopForParent = mockPromptOps.loopCalls.filter((c) => c.sessionID === parentSessionID)
+    expect(loopForParent.length).toBe(1)
   })
 
   // --------------------------------------------------------------------------

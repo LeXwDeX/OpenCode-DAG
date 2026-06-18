@@ -1299,3 +1299,89 @@ describe('getWorkflow — node_sessions and violations populated', () => {
     Database.Client.reset()
   })
 })
+
+// ============================================================================
+// C1 fix: retry 默认值一致性 + delay_ms 不再是死字段
+// 历史 bug：
+//   1. session-service.createNode 默认 max_retries ?? 3，但 core-start.ts 传
+//      cfg.retry?.max_attempts ?? 0——两个创建路径默认值不一致。
+//   2. types.ts 声明 retry.delay_ms 但全代码库无消费点。
+// 修复：
+//   1. createNode 默认 max_retries 统一为 0（显式优于隐式）。
+//   2. workflow-engine retry 循环消费 delay_ms（Effect.sleep）。
+// ============================================================================
+describe('C1 fix: createNode default max_retries consistency', () => {
+  it('createNode without maxRetries defaults to 0 (was 3)', () => {
+    const Flag = require('@opencode-ai/core/flag/flag').Flag
+    const Database = require('@/storage/db')
+    const { DAGSessionService } = require('../session-service')
+    const { Effect } = require('effect')
+
+    const originalDb = Flag.OPENCODE_DB
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+
+    const service = Effect.runSync(DAGSessionService.make)
+    const workflow = Effect.runSync(service.createWorkflow({
+      name: 'c1-default-retry',
+      chatSessionId: 'session-c1-default',
+      config: { name: 'c1', nodes: [], max_concurrency: 1 },
+    }))
+
+    // 不传 maxRetries → 应该默认 0（之前是 3）
+    const node = Effect.runSync(service.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::node-A`,
+      name: 'node-A',
+      nodeName: 'node-A',
+      nodeType: 'mock',
+      config: {
+        id: 'node-A', name: 'node-A', dependencies: [], required: true,
+        worker_type: 'mock', worker_config: {},
+      },
+    }))
+
+    expect(node.max_retries).toBe(0)
+
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb ?? undefined
+    Database.Client.reset()
+  })
+
+  it('createNode with explicit maxRetries is respected', () => {
+    const Flag = require('@opencode-ai/core/flag/flag').Flag
+    const Database = require('@/storage/db')
+    const { DAGSessionService } = require('../session-service')
+    const { Effect } = require('effect')
+
+    const originalDb = Flag.OPENCODE_DB
+    Flag.OPENCODE_DB = ':memory:'
+    Database.Client.reset()
+
+    const service = Effect.runSync(DAGSessionService.make)
+    const workflow = Effect.runSync(service.createWorkflow({
+      name: 'c1-explicit-retry',
+      chatSessionId: 'session-c1-explicit',
+      config: { name: 'c1', nodes: [], max_concurrency: 1 },
+    }))
+
+    const node = Effect.runSync(service.createNode({
+      workflowId: workflow.id,
+      nodeId: `${workflow.id}::node-A`,
+      name: 'node-A',
+      nodeName: 'node-A',
+      nodeType: 'mock',
+      config: {
+        id: 'node-A', name: 'node-A', dependencies: [], required: true,
+        worker_type: 'mock', worker_config: {},
+      },
+      maxRetries: 5,
+    }))
+
+    expect(node.max_retries).toBe(5)
+
+    try { Database.close() } catch { /* ignore */ }
+    Flag.OPENCODE_DB = originalDb ?? undefined
+    Database.Client.reset()
+  })
+})

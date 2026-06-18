@@ -954,20 +954,29 @@ const make = Effect.gen(function* () {
 
       while (attempt <= maxRetries && !promptSuccess) {
         if (attempt > 0) {
+          // C1 fix: implement retry.delay_ms (was a dead field — declared in
+          // types.ts but never consumed). Sleep before retry to avoid hammering
+          // the LLM provider on transient errors. Configured via
+          // node.config.retry.delay_ms; default 0 preserves backward-compatible
+          // immediate retry when delay_ms is unset.
+          const retryDelayMs = node.config.retry?.delay_ms ?? 0
+          if (retryDelayMs > 0) {
+            yield* Effect.sleep(retryDelayMs)
+          }
           yield* sessionService.incrementRetryCount(node.node_id).pipe(
             Effect.tapError((err) => Effect.logWarning(`[DAG] incrementRetryCount failed: ${err}`)),
             Effect.ignore
           )
-          yield* Effect.logWarning(`[DAG] retrying node ${node.node_id}, attempt ${attempt + 1}/${maxRetries + 1}`)
+          yield* Effect.logWarning(`[DAG] retrying node ${node.node_id}, attempt ${attempt + 1}/${maxRetries + 1}${retryDelayMs > 0 ? ` (after ${retryDelayMs}ms delay)` : ""}`)
           // #7 retry_attempt
           yield* safeAppendLog({
             nodeId: node.node_id,
             workflowId,
             chatSessionId: workflow.chat_session_id,
             logLevel: 'debug',
-            logMessage: `Retry attempt ${attempt + 1}/${maxRetries + 1} for node ${node.node_id}`,
+            logMessage: `Retry attempt ${attempt + 1}/${maxRetries + 1} for node ${node.node_id}${retryDelayMs > 0 ? ` (after ${retryDelayMs}ms delay)` : ""}`,
             executionPhase: 'retry_attempt',
-            logData: { attempt: attempt + 1, max_retries: maxRetries },
+            logData: { attempt: attempt + 1, max_retries: maxRetries, delay_ms: retryDelayMs },
           })
         }
         
@@ -1234,6 +1243,22 @@ const make = Effect.gen(function* () {
           failedNodes: failedNodeIds,
         })
       }
+
+      // B3: Symmetric notification on successful completion. Previously only
+      // failure emitted a synthetic message to the parent session, forcing
+      // users (and the parent LLM agent) to poll status to learn that a DAG
+      // finished. Now completion is announced too, mirroring notifyParentOfFailure.
+      if (targetStatus === "completed" && workflow.chat_session_id) {
+        const completedNodeCount = allNodes.filter(
+          (n: DAGNodeSession) => n.status === "completed",
+        ).length
+        yield* notifyParentOfCompletion({
+          workflowId,
+          chatSessionId: workflow.chat_session_id,
+          completedNodeCount,
+          totalNodeCount: allNodes.length,
+        })
+      }
     }).pipe(Effect.catchCause(() => Effect.void))
 
   // ============================================================================
@@ -1304,6 +1329,13 @@ const make = Effect.gen(function* () {
         )
 
         // 2. Audit: violation record with condition_skipped type + condition details
+        //    D1 fix: include runtime evaluation context (ref_node actual output
+        //    snapshot + extracted value) so users can see WHY the condition was
+        //    false, not just the config. Previously details only had the
+        //    condition config, forcing users to cross-reference node_log to
+        //    diagnose why a node was skipped.
+        const skipCond = skipNode.config.condition
+        const refNodeOutput = skipCond ? outputMap.get(skipCond.ref_node) : undefined
         yield* sessionService.createViolation({
           workflowId,
           nodeId: skipNode.node_id,
@@ -1313,6 +1345,11 @@ const make = Effect.gen(function* () {
           details: {
             trigger: 'condition_false',
             condition: skipNode.config.condition,
+            // D1: runtime evaluation snapshot for diagnosis
+            ref_node_id: skipCond?.ref_node,
+            ref_node_output: truncateForAudit(refNodeOutput),
+            declared_value: skipCond?.value,
+            evaluated_result: false,
           },
           chatSessionId: wfForSkipLog?.chat_session_id,
         }).pipe(
@@ -1578,6 +1615,69 @@ const make = Effect.gen(function* () {
             dag_failed_nodes: [...input.failedNodes],
             dag_reason: "terminal_failure",
             dag_trigger_reason: "exec_failed",
+          },
+        }],
+      }).pipe(Effect.ignore)
+
+      // 2. Only wake the parent when it's idle (no active user turn to interrupt).
+      if (parentStatus.type === "idle") {
+        yield* _promptOps.loop({ sessionID: parentSessionID })
+          .pipe(Effect.forkDetach, Effect.ignore)
+      }
+    }).pipe(Effect.catchCause(() => Effect.void))
+
+  /**
+   * notifyParentOfCompletion — DAG workflow 成功完成时通知父 session。
+   *
+   * 对称于 notifyParentOfFailure（B3 修复：消除成功/失败通知不对称）。
+   *
+   * Wake strategy（与 notifyParentOfFailure 一致）:
+   * - busy: 仅注入消息到 history（不打断用户 turn）
+   * - idle: 注入消息 + ops.loop 唤醒主 LLM session 主动回应
+   *
+   * Best-effort: 任何内部失败静默忽略，避免影响 DAG engine。
+   * 必须在 maybeFinalizeWorkflow 内 targetStatus === "completed" 成功后调用。
+   * 由 maybeFinalizeWorkflow 现有 terminal guard 保证幂等。
+   *
+   * Not exported — module-internal helper (closure-scoped to make()).
+   */
+  const notifyParentOfCompletion = (input: {
+    workflowId: string
+    chatSessionId: string
+    completedNodeCount: number
+    totalNodeCount: number
+  }): Effect.Effect<void, never, never> =>
+    Effect.gen(function* () {
+      if (!capturedSessionStatus || !_promptOps) return
+
+      const parentSessionID = input.chatSessionId as SessionID
+      const parentStatus = yield* capturedSessionStatus.get(parentSessionID).pipe(
+        Effect.catchCause(() => Effect.succeed({ type: "busy" } as const as SessionStatus.Info)),
+      )
+
+      const text = [
+        `<dag_workflow_completed workflow_id="${input.workflowId}">`,
+        `DAG workflow ${input.workflowId} has completed successfully.`,
+        `Completed nodes: ${input.completedNodeCount}/${input.totalNodeCount}`,
+        `Use dagworker status or node_detail to inspect outputs of any node.`,
+        `</dag_workflow_completed>`,
+      ].join("\n")
+
+      // 1. Inject synthetic message into parent session history (noReply: true).
+      yield* _promptOps.prompt({
+        sessionID: parentSessionID,
+        noReply: true,
+        agent: "main",
+        parts: [{
+          type: "text",
+          synthetic: true,
+          text,
+          metadata: {
+            dag_workflow_id: input.workflowId,
+            dag_event: "workflow_completed",
+            dag_completed_nodes: input.completedNodeCount,
+            dag_total_nodes: input.totalNodeCount,
+            dag_reason: "terminal_success",
           },
         }],
       }).pipe(Effect.ignore)
@@ -2420,4 +2520,34 @@ function resolveNodeModel(
 
     return undefined
   })
+}
+
+/**
+ * D1 helper: truncate upstream output for inclusion in audit records.
+ *
+ * Condition-skip violations now include a snapshot of the ref_node's actual
+ * output so users can diagnose why a condition evaluated to false. Raw outputs
+ * can be large (LLM-generated text), so we cap at 500 chars for strings and
+ * 1 level of object keys for structured data — enough to diagnose, small
+ * enough not to bloat the violation table.
+ */
+const AUDIT_OUTPUT_MAX_CHARS = 500
+function truncateForAudit(value: unknown): unknown {
+  if (value === undefined || value === null) return value
+  if (typeof value === "string") {
+    return value.length > AUDIT_OUTPUT_MAX_CHARS
+      ? value.slice(0, AUDIT_OUTPUT_MAX_CHARS) + "...[truncated]"
+      : value
+  }
+  if (typeof value === "number" || typeof value === "boolean") return value
+  // For objects/arrays, attempt a JSON string truncation (covers large nested
+  // structures). If serialization fails, return a type marker.
+  try {
+    const json = JSON.stringify(value)
+    return json.length > AUDIT_OUTPUT_MAX_CHARS
+      ? json.slice(0, AUDIT_OUTPUT_MAX_CHARS) + "...[truncated]"
+      : value
+  } catch {
+    return `[unserializable ${typeof value}]`
+  }
 }

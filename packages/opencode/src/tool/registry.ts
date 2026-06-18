@@ -348,6 +348,17 @@ export const layer: Layer.Layer<
         if (tool.id === ApplyPatchTool.id) return usePatch
         if (tool.id === EditTool.id || tool.id === WriteTool.id) return !usePatch
 
+        // B2 fix: dagworker is an orchestration tool for starting/managing DAG
+        // workflows. Subagents (mode === "subagent") are task executors invoked
+        // BY the orchestrator — they must not spawn nested DAGs or pollute their
+        // tool context with ~30 lines of DAG tool description. Only primary/all
+        // agents receive dagworker. node_complete stays available to all agents
+        // (its description is unambiguous and the engine no-ops safely when
+        // called outside a DAG node context).
+        if (tool.id === DAGWorkerTool.id) {
+          return input.agent.mode !== "subagent"
+        }
+
         return true
       })
 
