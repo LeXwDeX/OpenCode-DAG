@@ -44,6 +44,9 @@ const EXPECTED_IDS = [
   "comprehensive-review",
   "integration-test",
   "product-e2e-harness",
+  "adversarial-code-review",
+  "multi-solution-design",
+  "two-phase-audit",
 ] as const
 
 const DEFAULT_INPUT: DAGTemplateInput = {
@@ -85,16 +88,16 @@ function hasCycle(nodes: { id: string; dependencies: string[] }[]): boolean {
 
 describe("DAG Template Registry", () => {
   describe("template catalogue", () => {
-    it("exposes exactly 10 template ids", () => {
-      expect(DAG_TEMPLATE_IDS.length).toBe(10)
+    it(`exposes exactly ${EXPECTED_IDS.length} template ids`, () => {
+      expect(DAG_TEMPLATE_IDS.length).toBe(EXPECTED_IDS.length)
     })
 
     it("template ids match the expected set", () => {
       expect([...DAG_TEMPLATE_IDS].sort()).toEqual([...EXPECTED_IDS].sort())
     })
 
-    it("listDAGTemplates returns 10 templates", () => {
-      expect(listDAGTemplates()).toHaveLength(10)
+    it(`listDAGTemplates returns ${EXPECTED_IDS.length} templates`, () => {
+      expect(listDAGTemplates()).toHaveLength(EXPECTED_IDS.length)
     })
 
     it("getDAGTemplate returns undefined for unknown ids", () => {
@@ -210,6 +213,44 @@ describe("DAG Template Registry", () => {
       for (const { t, cfg } of cases) {
         const result = validator.validate(cfg)
         expect(result.errors.length, `template ${t.id}`).toBe(0)
+      }
+    })
+
+    it("every input_mapping.ref_node is in that node's dependencies", () => {
+      // Regression guard: a node whose prompt consumes an upstream output via
+      // input_mapping MUST declare that upstream in `dependencies`. Otherwise
+      // collectInputMapping() silently marks the entry `__missing: 'beyond_deps'`
+      // and the node receives no data (it reads an empty block, the defect that
+      // hid in two-phase-audit's completeness-critic until manual review).
+      for (const { t, cfg } of cases) {
+        for (const n of cfg.nodes) {
+          if (!n.input_mapping) continue
+          const deps = new Set(n.dependencies)
+          for (const [inputKey, entry] of Object.entries(n.input_mapping)) {
+            expect(
+              deps.has(entry.ref_node),
+              `template ${t.id} node ${n.id} input_mapping.${inputKey}.ref_node='${entry.ref_node}' must be in dependencies [${[...deps].join(", ")}]`,
+            ).toBe(true)
+          }
+        }
+      }
+    })
+
+    it("every input_mapping.ref_node references an existing node id", () => {
+      // A ref_node pointing to an id that exists nowhere in the workflow is a
+      // dangling reference — even if declared in dependencies (which the test
+      // above checks), the referenced id itself must resolve to a real node.
+      for (const { t, cfg } of cases) {
+        const ids = new Set(cfg.nodes.map((n) => n.id))
+        for (const n of cfg.nodes) {
+          if (!n.input_mapping) continue
+          for (const [inputKey, entry] of Object.entries(n.input_mapping)) {
+            expect(
+              ids.has(entry.ref_node),
+              `template ${t.id} node ${n.id} input_mapping.${inputKey}.ref_node='${entry.ref_node}' does not exist in workflow`,
+            ).toBe(true)
+          }
+        }
       }
     })
   })
