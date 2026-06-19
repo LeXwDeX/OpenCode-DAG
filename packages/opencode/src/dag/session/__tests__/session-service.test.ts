@@ -37,7 +37,11 @@ import {
   buildSessionWorkflowEvent,
   buildSessionNodeEvent,
   setEventBus,
+  DAGSessionService,
 } from '../session-service';
+import { Effect } from 'effect';
+import { Flag } from '@opencode-ai/core/flag/flag';
+import * as Database from '@/storage/db';
 
 // ============================================================================
 // Test Helper: Build mock DAG config
@@ -1312,11 +1316,6 @@ describe('getWorkflow — node_sessions and violations populated', () => {
 // ============================================================================
 describe('C1 fix: createNode default max_retries consistency', () => {
   it('createNode without maxRetries defaults to 0 (was 3)', () => {
-    const Flag = require('@opencode-ai/core/flag/flag').Flag
-    const Database = require('@/storage/db')
-    const { DAGSessionService } = require('../session-service')
-    const { Effect } = require('effect')
-
     const originalDb = Flag.OPENCODE_DB
     Flag.OPENCODE_DB = ':memory:'
     Database.Client.reset()
@@ -1349,11 +1348,6 @@ describe('C1 fix: createNode default max_retries consistency', () => {
   })
 
   it('createNode with explicit maxRetries is respected', () => {
-    const Flag = require('@opencode-ai/core/flag/flag').Flag
-    const Database = require('@/storage/db')
-    const { DAGSessionService } = require('../session-service')
-    const { Effect } = require('effect')
-
     const originalDb = Flag.OPENCODE_DB
     Flag.OPENCODE_DB = ':memory:'
     Database.Client.reset()
