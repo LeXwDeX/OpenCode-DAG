@@ -53,3 +53,17 @@ export const GLYPH = {
   /** status icon: recoverable (~ = ASCII-safe, distinct from GLYPH.warning "!") */
   iconRecoverable: "~",
 } as const
+
+/**
+ * MAP_GLYPH — DAG Map 方块字符地图专用字符。
+ *
+ * 使用 Unicode Geometric Shapes 区字符以达到视觉紧凑效果。
+ * ● U+25CF 和 ○ U+25CB 在现代终端（Windows Terminal / iTerm2 / Kitty /
+ * Alacritty）均按 1 列渲染，与 Bun.stringWidth 返回一致。若某些 CJK 终端
+ * 渲染为 2 列导致错位，可回退到 GLYPH.barFill ("#") / GLYPH.barEmpty (".").
+ */
+export const MAP_GLYPH = {
+  solid: "●",   // U+25CF — 已运行/已完成节点
+  hollow: "○",  // U+25CB — 尚未运行节点
+  failed: "✗",  // U+2717 — 失败节点
+} as const

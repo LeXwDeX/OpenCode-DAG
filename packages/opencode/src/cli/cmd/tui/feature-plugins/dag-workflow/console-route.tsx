@@ -2,17 +2,16 @@
 /**
  * DAG Workflow 工作台 Console Route
  *
- * 三区布局：
- * - 顶部：[对话 | DAG Workflow] Tab 切换 + [Tree | ASCII DAG] 视图切换
+ * 四区布局：
+ * - 顶部：[对话 | DAG Workflow] 内部导航
  * - 左侧：workflow 历史列表（含搜索 + 状态过滤）
- * - 中间：进度条 + 节点树或 ASCII DAG（按 viewMode 切换）
+ * - 中间：进度条 → DAG Map → 控制栏 → 节点树
  * - 右下：选中节点详情 + 实时 ticker
  *
  * 架构约束：
  * - TUI 只读：任何写必须经 server API
  * - 通过 data.ts hooks 访问数据（禁止直接调 SDK）
  * - signals + event subscription（禁止 createResource）
- * - viewMode 通过 signal（不硬编码）
  */
 import type { TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { createEffect, createMemo, createSignal, ErrorBoundary, onCleanup, Show, type JSX } from "solid-js"
@@ -52,7 +51,7 @@ import {
   DagWorkflowRenderer,
   DagProgressBar,
 } from "./renderer"
-import { AsciiDag } from "./ascii-dag"
+import { DagMap } from "./dag-map"
 import { DetailPane } from "./detail-pane"
 import { ViolationsList } from "./violations-list"
 import { Sidebar } from "./sidebar"
@@ -71,8 +70,6 @@ const ROUTE = "dag-workflow"
  */
 export const DAG_SEARCH_MODE = "dag-search"
 
-type ViewMode = "tree" | "ascii-dag"
-
 export function DagErrorFallback(props: { error: unknown }): JSX.Element {
   const { theme } = useTheme()
   return (
@@ -84,10 +81,6 @@ export function DagErrorFallback(props: { error: unknown }): JSX.Element {
       </box>
     </box>
   )
-}
-
-function asciiDagAvailableWidth(width: number, wide: boolean): number {
-  return Math.max(8, width - (wide ? 80 : 4))
 }
 
 // ── Pure utility: convert raw dialog fields to a template input ──────────
@@ -163,7 +156,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     routeWorkflowId(routeParams()),
   )
   const [selectedNodeID, setSelectedNodeID] = createSignal<string | null>(null)
-  const [viewMode, setViewMode] = createSignal<ViewMode>("tree")
   const [focusPane, setFocusPane] = createSignal<"list" | "graph">("list")
   const [actionError, setActionError] = createSignal<string | null>(null)
   const [actionLoading, setActionLoading] = createSignal(false)
@@ -353,10 +345,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
     if (!id) return null
     return nodes().find((n) => n.node_id === id) ?? null
   })
-
-  function toggleView() {
-    setViewMode((v) => (v === "tree" ? "ascii-dag" : "tree"))
-  }
 
   async function pauseResume(action: "pause" | "resume", workflowId: string) {
     try {
@@ -714,7 +702,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
       { key: "return", desc: "Select / Enter sub-session", group: "DAG", cmd() { confirmSelection() } },
       { key: "/", desc: "Search workflows", group: "DAG", cmd() { focusSearch() } },
       { key: "<leader>p", desc: "Pause / resume workflow", group: "DAG", cmd() { togglePauseResume() } },
-      { key: "<leader>v", desc: "Toggle DAG view (tree/ASCII)", group: "DAG", cmd() { toggleView() } },
       { key: "[", desc: "Toggle sidebar (narrow)", group: "DAG", cmd() { if (!wide()) setSidebarExpanded((v) => !v) } },
       { key: "]", desc: "Toggle detail (narrow)", group: "DAG", cmd() { if (!wide()) setDetailExpanded((v) => !v) } },
     ],
@@ -798,18 +785,6 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
           </text>
         </box>
         <box flexDirection="row" gap={3}>
-          <text
-            fg={viewMode() === "tree" ? theme.text : theme.textMuted}
-            onMouseUp={() => setViewMode("tree")}
-          >
-            {viewMode() === "tree" ? <b>{i18n().t("view_tree")}</b> : i18n().t("view_tree")}
-          </text>
-          <text
-            fg={viewMode() === "ascii-dag" ? theme.text : theme.textMuted}
-            onMouseUp={() => setViewMode("ascii-dag")}
-          >
-            {viewMode() === "ascii-dag" ? <b>{i18n().t("view_ascii")}</b> : i18n().t("view_ascii")}
-          </text>
           <text fg={theme.textMuted} onMouseUp={goToSessionTab}>
             {i18n().t("esc_back")}
           </text>
@@ -890,6 +865,16 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   status={currentWorkflow()?.status ?? "pending"}
                   stats={workflowStats()}
                 />
+                <DagMap
+                  lang={i18n().lang}
+                  nodes={nodes()}
+                  selectedNodeID={selectedNodeID() ?? undefined}
+                  onSelect={(id) => {
+                    setSelectedNodeID(id)
+                    if (!wide()) setDetailExpanded(true)
+                  }}
+                  maxHeight={12}
+                />
                 <ControlBar
                   lang={i18n().lang}
                   workflowId={currentWorkflowID()!}
@@ -897,34 +882,17 @@ export function ConsoleRoute(props: { api: TuiPluginApi }): JSX.Element {
                   onAction={(action) => handleControlAction(action, currentWorkflowID()!)}
                   actionLoading={actionLoading}
                 />
-                {/* 只保留 stickyScroll={false}：与 sticky 起始锚点同时声明会互相矛盾，曾致点击抖动（BUG-1） */}
                 <scrollbox flexGrow={1} minHeight={0} stickyScroll={false}>
-                  <Show
-                    when={viewMode() === "ascii-dag"}
-                    fallback={
-                      <DagWorkflowRenderer
-                        lang={i18n().lang}
-                        workflow={currentWorkflow()!}
-                        nodes={nodes()}
-                        selectedNodeId={selectedNodeID()}
-                        onNodeSelect={(nodeId) => {
-                          setSelectedNodeID(nodeId)
-                          if (!wide()) setDetailExpanded(true)
-                        }}
-                      />
-                    }
-                  >
-                    <AsciiDag
-                      lang={i18n().lang}
-                      nodes={nodes()}
-                      selectedNodeID={selectedNodeID() ?? undefined}
-                      availableWidth={asciiDagAvailableWidth(dimensions().width, wide())}
-                      onSelect={(id) => {
-                        setSelectedNodeID(id)
-                        if (!wide()) setDetailExpanded(true)
-                      }}
-                    />
-                  </Show>
+                  <DagWorkflowRenderer
+                    lang={i18n().lang}
+                    workflow={currentWorkflow()!}
+                    nodes={nodes()}
+                    selectedNodeId={selectedNodeID()}
+                    onNodeSelect={(nodeId) => {
+                      setSelectedNodeID(nodeId)
+                      if (!wide()) setDetailExpanded(true)
+                    }}
+                  />
                   <Show when={violations().length > 0}>
                     <ViolationsList lang={i18n().lang} violations={violations()} />
                   </Show>

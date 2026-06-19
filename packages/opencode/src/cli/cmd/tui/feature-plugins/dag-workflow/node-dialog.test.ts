@@ -117,8 +117,8 @@ describe("WP4 i18n — t() dict lookup", () => {
     node_enter_subsession: ["[Enter Sub-Session ->]", "[进入子会话 ->]"],
     action_close: ["[Close]", "[关闭]"],
     hint_hotkey_bar: [
-      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle View  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
-      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
+      "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
+      "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     ],
     label_focus: ["Focus:", "焦点："],
     focus_history: ["History", "列表"],
@@ -185,6 +185,8 @@ describe("WP4 i18n — t() dict lookup", () => {
     toast_create_error: ["Failed to create workflow", "创建工作流失败"],
     toast_action_error: ["Action failed", "操作失败"],
     recoverable_action_hint: ["Use dagworker replan to replace this node", "使用 dagworker replan 替换此节点"],
+    map_title: ["DAG Map", "DAG 地图"],
+    map_nodes: ["nodes", "个节点"],
   }
 
   for (const key of Object.keys(cases) as I18nKey[]) {

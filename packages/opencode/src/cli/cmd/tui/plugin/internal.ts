@@ -13,6 +13,7 @@ import SessionV2Debug from "../feature-plugins/system/session-v2"
 import WhichKey from "../feature-plugins/system/which-key"
 import DiffViewer from "../feature-plugins/system/diff-viewer"
 import DAGWorkflow from "../feature-plugins/dag-workflow/index"
+import SidebarDagMap from "../feature-plugins/dag-workflow/sidebar-map"
 import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -29,6 +30,7 @@ export function internalTuiPlugins(
     HomeFooter,
     HomeTips,
     SidebarContext,
+    SidebarDagMap,
     SidebarGoal,
     SidebarMcp,
     SidebarLsp,

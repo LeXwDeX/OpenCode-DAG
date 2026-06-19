@@ -57,7 +57,7 @@ export const DICT = {
     node_subsession_unavailable: "[Sub-session not available]",
     node_enter_subsession: "[Enter Sub-Session ->]",
     action_close: "[Close]",
-    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+v] Toggle View  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
+    hint_hotkey_bar: "[Tab] Switch pane  [j/k] Move  [Enter] Select  [/] Search  [Leader+p] Pause/Resume  [[/]] Sidebar  [Esc] Back",
     label_focus: "Focus:",
     focus_history: "History",
     focus_graph: "Graph",
@@ -120,6 +120,8 @@ export const DICT = {
     toast_create_error: "Failed to create workflow",
     toast_action_error: "Action failed",
     recoverable_action_hint: "Use dagworker replan to replace this node",
+    map_title: "DAG Map",
+    map_nodes: "nodes",
   },
   zh: {
     tab_dialogue: "对话",
@@ -156,7 +158,7 @@ export const DICT = {
     node_subsession_unavailable: "[暂不可进入子会话]",
     node_enter_subsession: "[进入子会话 ->]",
     action_close: "[关闭]",
-    hint_hotkey_bar: "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+v] 切换视图  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
+    hint_hotkey_bar: "[Tab] 切换窗格  [j/k] 移动  [Enter] 选择  [/] 搜索  [Leader+p] 暂停  [[/]] 侧边栏  [Esc] 返回",
     label_focus: "焦点：",
     focus_history: "列表",
     focus_graph: "图形",
@@ -219,6 +221,8 @@ export const DICT = {
     toast_create_error: "创建工作流失败",
     toast_action_error: "操作失败",
     recoverable_action_hint: "使用 dagworker replan 替换此节点",
+    map_title: "DAG 地图",
+    map_nodes: "个节点",
   },
 } as const
 

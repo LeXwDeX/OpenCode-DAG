@@ -4,8 +4,7 @@
  * 测试策略：
  * - 验证 plugin 结构导出
  * - 验证 route 注册
- * - 验证 session_topbar slot 注册
- * - 验证 Tab 切换导航
+ * - 验证 session_topbar slot 不再注册（已移除 TAB）
  */
 import { describe, it, expect } from "bun:test"
 
@@ -21,11 +20,6 @@ describe("WP3 DAG Workflow Plugin — structure", () => {
     const mod = await import("./index")
     const plugin = mod.default
     expect(typeof plugin.tui).toBe("function")
-  })
-
-  it("should export DagWorkflowTab component", async () => {
-    const mod = await import("./index")
-    expect(typeof mod.DagWorkflowTab).toBe("function")
   })
 })
 
@@ -56,7 +50,7 @@ describe("WP3 DAG Workflow Plugin — registration logic", () => {
     expect(typeof registeredRoutes[0].render).toBe("function")
   })
 
-  it("should register session_topbar slot", async () => {
+  it("should not register session_topbar slot (removed)", async () => {
     const registeredSlots: any[] = []
 
     const mockApi = {
@@ -76,8 +70,6 @@ describe("WP3 DAG Workflow Plugin — registration logic", () => {
     const mod = await import("./index")
     await mod.default.tui(mockApi as any, undefined, undefined as any)
 
-    expect(registeredSlots).toHaveLength(1)
-    expect(registeredSlots[0].slots.session_topbar).toBeDefined()
-    expect(typeof registeredSlots[0].slots.session_topbar).toBe("function")
+    expect(registeredSlots).toHaveLength(0)
   })
 })
