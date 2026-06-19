@@ -21,7 +21,7 @@
     "@solid-primitives/resize-observer": "2.1.5",
     "@types/luxon": "catalog:",
     "ai": "catalog:",
-    "astro": "6.1.10",
+    "astro": "6.4.6",
     "diff": "catalog:",
     "js-base64": "3.7.8",
     "lang-map": "0.4.0",
