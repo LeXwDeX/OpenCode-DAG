@@ -180,4 +180,19 @@ export function init<P extends Schema.Decoder<unknown>, M extends Metadata>(
   })
 }
 
+/**
+ * Fix broken multi-byte Unicode escapes in LLM-generated JSON.
+ * e.g., `\u008  ba` → `\u00e9` (concatenated nibbles split across spaces)
+ */
+export function fixJsonUnicodeEscapes(json: string): string {
+  return json.replace(/\\u00([0-9a-fA-F])\s+([0-9a-fA-F]{2})/g, "\\u00$1$2")
+}
+
+/**
+ * Parse JSON with pre-processing to fix common LLM quirks.
+ */
+export function safeParseJson(json: string): unknown {
+  return JSON.parse(fixJsonUnicodeEscapes(json))
+}
+
 export * as Tool from "./tool"

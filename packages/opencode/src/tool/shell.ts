@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import os from "os"
 import { createWriteStream } from "node:fs"
 import * as Tool from "./tool"
@@ -297,6 +297,8 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
       env,
       stdin: "ignore",
       detached: false,
+      stdout: "pipe",
+      stderr: "pipe",
     })
   }
 
@@ -306,6 +308,8 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     env,
     stdin: "ignore",
     detached: process.platform !== "win32",
+    stdout: "pipe",
+    stderr: "pipe",
   })
 }
 const parser = lazy(async () => {
@@ -348,7 +352,7 @@ export const ShellTool = Tool.define(
 
     const cygpath = Effect.fn("ShellTool.cygpath")(function* (shell: string, text: string) {
       const lines = yield* spawner
-        .lines(ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text]))
+        .lines(ChildProcess.make(shell, ["-lc", 'cygpath -w -- "$1"', "_", text], { stdout: "pipe", stderr: "pipe" }))
         .pipe(Effect.catch(() => Effect.succeed([] as string[])))
       const file = lines[0]?.trim()
       if (!file) return
@@ -483,7 +487,7 @@ export const ShellTool = Tool.define(
           yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-          yield* Effect.forkScoped(
+          const readerFiber = yield* Effect.forkScoped(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
               const size = Buffer.byteLength(chunk, "utf-8")
               list.push({ text: chunk, size })
@@ -552,6 +556,13 @@ export const ShellTool = Tool.define(
           if (exit.kind === "timeout") {
             expired = true
             yield* handle.kill({ forceKillAfter: "3 seconds" }).pipe(Effect.orDie)
+          }
+
+          if (exit.kind !== "exit") {
+            yield* Fiber.join(readerFiber).pipe(
+              Effect.timeout("2 seconds"),
+              Effect.catch(() => Effect.void),
+            )
           }
 
           return exit.kind === "exit" ? exit.code : null

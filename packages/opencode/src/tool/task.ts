@@ -11,9 +11,11 @@ import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
 import { Config } from "@/config/config"
 import { Effect, Exit, Schema, Scope } from "effect"
+import * as Option from "effect/Option"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
+import { SettingsHook } from "@/hook/settings"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -88,6 +90,7 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const run = Effect.fn("TaskTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -157,6 +160,16 @@ export const TaskTool = Tool.define(
           ],
         }))
 
+      // TaskCreated hook
+      if (settingsHook) {
+        yield* settingsHook
+          .trigger(
+            { event: "TaskCreated", taskID: nextSession.id, taskTitle: params.description } as any,
+            { sessionID: ctx.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+      }
+
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
         Effect.provideService(Database.Service, database),
         Effect.orDie,
@@ -184,6 +197,15 @@ export const TaskTool = Tool.define(
       if (!ops) return yield* Effect.fail(new Error("TaskTool requires promptOps in ctx.extra"))
 
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
+        // SubagentStart hook
+        if (settingsHook) {
+          yield* settingsHook
+            .trigger(
+              { event: "SubagentStart", agentID: nextSession.id, agentType: next.name } as any,
+              { sessionID: ctx.sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+        }
         const parts = yield* ops.resolvePromptParts(params.prompt)
         const result = yield* ops.prompt({
           messageID: MessageID.ascending(),
@@ -196,7 +218,17 @@ export const TaskTool = Tool.define(
           agent: next.name,
           parts,
         })
-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        const text = result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        // TaskCompleted hook
+        if (settingsHook) {
+          yield* settingsHook
+            .trigger(
+              { event: "TaskCompleted", taskID: nextSession.id, taskTitle: params.description, result: text } as any,
+              { sessionID: ctx.sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+        }
+        return text
       })
 
       const inject = Effect.fn("TaskTool.injectBackgroundResult")(function* (
@@ -321,6 +353,15 @@ export const TaskTool = Tool.define(
           }),
         (_, exit) =>
           Effect.gen(function* () {
+            // SubagentStop hook
+            if (settingsHook) {
+              yield* settingsHook
+                .trigger(
+                  { event: "SubagentStop", stopHookActive: false, agentID: nextSession.id, agentType: next.name } as any,
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
+                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            }
             if (Exit.hasInterrupts(exit))
               yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
           }).pipe(

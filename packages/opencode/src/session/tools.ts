@@ -11,8 +11,10 @@ import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
+import { SettingsHook } from "@/hook/settings"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
+import * as Option from "effect/Option"
 import { MessageV2 } from "./message-v2"
 import { Session } from "./session"
 import { SessionProcessor } from "./processor"
@@ -35,6 +37,8 @@ const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "image/png",
   "image/webp",
 ])
+// Tools that modify files on disk — trigger FileChanged hook after execution
+const FILE_CHANGING_TOOLS = new Set(["edit", "write", "apply_patch", "multiedit", "patch"])
 
 export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
@@ -52,6 +56,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
+  const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
@@ -104,6 +109,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
               { args },
             )
+            // SettingsHook PreToolUse
+            if (settingsHook) {
+              yield* settingsHook
+                .trigger(
+                  { event: "PreToolUse", toolName: item.id, toolInput: toRecord(args), toolUseID: ctx.callID } as any,
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
+                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            }
             const result = yield* item.execute(args, ctx)
             const output = {
               ...result,
@@ -119,11 +133,44 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID, args },
               output,
             )
+            // SettingsHook PostToolUse
+            if (settingsHook) {
+              yield* settingsHook
+                .trigger(
+                  { event: "PostToolUse", toolName: item.id, toolInput: toRecord(args), toolResponse: output.output, toolUseID: ctx.callID } as any,
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
+                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            }
+            // SettingsHook FileChanged for file-modifying tools
+            if (settingsHook && FILE_CHANGING_TOOLS.has(item.id)) {
+              yield* settingsHook
+                .trigger(
+                  { event: "FileChanged", path: (toRecord(args))["file_path"] ?? (toRecord(args))["path"], changeType: item.id } as any,
+                  { sessionID: ctx.sessionID, transcriptPath: "" },
+                )
+                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            }
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId, output)
             }
             return output
-          }),
+          }).pipe(
+            Effect.catch((error: unknown) =>
+              Effect.gen(function* () {
+                // SettingsHook PostToolUseFailure
+                if (settingsHook) {
+                  yield* settingsHook
+                    .trigger(
+                      { event: "PostToolUseFailure", toolName: item.id, toolInput: toRecord(args), error: String(error), toolUseID: options.toolCallId } as any,
+                      { sessionID: input.session.id, transcriptPath: "" },
+                    )
+                    .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+                }
+                return yield* Effect.fail(error)
+              }),
+            ),
+          ),
         )
       },
     })
@@ -397,6 +444,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
             { args },
           )
+          // SettingsHook PreToolUse
+          if (settingsHook) {
+            yield* settingsHook
+              .trigger(
+                { event: "PreToolUse", toolName: key, toolInput: toRecord(args), toolUseID: opts.toolCallId } as any,
+                { sessionID: ctx.sessionID, transcriptPath: "" },
+              )
+              .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+          }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
             yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
             return yield* Effect.promise(() => execute(args, opts))
@@ -473,11 +529,35 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             })),
             content: result.content,
           }
+          // SettingsHook PostToolUse
+          if (settingsHook) {
+            yield* settingsHook
+              .trigger(
+                { event: "PostToolUse", toolName: key, toolInput: toRecord(args), toolResponse: output.output, toolUseID: opts.toolCallId } as any,
+                { sessionID: ctx.sessionID, transcriptPath: "" },
+              )
+              .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+          }
           if (opts.abortSignal?.aborted) {
             yield* input.processor.completeToolCall(opts.toolCallId, output)
           }
           return output
-        }),
+        }).pipe(
+          Effect.catch((error: unknown) =>
+            Effect.gen(function* () {
+              // SettingsHook PostToolUseFailure
+              if (settingsHook) {
+                yield* settingsHook
+                  .trigger(
+                    { event: "PostToolUseFailure", toolName: key, toolInput: toRecord(args), error: String(error), toolUseID: opts.toolCallId } as any,
+                    { sessionID: input.session.id, transcriptPath: "" },
+                  )
+                  .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+              }
+              return yield* Effect.fail(error)
+            }),
+          ),
+        ),
       )
     tools[key] = item
   }

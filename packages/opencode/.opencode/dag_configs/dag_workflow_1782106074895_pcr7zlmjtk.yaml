@@ -1,0 +1,14 @@
+name: fh-agent-ok
+nodes:
+  -
+    id: A
+    name: A
+    dependencies: []
+    required: true
+    worker_type: general
+    worker_config:
+      prompt: Task for A
+max_concurrency: 1
+failure_handler:
+  enabled: true
+  agent: diagnoser

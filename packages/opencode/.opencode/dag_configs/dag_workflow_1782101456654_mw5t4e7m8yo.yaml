@@ -1,0 +1,20 @@
+name: core-headless-test
+nodes:
+  -
+    id: A
+    name: A
+    dependencies: []
+    required: true
+    worker_type: general
+    worker_config:
+      prompt: Task for A
+  -
+    id: B
+    name: B
+    dependencies:
+      -A
+    required: true
+    worker_type: general
+    worker_config:
+      prompt: Task for B
+max_concurrency: 2

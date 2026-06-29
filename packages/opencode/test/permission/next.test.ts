@@ -11,14 +11,32 @@ import { InstanceStore } from "../../src/project/instance-store"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { MessageID, SessionID } from "../../src/session/schema"
+import { SettingsHook } from "../../src/hook/settings"
+import { HookStartContext } from "../../src/hook/start-context"
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
+const noopSettingsHook = Layer.succeed(
+  SettingsHook.Service,
+  SettingsHook.Service.of({
+    trigger: () => Effect.succeed({ blocked: undefined, permissionDecision: undefined, permissionDecisionReason: undefined, additionalContexts: [], systemMessages: [], hookSpecificOutput: undefined }),
+  }),
+)
+
+const noopStartContext = Layer.succeed(
+  HookStartContext.Service,
+  HookStartContext.Service.of({
+    append: () => Effect.void,
+    consume: () => Effect.succeed([]),
+  }),
+)
+
 const env = Layer.mergeAll(
-  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events)),
+  Permission.layer.pipe(Layer.provide(Database.defaultLayer), Layer.provide(events), Layer.provide(noopSettingsHook)),
   events,
   CrossSpawnSpawner.defaultLayer,
   InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrap)),
+  noopStartContext,
 )
 const it = testEffect(env)
 

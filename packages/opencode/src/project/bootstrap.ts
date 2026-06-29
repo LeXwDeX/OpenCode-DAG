@@ -9,6 +9,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
+import { GoalLoop } from "@/goal/loop"
 import { Service } from "./bootstrap-service"
 
 export { Service } from "./bootstrap-service"
@@ -22,6 +23,7 @@ export const layer = Layer.effect(
     // so it can depend on bootstrap without importing this implementation graph.
     const config = yield* Config.Service
     const format = yield* Format.Service
+    const goalLoop = yield* Effect.serviceOption(GoalLoop.Service)
     const lsp = yield* LSP.Service
     const plugin = yield* Plugin.Service
     const project = yield* Project.Service
@@ -38,8 +40,10 @@ export const layer = Layer.effect(
       yield* plugin.init()
       // Each service self-manages its own slow work via Effect.forkScoped against
       // its per-instance state scope. We just await materialization here.
+      const initTargets: { init: () => Effect.Effect<void, unknown> }[] = [lsp, shareNext, format, vcs, snapshot, project]
+      if (goalLoop._tag === "Some") initTargets.push(goalLoop.value)
       yield* Effect.forEach(
-        [lsp, shareNext, format, vcs, snapshot, project],
+        initTargets,
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))

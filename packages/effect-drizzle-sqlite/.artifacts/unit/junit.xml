@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="6" assertions="11" failures="0" skipped="0" time="0.641059816">
+  <testsuite name="test/sqlite.test.ts" file="test/sqlite.test.ts" tests="6" assertions="11" failures="0" skipped="0" time="0.053" hostname="WORKPC">
+    <testcase name="selects rows through Effect-yieldable query builders" classname="" time="0.027128" file="test/sqlite.test.ts" line="38" assertions="2" />
+    <testcase name="commits successful transactions" classname="" time="0.005078" file="test/sqlite.test.ts" line="50" assertions="1" />
+    <testcase name="rolls back failed transactions" classname="" time="0.003596" file="test/sqlite.test.ts" line="62" assertions="1" />
+    <testcase name="rolls back explicit transaction rollback" classname="" time="0.004318" file="test/sqlite.test.ts" line="81" assertions="1" />
+    <testcase name="supports returning and rejects empty update sets" classname="" time="0.004273" file="test/sqlite.test.ts" line="100" assertions="4" />
+    <testcase name="runs migrations once and records migration metadata" classname="" time="0.010966" file="test/sqlite.test.ts" line="119" assertions="2" />
+  </testsuite>
+</testsuites>

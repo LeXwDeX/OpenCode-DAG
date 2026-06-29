@@ -44,6 +44,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessageID } from "@opencode-ai/schema/session-message-id"
+import { Goal } from "@/goal/goal"
 
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
 
@@ -618,6 +619,13 @@ export const layer: Layer.Layer<
         }
 
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+        // Cleanup goal state if Goal service is available
+        yield* Effect.serviceOption(Goal.Service).pipe(
+          Effect.flatMap((goalOpt) => {
+            if (goalOpt._tag === "Some") return goalOpt.value.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
+            return Effect.void
+          }),
+        )
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })

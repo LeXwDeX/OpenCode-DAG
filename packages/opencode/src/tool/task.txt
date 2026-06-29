@@ -17,3 +17,16 @@ Usage notes:
 5. The agent's outputs should generally be trusted
 6. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the user's intent. Tell it how to verify its work if possible (e.g., relevant test commands).
 7. If the agent description mentions that it should be used proactively, then you should try your best to use it without the user having to ask for it first. Use your judgement.
+
+## Parameters
+
+- `description` (REQUIRED): Short (3-5 words) description of the task.
+- `subagent_type` (REQUIRED): The type of specialized agent to use.
+- `prompt` (REQUIRED): Detailed task for the agent to perform autonomously.
+- `task_id` (optional): Resume a previous task session by its ID.
+- `command`: The command that triggered this task.
+- `background` (boolean): Run as background task.
+
+## Returns
+
+A single message from the agent with the complete result. The task_id is included for future resume.

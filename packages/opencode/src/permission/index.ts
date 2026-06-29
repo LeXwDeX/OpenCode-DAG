@@ -3,9 +3,11 @@ import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Deferred, Effect, Layer, Context } from "effect"
+import * as Option from "effect/Option"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
+import { SettingsHook } from "@/hook/settings"
 import { PermissionV1Event } from "@opencode-ai/schema/permission-v1"
 
 export const Event = PermissionV1Event
@@ -44,6 +46,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -74,6 +77,21 @@ export const layer = Layer.effect(
         const rule = evaluate(request.permission, pattern, ruleset, approved)
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
+          if (settingsHook) {
+            yield* settingsHook.trigger(
+              {
+                event: "PermissionDenied",
+                toolName: request.permission,
+                toolInput: {
+                  permission: request.permission,
+                  pattern,
+                  ruleset: ruleset.filter((r) => Wildcard.match(request.permission, r.permission)),
+                },
+                toolUseID: request.permission,
+              } as any,
+              { sessionID: request.sessionID ?? "", transcriptPath: "" },
+            ).pipe(Effect.ignore)
+          }
           return yield* new PermissionV1.DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
           })
@@ -98,6 +116,22 @@ export const layer = Layer.effect(
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
+      if (settingsHook) {
+        yield* settingsHook.trigger(
+          {
+            event: "PermissionRequest",
+            toolName: request.permission,
+            toolInput: {
+              permission: request.permission,
+              patterns: request.patterns,
+              metadata: request.metadata,
+              always: request.always,
+            },
+            toolUseID: id,
+          } as any,
+          { sessionID: request.sessionID ?? "", transcriptPath: "" },
+        ).pipe(Effect.ignore)
+      }
       yield* events.publish(Event.Asked, info)
       return yield* Effect.ensuring(
         Deferred.await(deferred),
@@ -214,8 +248,12 @@ export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<st
   )
 }
 
-export const defaultLayer = layer.pipe(Layer.provide(EventV2Bridge.defaultLayer))
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+)
 
-export const node = LayerNode.make(layer, [EventV2Bridge.node])
+export const node = LayerNode.make(layer, [
+  EventV2Bridge.node,
+])
 
 export * as Permission from "."
