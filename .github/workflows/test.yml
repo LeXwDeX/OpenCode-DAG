@@ -9,10 +9,10 @@ on:
   workflow_dispatch:
 
 concurrency:
-  # Keep every run on dev so cancelled checks do not pollute the default branch
-  # commit history. PRs and other branches still share a group and cancel stale runs.
-  group: ${{ case(github.ref == 'refs/heads/dev', format('{0}-{1}', github.workflow, github.run_id), format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref)) }}
-  cancel-in-progress: true
+  # main/dev: every run gets a unique group → never cancelled
+  # PRs/other branches: shared group → cancel stale runs to save CI minutes
+  group: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
 
 permissions:
   contents: read
