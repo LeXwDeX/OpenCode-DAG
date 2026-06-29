@@ -2,6 +2,27 @@
 - The default branch in this repo is `dev`.
 - Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
 
+## Git Workflow (铁律)
+
+```
+feat/* ──merge──▶ dev ──push──▶ main
+```
+
+| Branch | CI/TDD | Purpose |
+|--------|--------|---------|
+| `feat/*` | ❌ 不跑 | 功能开发，频繁变更 |
+| `dev` | ✅ **必须全量跑完** | TDD + CI 集成测试门禁 |
+| `main` | ❌ 不跑 | 发布专用，只接受 dev 验证通过的代码 |
+
+**流程**：
+1. 从 `dev` 切出 `feat/xxx` 分支开发
+2. 功能完成后合并到 `dev`
+3. `dev` 的 CI（test + typecheck）必须全绿
+4. 验证通过后才能 push 到 `main`
+5. `main` 只用于发版（`fork-release` 手动触发）
+
+CI 配置：`test.yml` 和 `typecheck.yml` 仅在 push 到 `dev` 时触发，`cancel-in-progress: false` 保证每次都跑完。
+
 ## Branch Names
 
 Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
