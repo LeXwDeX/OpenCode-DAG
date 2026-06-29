@@ -1054,8 +1054,24 @@ function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
         log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
         return { json: undefined, exitBlock: undefined }
       }
-      const json = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope)
-      return { json, exitBlock: undefined }
+      // entry.timeout is seconds (matches command/http handler convention); fallback to CC default.
+      // MCP is the only handler type whose underlying tool.execute() promise can legitimately never
+      // settle (a hung remote MCP server). Without this bound a stuck PreToolUse would wedge the
+      // entire tool pipeline indefinitely. On timeout/failure we fail open (silent allow), mirroring
+      // the http handler at settings.ts:1092 — hooks must never crash the host.
+      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+      const exit = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope).pipe(
+        Effect.timeout(timeoutMs),
+        Effect.exit,
+      )
+      if (exit._tag === "Failure") {
+        log.warn("mcp hook timed out or failed (non-blocking)", {
+          command: commandText(entry),
+          error: String(exit.cause),
+        })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return { json: exit.value, exitBlock: undefined }
     }),
   }
 }
