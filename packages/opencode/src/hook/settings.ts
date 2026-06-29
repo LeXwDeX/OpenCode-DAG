@@ -1482,7 +1482,22 @@ export const layer = Layer.effect(
           // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
           if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
 
-          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false)
+          // "Never crash host" contract: a hook handler can throw an unrecoverable
+          // defect (null deref, OOM, native assert). Effect.catch at the tool-layer
+          // call sites only catches typed Failures, so a defect would propagate and
+          // kill the session. Catch defects here at the single entry-execution point
+          // (covers all handler types: command/mcp/http/prompt/agent) → silent allow,
+          // log, and continue to the next entry.
+          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false).pipe(
+            Effect.catchDefect((defect) => {
+              log.warn("hook entry defect swallowed (host protected)", {
+                event: payload.event,
+                command: commandText(entry),
+                error: String(defect),
+              })
+              return Effect.succeed({ json: undefined, exitBlock: undefined })
+            }),
+          )
 
           // [FORK:hook-ext] Post-dispatch observation — never modifies result
           forkHooks?.afterRunEntry?.(entry, envelope, payload.event, { json, exitBlock })
