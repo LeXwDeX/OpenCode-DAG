@@ -282,7 +282,11 @@ export function createRoutes(
     Layer.provide(LayerNode.buildLayer(app)),
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
     Layer.provideMerge(Observability.layer),
-  )
+    // tsgo (native TS preview) widens the merged error channel to `unknown` after the
+    // provide/provideMerge chain, while the declared return type is ConfigError. The
+    // runtime error set is unchanged (config + the provided layers' errors); this cast
+    // only reconciles tsgo's over-conservative inference with the documented contract.
+  ) as Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements>
 }
 
 export const routes = createRoutes()
