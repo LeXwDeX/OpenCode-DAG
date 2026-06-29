@@ -1,14 +1,24 @@
-# Fork release — build CLI binaries for all platforms
-# Stripped-down version of publish.yml for LeXwDeX/opencode fork.
-# Removes: repo guard, Blacksmith runners, code signing, npm publish, Tauri desktop.
-#
-# Usage:
-#   1. Go to Actions → "fork-release" → Run workflow
-#   2. Pick the branch and optionally set a version
-#   3. Download artifacts from the completed run
-#   4. Or: set create_release=true to auto-create a GitHub Release with assets
+# ============================================================================
+# 📦 Release · Fork Build
+# ----------------------------------------------------------------------------
+# Purpose : Build opencode CLI binaries (linux / macos / windows) for the
+#           LeXwDeX/opencode fork. Stripped-down version of upstream
+#           publish.yml — removes repo guard, Blacksmith runners, code
+#           signing, npm publish, and Tauri desktop.
+# Trigger : Manual workflow_dispatch (PRIMARY) — pick branch + version
+#           Push to main/dev ONLY registers the workflow in the Actions UI
+#           (the build job is gated on `github.event_name == 'workflow_dispatch'`)
+# Inputs  : version        — release version string (e.g. "1.14.30-fork.2")
+#                            Leave blank for auto timestamped version.
+#           create_release — when true, create a GitHub Release with the
+#                            built binaries + SHA256SUMS attached.
+# Jobs    : build-cli — 3-OS matrix, bundles ripgrep + single-file binary
+#           release   — optional, creates GitHub Release from build-cli artifacts
+#           register  — no-op for push triggers, just registers in Actions UI
+# Output  : Artifacts: opencode-{linux,macos,windows}.{tar.gz,zip} + SHA256SUMS
+# ============================================================================
 
-name: fork-release
+name: 📦 Release · Fork Build
 
 on:
   # Manual trigger — the primary way to build releases
@@ -25,9 +35,11 @@ on:
         default: false
   # Also run on push to main/dev so the workflow registers in Actions UI
   push:
-    branches: [main, dev]
+    branches:
+      - main
+      - dev
     paths:
-      - ".github/workflows/fork-release.yml"
+      - ".github/workflows/release-fork.yml"
 
 permissions:
   contents: write
@@ -37,6 +49,7 @@ env:
 
 jobs:
   build-cli:
+    name: Build CLI (${{ matrix.name }})
     # Skip the actual build when triggered by push (registration-only)
     if: github.event_name == 'workflow_dispatch'
     strategy:
@@ -55,11 +68,13 @@ jobs:
         shell: bash
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: ./.github/actions/setup-bun
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
 
       - name: Build CLI
         run: ./packages/opencode/script/build.ts --single --skip-install
@@ -68,11 +83,11 @@ jobs:
           OPENCODE_VERSION: ${{ inputs.version || '' }}
 
       # Bundle ripgrep into each dist/opencode-*/bin so air-gapped users do not
-      # hit the runtime download in packages/opencode/src/file/ripgrep.ts.
-      - name: Prefetch ripgrep
+      # hit the runtime download in packages/core/src/ripgrep/binary.ts.
+      - name: Prefetch Ripgrep
         run: bun run ./packages/opencode/script/prefetch-ripgrep.ts
 
-      - name: Package artifacts
+      - name: Package Artifacts
         working-directory: packages/opencode/dist
         run: |
           for dir in opencode-*/; do
@@ -90,7 +105,7 @@ jobs:
             fi
           done
 
-      - name: Upload artifacts
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: opencode-${{ matrix.name }}
@@ -99,18 +114,21 @@ jobs:
             packages/opencode/dist/*.zip
 
   release:
+    name: Create GitHub Release
     needs: build-cli
     if: inputs.create_release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      - uses: actions/download-artifact@v4
+      - name: Download Artifacts
+        uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
 
-      - name: Determine version tag
+      - name: Determine Version Tag
         id: tag
         run: |
           VER="${{ inputs.version }}"
@@ -139,7 +157,9 @@ jobs:
 
   # No-op job for push-triggered runs — just registers the workflow in Actions UI
   register:
+    name: Register Workflow
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Workflow registered in Actions UI"
+      - name: Register Workflow
+        run: echo "Workflow registered in Actions UI"

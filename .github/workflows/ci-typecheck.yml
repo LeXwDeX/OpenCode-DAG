@@ -1,0 +1,31 @@
+# ============================================================================
+# 🔍 CI · Typecheck
+# ----------------------------------------------------------------------------
+# Purpose : TypeScript type checking across all packages (bun typecheck)
+# Trigger : Push to `dev` (CI gate before main) + manual workflow_dispatch
+# Jobs    : typecheck — single Linux runner, `bun typecheck`
+# Gate    : MUST pass before merging dev → main (per AGENTS.md Git Workflow 铁律)
+# Notes   : No trigger on feat/* (frequent changes) or main (release-only).
+# ============================================================================
+
+name: 🔍 CI · Typecheck
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    name: Typecheck
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      - name: Run typecheck
+        run: bun typecheck
