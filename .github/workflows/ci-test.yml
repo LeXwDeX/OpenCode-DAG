@@ -1,4 +1,16 @@
-name: test
+# ============================================================================
+# 🧪 CI · Test
+# ----------------------------------------------------------------------------
+# Purpose : Run unit + Playwright e2e tests across Linux & Windows
+# Trigger : Push to `dev` (CI gate before main) + manual workflow_dispatch
+# Jobs    : unit  — `bun turbo test` on linux + windows (matrix)
+#           e2e   — Playwright chromium on linux + windows (matrix)
+# Gate    : MUST pass before merging dev → main (per AGENTS.md Git Workflow 铁律)
+# Notes   : `cancel-in-progress: false` — every dev push gets a full run
+#           No trigger on feat/* (frequent changes) or main (release-only).
+# ============================================================================
+
+name: 🧪 CI · Test
 
 on:
   push:
@@ -18,8 +30,8 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  unit:
-    name: unit (${{ matrix.settings.name }})
+  unit-tests:
+    name: Unit Tests (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
       matrix:
@@ -46,7 +58,7 @@ jobs:
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
 
-      - name: Configure git identity
+      - name: Configure Git Identity
         run: |
           git config --global user.email "bot@opencode.ai"
           git config --global user.name "opencode"
@@ -71,13 +83,13 @@ jobs:
         working-directory: packages/client
         run: bun run check:generated
 
-      - name: Run HttpApi exerciser gates
+      - name: Run HttpAPI Exerciser Gates
         if: runner.os == 'Linux'
         working-directory: packages/opencode
         run: bun run test:httpapi
 
-  e2e:
-    name: e2e (${{ matrix.settings.name }})
+  e2e-tests:
+    name: E2E Tests (${{ matrix.settings.name }})
     strategy:
       fail-fast: false
       matrix:
