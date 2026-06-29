@@ -116,8 +116,9 @@ export const layer = Layer.effect(
 
       const deferred = yield* Deferred.make<void, PermissionV1.RejectedError | PermissionV1.CorrectedError>()
       pending.set(id, { info, deferred })
+      let hookAutoDecided = false
       if (settingsHook) {
-        yield* settingsHook.trigger(
+        const hookResult = yield* settingsHook.trigger(
           {
             event: "PermissionRequest",
             toolName: request.permission,
@@ -130,9 +131,24 @@ export const layer = Layer.effect(
             toolUseID: id,
           } as any,
           { sessionID: request.sessionID ?? "", transcriptPath: "" },
-        ).pipe(Effect.ignore)
+        ).pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined } as any)))
+        // Auto-approve/deny based on hook decision
+        if ((hookResult as any).permissionDecision === "allow") {
+          hookAutoDecided = true
+          pending.delete(id)
+          yield* events.publish(Event.Asked, info)
+          yield* Deferred.succeed(deferred, undefined)
+        } else if ((hookResult as any).permissionDecision === "deny") {
+          hookAutoDecided = true
+          pending.delete(id)
+          yield* events.publish(Event.Asked, info)
+          yield* Deferred.fail(deferred, new PermissionV1.RejectedError({}))
+        }
       }
-      yield* events.publish(Event.Asked, info)
+      // Only publish Event.Asked if hook didn't already handle the decision
+      if (!hookAutoDecided) {
+        yield* events.publish(Event.Asked, info)
+      }
       return yield* Effect.ensuring(
         Deferred.await(deferred),
         Effect.sync(() => {

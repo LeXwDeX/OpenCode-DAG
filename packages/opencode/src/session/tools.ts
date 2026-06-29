@@ -111,12 +111,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             // SettingsHook PreToolUse
             if (settingsHook) {
-              yield* settingsHook
+              const preResult = yield* settingsHook
                 .trigger(
                   { event: "PreToolUse", toolName: item.id, toolInput: toRecord(args), toolUseID: ctx.callID } as any,
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
-                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+                .pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined, blocked: undefined } as any)))
+              if ((preResult as any).permissionDecision === "deny" || (preResult as any).blocked) {
+                const reason = (preResult as any).permissionDecisionReason ?? (preResult as any).blocked?.reason ?? "Denied by PreToolUse hook"
+                return { output: `[Tool denied by hook] ${reason}`, attachments: [], metadata: { hookDenied: true } } as any
+              }
             }
             const result = yield* item.execute(args, ctx)
             const output = {
@@ -135,12 +139,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             )
             // SettingsHook PostToolUse
             if (settingsHook) {
-              yield* settingsHook
+              const postResult = yield* settingsHook
                 .trigger(
                   { event: "PostToolUse", toolName: item.id, toolInput: toRecord(args), toolResponse: output.output, toolUseID: ctx.callID } as any,
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
-                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+                .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [] as string[] } as any)))
+              // Inject additionalContext into tool output so model sees it
+              if ((postResult as any).additionalContexts?.length) {
+                output.output += "\n\n" + (postResult as any).additionalContexts.join("\n")
+              }
             }
             // SettingsHook FileChanged for file-modifying tools
             if (settingsHook && FILE_CHANGING_TOOLS.has(item.id)) {
@@ -446,12 +454,16 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           )
           // SettingsHook PreToolUse
           if (settingsHook) {
-            yield* settingsHook
+            const preResult = yield* settingsHook
               .trigger(
                 { event: "PreToolUse", toolName: key, toolInput: toRecord(args), toolUseID: opts.toolCallId } as any,
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
-              .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+              .pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined, blocked: undefined } as any)))
+            if ((preResult as any).permissionDecision === "deny" || (preResult as any).blocked) {
+              const reason = (preResult as any).permissionDecisionReason ?? (preResult as any).blocked?.reason ?? "Denied by PreToolUse hook"
+              return { content: [{ type: "text", text: `[Tool denied by hook] ${reason}` }] } as any
+            }
           }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
             yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
@@ -531,12 +543,15 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           }
           // SettingsHook PostToolUse
           if (settingsHook) {
-            yield* settingsHook
+            const postResult = yield* settingsHook
               .trigger(
                 { event: "PostToolUse", toolName: key, toolInput: toRecord(args), toolResponse: output.output, toolUseID: opts.toolCallId } as any,
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
-              .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+              .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [] as string[] } as any)))
+            if ((postResult as any).additionalContexts?.length) {
+              output.output += "\n\n" + (postResult as any).additionalContexts.join("\n")
+            }
           }
           if (opts.abortSignal?.aborted) {
             yield* input.processor.completeToolCall(opts.toolCallId, output)

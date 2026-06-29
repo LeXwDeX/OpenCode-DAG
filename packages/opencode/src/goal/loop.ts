@@ -140,7 +140,11 @@ export const layer = Layer.effect(
         return // session no longer idle, skip continuation
       }
 
-      if (shouldPreempt(msgs)) {
+      // Reload messages after judge LLM call — the snapshot from before judge
+      // may be stale if user sent messages during the 5-30s judge latency
+      const freshMsgs = yield* sessions.messages({ sessionID, limit: 20 })
+
+      if (shouldPreempt(freshMsgs)) {
         yield* goal.pause(sessionID, "当前轮被中断").pipe(Effect.ignore) // user preempted
         return
       }

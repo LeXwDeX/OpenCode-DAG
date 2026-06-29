@@ -45,6 +45,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessageID } from "@opencode-ai/schema/session-message-id"
 import { Goal } from "@/goal/goal"
+import * as PostToolBatch from "@/hook/extensions/post-tool-batch"
 
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
 
@@ -626,6 +627,8 @@ export const layer: Layer.Layer<
             return Effect.void
           }),
         )
+        // Cleanup post-tool-batch tracking
+        PostToolBatch.resetBatch(sessionID)
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })
