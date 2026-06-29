@@ -60,6 +60,9 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { SettingsHook } from "@/hook/settings"
+import { HookStartContext } from "@/hook/start-context"
+import { Goal } from "@/goal/goal"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -145,6 +148,9 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const startContext = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
+    const goal = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -314,6 +320,30 @@ export const layer = Layer.effect(
         { args: taskArgs },
       )
 
+      // SettingsHook: PreToolUse for task tool
+      if (settingsHook) {
+        const preResult = yield* settingsHook
+          .trigger(
+            { event: "PreToolUse", toolName: TaskTool.id, toolInput: taskArgs, toolUseID: part.callID } as any,
+            { sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, permissionDecision: undefined as "allow" | "deny" | "ask" | undefined, permissionDecisionReason: undefined as string | undefined } as any)))
+        if (preResult.permissionDecision === "deny") {
+          const reason = preResult.permissionDecisionReason ?? "Denied by PreToolUse hook"
+          if (part.state.status === "running") {
+            part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: reason, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
+          }
+          return { info: assistantMessage, parts: [part] }
+        }
+        if (preResult.blocked) {
+          const reason = (preResult.blocked as any)?.reason ?? "Blocked by PreToolUse hook"
+          if (part.state.status === "running") {
+            part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: reason, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
+          }
+          return { info: assistantMessage, parts: [part] }
+        }
+      }
+
       const taskAgent = yield* agents.get(task.agent)
       if (!taskAgent) {
         const available = (yield* agents.list()).filter((a) => !a.hidden).map((a) => a.name)
@@ -395,6 +425,16 @@ export const layer = Layer.effect(
         { tool: TaskTool.id, sessionID, callID: part.id, args: taskArgs },
         result,
       )
+
+      // SettingsHook: PostToolUse for task tool
+      if (settingsHook) {
+        yield* settingsHook
+          .trigger(
+            { event: "PostToolUse", toolName: TaskTool.id, toolInput: taskArgs, toolResponse: result?.output ?? "", toolUseID: part.callID } as any,
+            { sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.ignore)
+      }
 
       assistantMessage.finish = "tool-calls"
       assistantMessage.time.completed = Date.now()
@@ -577,6 +617,24 @@ export const layer = Layer.effect(
                 { cwd, sessionID: input.sessionID, callID: part.callID },
                 { env: {} },
               )
+              // SettingsHook: PreToolUse for shell — can deny/block execution
+              let shellHookDenied = false
+              if (settingsHook) {
+                const preResult = yield* settingsHook
+                  .trigger(
+                    { event: "PreToolUse", toolName: "bash", toolInput: { command: input.command }, toolUseID: part.callID } as any,
+                    { sessionID: input.sessionID, transcriptPath: "" },
+                  )
+                  .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, permissionDecision: undefined as "allow" | "deny" | "ask" | undefined, permissionDecisionReason: undefined as string | undefined } as any)))
+                if (preResult.permissionDecision === "deny" || preResult.blocked) {
+                  shellHookDenied = true
+                  const reason = preResult.permissionDecisionReason ?? (preResult.blocked as any)?.reason ?? "Denied by PreToolUse hook"
+                  const errorState = { status: "error" as const, error: reason, time: { start: (part.state as any).time?.start ?? Date.now(), end: Date.now() }, input: part.state.input }
+                  const updatedPart: SessionV1.ToolPart = { ...part, state: errorState as any }
+                  yield* sessions.updatePart(updatedPart)
+                }
+              }
+              if (!shellHookDenied) {
               const cmd = ChildProcess.make(sh, args, {
                 cwd,
                 extendEnv: true,
@@ -595,6 +653,7 @@ export const layer = Layer.effect(
                 }),
               )
               yield* handle.exitCode
+              } // end if (!shellHookDenied)
             }).pipe(Effect.scoped, Effect.orDie),
           ).pipe(Effect.exit)
 
@@ -602,6 +661,16 @@ export const layer = Layer.effect(
             aborted = true
           }
           yield* finish
+
+          // SettingsHook: PostToolUse for shell command
+          if (settingsHook) {
+            yield* settingsHook
+              .trigger(
+                { event: "PostToolUse", toolName: "bash", toolInput: { command: input.command }, toolResponse: output, toolUseID: part.callID } as any,
+                { sessionID: input.sessionID, transcriptPath: "" },
+              )
+              .pipe(Effect.ignore)
+          }
 
           if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
             return yield* Effect.failCause(exit.cause)
@@ -1160,6 +1229,42 @@ export const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
+      // SettingsHook: drain HookStartContext queued by SessionStart hooks
+      if (startContext) {
+        const drained = yield* startContext.consume(input.sessionID)
+        for (const ctx of drained) {
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: message.info.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text: ctx,
+            synthetic: true,
+          } satisfies SessionV1.TextPart)
+        }
+      }
+
+      // SettingsHook: UserPromptSubmit — gives hooks a chance to block or modify the turn
+      if (settingsHook) {
+        const hookResult = yield* settingsHook
+          .trigger(
+            { event: "UserPromptSubmit", userPrompt: input.parts.map((p: any) => p.type === "text" ? p.text : "").join("\n") } as any,
+            { sessionID: input.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, additionalContexts: [] as string[] } as any)))
+        for (const ctx of hookResult.additionalContexts ?? []) {
+          yield* sessions.updatePart({
+            id: PartID.ascending(),
+            messageID: message.info.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text: ctx,
+            synthetic: true,
+          } satisfies SessionV1.TextPart)
+        }
+        if (hookResult.blocked) return message
+      }
+
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
         permissions.push({ permission: t, action: enabled ? "allow" : "deny", pattern: "*" })
@@ -1438,6 +1543,15 @@ export const layer = Layer.effect(
         }
 
         yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+        // SettingsHook: Stop hook on loop exit
+        if (settingsHook) {
+          yield* settingsHook
+            .trigger(
+              { event: "Stop", stopHookActive: false } as any,
+              { sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.ignore)
+        }
         return yield* lastAssistant(sessionID)
       },
     )
@@ -1461,6 +1575,64 @@ export const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
+      // Goal/Subgoal command dispatch — early return BEFORE command registry lookup
+      if (goal && (input.command === "goal" || input.command === "subgoal")) {
+        const dispatch = input.command === "goal" ? goal.dispatch : goal.dispatchSubgoal
+        const dispatchResult = yield* dispatch(input.sessionID, input.arguments).pipe(
+          Effect.catchCause(() => Effect.succeed(undefined)),
+        )
+        if (dispatchResult) {
+          const m = yield* currentModel(input.sessionID)
+          const agentName = input.agent ?? (yield* agents.defaultAgent())
+          const userMsg: SessionV1.User = {
+            id: input.messageID ?? MessageID.ascending(),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            agent: agentName,
+            model: { providerID: m.providerID, modelID: m.modelID },
+          }
+          yield* sessions.updateMessage(userMsg)
+          const cmdText: SessionV1.TextPart = {
+            id: PartID.ascending(),
+            messageID: userMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text: `/${input.command} ${input.arguments}`.trim(),
+          }
+          yield* sessions.updatePart(cmdText)
+          const text = dispatchResult.announce ?? dispatchResult.text
+          const responsePart: SessionV1.TextPart = {
+            id: PartID.ascending(),
+            messageID: userMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text,
+            synthetic: true,
+          }
+          yield* sessions.updatePart(responsePart)
+          yield* sessions.touch(input.sessionID)
+          if (dispatchResult.type === "kick" && input.command === "goal") {
+            // Drain SessionStart hook contexts before loop
+            if (startContext) {
+              const contexts = yield* startContext.consume(input.sessionID)
+              for (const ctx of contexts) {
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: responsePart.messageID,
+                  sessionID: input.sessionID,
+                  type: "text",
+                  text: ctx,
+                  synthetic: true,
+                } satisfies SessionV1.TextPart)
+              }
+            }
+            return yield* loop({ sessionID: input.sessionID })
+          }
+          return { info: userMsg, parts: [cmdText, responsePart] }
+        }
+      }
+
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)
@@ -1623,6 +1795,9 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
+        SettingsHook.defaultLayer,
+        HookStartContext.defaultLayer,
+        Goal.defaultLayer,
       ),
     ),
   ),

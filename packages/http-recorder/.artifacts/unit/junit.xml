@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites name="bun test" tests="20" assertions="35" failures="0" skipped="0" time="1.18259409">
+  <testsuite name="test/record-replay.test.ts" file="test/record-replay.test.ts" tests="20" assertions="35" failures="0" skipped="0" time="0" hostname="WORKPC">
+    <testsuite name="http-recorder" file="test/record-replay.test.ts" line="57" tests="20" assertions="35" failures="0" skipped="0" time="0.09" hostname="WORKPC">
+      <testcase name="redacts sensitive URL query parameters" classname="http-recorder" time="0.000377" file="test/record-replay.test.ts" line="58" assertions="1" />
+      <testcase name="redacts URL credentials" classname="http-recorder" time="0.005881" file="test/record-replay.test.ts" line="68" assertions="1" />
+      <testcase name="applies custom URL redaction after built-in redaction" classname="http-recorder" time="0.000144" file="test/record-replay.test.ts" line="74" assertions="1" />
+      <testcase name="redacts sensitive headers when allow-listed" classname="http-recorder" time="0.000549" file="test/record-replay.test.ts" line="82" assertions="1" />
+      <testcase name="redacts error requests without retaining headers, params, or body" classname="http-recorder" time="0.000886" file="test/record-replay.test.ts" line="104" assertions="1" />
+      <testcase name="detects secret-looking values without returning the secret" classname="http-recorder" time="0.000839" file="test/record-replay.test.ts" line="118" assertions="1" />
+      <testcase name="detects secret-looking values inside metadata" classname="http-recorder" time="0.000107" file="test/record-replay.test.ts" line="146" assertions="1" />
+      <testcase name="replays websocket interactions seeded into the in-memory cassette adapter" classname="http-recorder" time="0.011516" file="test/record-replay.test.ts" line="156" assertions="1" />
+      <testcase name="records websocket interactions into the shared cassette service" classname="http-recorder" time="0.010149" file="test/record-replay.test.ts" line="195" assertions="1" />
+      <testcase name="replay returns recorded responses in order for identical requests" classname="http-recorder" time="0.009568" file="test/record-replay.test.ts" line="233" assertions="2" />
+      <testcase name="replay reports cursor exhaustion when more requests are made than recorded" classname="http-recorder" time="0.009027" file="test/record-replay.test.ts" line="244" assertions="1" />
+      <testcase name="replay validates each recorded request in order" classname="http-recorder" time="0.005634" file="test/record-replay.test.ts" line="255" assertions="3" />
+      <testcase name="auto mode replays when the cassette exists" classname="http-recorder" time="0.003973" file="test/record-replay.test.ts" line="267" assertions="1" />
+      <testcase name="auto mode forces replay when CI=true even if cassette is missing" classname="http-recorder" time="0.004475" file="test/record-replay.test.ts" line="290" assertions="2" />
+      <testcase name="mismatch diagnostics show redacted request differences against the expected interaction" classname="http-recorder" time="0.004101" file="test/record-replay.test.ts" line="310" assertions="6" />
+      <testcase name="auto mode records to disk when the cassette is missing" classname="http-recorder" time="0.013075" file="test/record-replay.test.ts" line="327" assertions="2" />
+      <testcase name="passthrough mode bypasses the recorder entirely" classname="http-recorder" time="0.005509" file="test/record-replay.test.ts" line="346" assertions="2" />
+      <testcase name="UnsafeCassetteError fails the request when a recording would write a known secret" classname="http-recorder" time="0.006" file="test/record-replay.test.ts" line="356" assertions="3" />
+      <testcase name="Cassette.list enumerates recorded cassette names" classname="http-recorder" time="0.006377" file="test/record-replay.test.ts" line="373" assertions="1" />
+      <testcase name="WebSocket replay decodes binary frames recorded as base64" classname="http-recorder" time="0.001532" file="test/record-replay.test.ts" line="399" assertions="3" />
+    </testsuite>
+  </testsuite>
+</testsuites>

@@ -19,6 +19,8 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { AppProcess } from "@opencode-ai/core/process"
 import { InstanceState } from "@/effect/instance-state"
 import { WorktreeEvent } from "@opencode-ai/schema/worktree-event"
+import { SettingsHook } from "@/hook/settings"
+import * as Option from "effect/Option"
 
 export const Event = WorktreeEvent
 
@@ -152,6 +154,7 @@ export const layer: Layer.Layer<
     const gitSvc = yield* Git.Service
     const project = yield* Project.Service
     const store = yield* InstanceStore.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const git = Effect.fnUntraced(
       function* (args: string[], opts?: { cwd?: string }) {
@@ -291,6 +294,12 @@ export const layer: Layer.Layer<
     const create = Effect.fn("Worktree.create")(function* (input?: CreateInput) {
       const info = yield* makeWorktreeInfo({ name: input?.name })
       yield* createFromInfo(info, input?.startCommand)
+      if (settingsHook) {
+        yield* settingsHook.trigger(
+          { event: "WorktreeCreate", worktreeId: info.name, worktreePath: info.directory } as any,
+          { sessionID: "", transcriptPath: "" },
+        ).pipe(Effect.ignore)
+      }
       return info
     })
 
@@ -394,6 +403,13 @@ export const layer: Layer.Layer<
       }
 
       const directory = yield* canonical(input.directory)
+
+      if (settingsHook) {
+        yield* settingsHook.trigger(
+          { event: "WorktreeRemove", worktreeId: pathSvc.basename(directory), worktreePath: directory } as any,
+          { sessionID: "", transcriptPath: "" },
+        ).pipe(Effect.ignore)
+      }
 
       // Preserve the loaded path casing for the store cache; `directory` is lowercased on Windows.
       if (directory !== (yield* canonical(ctx.worktree))) yield* store.disposeDirectory(input.directory)
@@ -623,6 +639,7 @@ export const appLayer = layer.pipe(
   Layer.provide(Database.defaultLayer),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(NodePath.layer),
+  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export const defaultLayer = appLayer.pipe(Layer.provide(InstanceLayer.layer))
@@ -635,6 +652,7 @@ export const node = LayerNode.make(layer, [
   Project.node,
   InstanceStore.node,
   Database.node,
+  SettingsHook.node as any,
 ])
 
 export * as Worktree from "."

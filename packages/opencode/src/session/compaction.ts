@@ -13,6 +13,7 @@ import { Config } from "@/config/config"
 import { NotFoundError } from "@/storage/storage"
 
 import { Effect, Layer, Context } from "effect"
+import * as Option from "effect/Option"
 import * as DateTime from "effect/DateTime"
 import { InstanceState } from "@/effect/instance-state"
 import { isOverflow as overflow, usable } from "./overflow"
@@ -25,6 +26,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { buildPrompt } from "@opencode-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@opencode-ai/schema/session-compaction-event"
+import { SettingsHook } from "@/hook/settings"
 
 export const Event = SessionCompactionEvent
 
@@ -167,6 +169,7 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -302,6 +305,17 @@ export const layer = Layer.effect(
       }
       const userMessage = parent.info
       const compactionPart = parent.parts.find((part): part is SessionV1.CompactionPart => part.type === "compaction")
+
+      // PreCompact hook
+      if (settingsHook) {
+        const preResult = yield* settingsHook
+          .trigger(
+            { event: "PreCompact", trigger: input.auto ? "auto" : "manual", sessionID: input.sessionID } as any,
+            { sessionID: input.sessionID, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined } as any)))
+        if (preResult.blocked) return "stop"
+      }
 
       let messages = input.messages
       let replay:
@@ -540,6 +554,15 @@ export const layer = Layer.effect(
             })
         }
         yield* events.publish(Event.Compacted, { sessionID: input.sessionID })
+        // PostCompact hook
+        if (settingsHook) {
+          yield* settingsHook
+            .trigger(
+              { event: "PostCompact", trigger: input.auto ? "auto" : "manual", compactSummary: summary ?? "compaction completed" } as any,
+              { sessionID: input.sessionID, transcriptPath: "" },
+            )
+            .pipe(Effect.ignore)
+        }
       }
       return result
     })

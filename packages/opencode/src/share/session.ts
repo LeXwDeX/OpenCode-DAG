@@ -2,9 +2,11 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
 import { Effect, Layer, Scope, Context } from "effect"
+import * as Option from "effect/Option"
 import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
+import { SettingsHook } from "@/hook/settings"
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -22,6 +24,7 @@ export const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
@@ -39,6 +42,15 @@ export const layer = Layer.effect(
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
       if (result.parentID) return result
+      // Fire SessionStart hook for top-level sessions only
+      if (settingsHook) {
+        yield* settingsHook
+          .trigger(
+            { event: "SessionStart", source: "startup", sessionID: result.id } as any,
+            { sessionID: result.id, transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+      }
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
       yield* share(result.id).pipe(Effect.ignore, Effect.forkIn(scope))
@@ -54,6 +66,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
+  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node])

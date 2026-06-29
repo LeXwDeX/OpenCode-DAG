@@ -11,3 +11,13 @@ Usage notes:
   - Format options: "markdown" (default), "text", or "html"
   - This tool is read-only and does not modify any files
   - Results may be summarized if the content is very large
+
+## Parameters
+
+- `url` (REQUIRED): The fully-formed URL to fetch. HTTP URLs will be upgraded to HTTPS.
+- `format` (optional): "markdown" (default), "text", or "html".
+- `timeout` (optional): Timeout in seconds (max 120).
+
+## Returns
+
+The fetched URL content converted to the requested format.

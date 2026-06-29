@@ -1,0 +1,1642 @@
+/**
+ * Settings-based hook system — Claude Code protocol-level 1:1 compatible.
+ *
+ * Reads hooks from a six-layer settings chain (later layers concat on top of
+ * earlier ones, mirroring Claude Code's merge behavior):
+ *
+ *   1. ~/.claude/settings.json                       (CC global, shared)
+ *   2. <opencode-global-config>/settings.json        (OpenCode global, optional)
+ *   3. <project>/.claude/settings.json
+ *   4. <project>/.opencode/settings.json             (OpenCode project, optional)
+ *   5. <project>/.claude/settings.local.json         (CC project local)
+ *   6. <project>/.opencode/settings.local.json       (OpenCode project local)
+ *
+ * Supports the Claude Code hook event surface at the protocol/schema layer.
+ *
+ * Hook entry types:
+ *   - { type: "command", command: "<shell>", timeout?: <seconds> }
+ *   - { type: "mcp",     command: "mcp__<server>__<tool>", timeout?: <seconds> }
+ *   - { type: "http",    url: "<url>", command?: "<legacy-url>", timeout?: <seconds> }
+ *   - { type: "prompt",  prompt: "<llm-system-prompt>", command?: "<legacy-prompt>", timeout?: <seconds> }
+ *   - { type: "agent",   prompt: "<llm-task-prompt>", command?: "<legacy-prompt>", timeout?: <seconds> }
+ *
+ * stdin JSON envelope per Claude Code spec:
+ *   { hook_event_name, session_id, transcript_path, cwd, ...event-specific }
+ *
+ * stdout control JSON (any subset):
+ *   { continue, stopReason, suppressOutput, systemMessage,
+ *     decision: "approve"|"block", reason,
+ *     hookSpecificOutput: { hookEventName, permissionDecision,
+ *                            permissionDecisionReason, additionalContext,
+ *                            updatedInput } }
+ *
+ * Exit code semantics (CC spec):
+ *   0  → allow, parse stdout
+ *   2  → block, stderr → reason
+ *   *  → log warning, do NOT abort main flow (mirrors fork commit 0f3017f33a)
+ */
+import path from "path"
+import os from "os"
+import { existsSync, readFileSync } from "fs"
+import { spawn } from "child_process"
+import { createHash } from "crypto"
+import { Effect, Layer, Context } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
+import z from "zod"
+import { generateObject, generateText, type ModelMessage } from "ai"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
+import * as Log from "@/util/log"
+import { Global } from "@opencode-ai/core/global"
+import { InstanceState } from "@/effect/instance-state"
+import { MCP } from "@/mcp"
+import { Provider } from "@/provider/provider"
+import { Auth } from "@/auth"
+import { withTransientReadRetry } from "@/util/effect-http-client"
+import { buildAgentTools } from "./agent-tools"
+import { SessionHooks } from "./session-hooks"
+import type { SessionHookEntry } from "./session-hooks"
+import { SessionID } from "@/session/schema"
+import { buildForkHooks } from "./extensions" // [FORK:hook-ext]
+
+const log = Log.create({ service: "hook.settings" })
+
+// ── Types (Claude Code 1:1) ─────────────────────────────────────
+
+export type HookEvent =
+  | "PreToolUse"
+  | "PostToolUse"
+  | "PostToolUseFailure"
+  | "Notification"
+  | "UserPromptSubmit"
+  | "PermissionRequest"
+  | "PermissionDenied"
+  | "Setup"
+  | "Stop"
+  | "StopFailure"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "PreCompact"
+  | "PostCompact"
+  | "SessionStart"
+  | "SessionEnd"
+  | "TeammateIdle"
+  | "TaskCreated"
+  | "TaskCompleted"
+  | "Elicitation"
+  | "ElicitationResult"
+  | "ConfigChange"
+  | "WorktreeCreate"
+  | "WorktreeRemove"
+  | "InstructionsLoaded"
+  | "CwdChanged"
+  | "FileChanged"
+
+export interface HookCommand {
+  /**
+   * Hook execution kind. All 5 types fully implemented:
+   * - `command`: shell command via stdin/stdout JSON envelope
+   * - `mcp`: invoke MCP tool via `mcp__<server>__<tool>` prefix
+   * - `http`: POST envelope to URL, parse JSON body
+   * - `prompt`: LLM call with structured output (HookJSONOutput schema)
+   * - `agent`: autonomous agent loop with bash/read_file/list_dir/grep tools
+   */
+  type: "command" | "mcp" | "http" | "prompt" | "agent"
+  command?: string
+  /** Claude Code `type:"http"` endpoint. Legacy configs may still use `command`. */
+  url?: string
+  /** Claude Code `type:"prompt" | "agent"` prompt. Legacy configs may still use `command`. */
+  prompt?: string
+  headers?: Record<string, string>
+  allowedEnvVars?: string[]
+  timeout?: number
+  statusMessage?: string
+  once?: boolean
+  /**
+   * Shell selector for `type:"command"`. CC honors `bash` (default on POSIX) and `powershell`
+   * (default on Windows). Currently a schema placeholder — execShell still picks based on platform.
+   */
+  shell?: "bash" | "powershell"
+  /**
+   * Conditional gate. CC evaluates this as a boolean expression in the matcher's runtime
+   * context; fork treats it as a placeholder for now (always considered truthy when present).
+   * Reserved for阶段 6 short-circuit logic.
+   */
+  if?: string
+  /**
+   * Async execution flag. CC's AsyncHookRegistry routes async hooks via attachments / task-notification.
+   * Fork currently runs everything sync; this is a P2 schema placeholder.
+   */
+  async?: boolean
+  /**
+   * Companion to `async`: when an async hook exits with code 2, CC re-wakes the agent via
+   * `wrapInSystemReminder` + `task-notification`. Schema placeholder for the same P2 work.
+   */
+  asyncRewake?: boolean
+  /**
+   * Fork superset (CC has no equivalent). When present, each entry is exported into the hook
+   * subprocess env as `CLAUDE_PLUGIN_OPTION_<KEY>=JSON.stringify(value)`.
+   */
+  options?: Record<string, unknown>
+  /**
+   * Runtime metadata injected by `loadChain` — absolute directory of the settings file that
+   * declared this hook. Drives `CLAUDE_PLUGIN_ROOT` / `CLAUDE_PLUGIN_DATA`. The `__` prefix
+   * keeps it out of any future schema-validation pass.
+   */
+  __sourceDir?: string
+}
+
+interface HookMatcher {
+  matcher?: string
+  hooks: HookCommand[]
+}
+
+export interface Settings {
+  hooks?: Partial<Record<HookEvent, HookMatcher[]>>
+  /**
+   * WP-6B placeholder. CC / VS Code-style "workspace trust" flow does not yet
+   * exist in this fork. When a trust system lands (`Project.isTrusted()` or
+   * similar), the trigger entry should short-circuit (silent skip — log.warn +
+   * empty result, NEVER throw / deny) for untrusted workspaces unless this flag
+   * is true. Schema-only for now; see TODO(WP-6B) below in the trigger reducer.
+   */
+  allowUntrusted?: boolean
+}
+
+export interface HookJSONOutput {
+  continue?: boolean
+  stopReason?: string
+  /**
+   * Schema-accepted no-op (WP-5C). Fork does not render hook stdout to UI by
+   * default — `suppressOutput=true` is fork's default behavior, and
+   * `suppressOutput=false` would require new fork capability ("show hook
+   * stdout in UI") whose value is reverse to its cost. Field reserved for CC
+   * schema compatibility only; no runtime processing.
+   */
+  suppressOutput?: boolean
+  systemMessage?: string
+  decision?: "approve" | "block"
+  reason?: string
+  hookSpecificOutput?: HookSpecificOutput
+}
+
+// Loose flat zod schema mirroring HookJSONOutput — used by the prompt handler to
+// constrain LLM structured output. Intentionally NOT `.strict()`: lets the model
+// emit unknown fields without failing parse. Single source of truth lives next
+// to the HookJSONOutput interface; not exported (settings.ts internal only).
+const HookSpecificOutputZodSchema = z.object({
+  hookEventName: z.string().optional(),
+  permissionDecision: z.enum(["allow", "deny", "ask"]).optional(),
+  permissionDecisionReason: z.string().optional(),
+  updatedInput: z.record(z.string(), z.unknown()).optional(),
+  additionalContext: z.string().optional(),
+  initialUserMessage: z.string().optional(),
+  updatedMCPToolOutput: z.unknown().optional(),
+  watchPaths: z.array(z.string()).optional(),
+  displayMessage: z.string().optional(),
+  compactSummary: z.string().optional(),
+  customSummary: z.string().optional(),
+})
+
+const HookJSONOutputZodSchema = z.object({
+  continue: z.boolean().optional(),
+  stopReason: z.string().optional(),
+  suppressOutput: z.boolean().optional(),
+  systemMessage: z.string().optional(),
+  decision: z.enum(["approve", "block"]).optional(),
+  reason: z.string().optional(),
+  hookSpecificOutput: HookSpecificOutputZodSchema.optional(),
+})
+
+/**
+ * hookSpecificOutput discriminated union — Claude Code 1:1.
+ * 仅 5 个事件有 union 分支；Stop / SubagentStop / PreCompact / SessionEnd
+ * 在 CC types/hooks.ts:50-166 中无对应 case，仅消费顶层字段（continue/decision/reason 等）。
+ *
+ * 所有字段保持 optional 以便解析端宽松降级。`hookEventName` 用作 discriminator。
+ * 最后一个 fallback 分支让消费端 cast 时不会因为 hookEventName 未列出（或拼错）而报错。
+ */
+export type HookSpecificOutput =
+  | {
+      hookEventName: "PreToolUse"
+      permissionDecision?: "allow" | "deny" | "ask"
+      permissionDecisionReason?: string
+      updatedInput?: Record<string, unknown>
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "UserPromptSubmit"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "SessionStart"
+      additionalContext?: string
+      initialUserMessage?: string
+      watchPaths?: string[]
+    }
+  | {
+      hookEventName: "PostToolUse"
+      additionalContext?: string
+      updatedMCPToolOutput?: unknown
+    }
+  | {
+      hookEventName: "PostToolUseFailure"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PermissionRequest"
+      permissionDecision?: "allow" | "deny" | "ask"
+      permissionDecisionReason?: string
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PermissionDenied"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "Notification"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "Setup" | "SubagentStart"
+      additionalContext?: string
+    }
+  | {
+      hookEventName: "PostCompact"
+      additionalContext?: string
+      displayMessage?: string
+      compactSummary?: string
+      customSummary?: string
+    }
+  | {
+      /**
+       * Fallback — accept future / unknown event names without crashing the parser.
+       * NO index signature here: an `[key: string]: unknown` would poison every other
+       * branch's narrowed property types into `unknown`.
+       */
+      hookEventName?: string
+    }
+
+/** Per-event payload — discriminated union, TS narrows automatically. */
+export type HookPayload =
+  | {
+      event: "PreToolUse"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+    }
+  | {
+      event: "PostToolUse"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      toolResponse: unknown
+    }
+  | {
+      event: "PostToolUseFailure"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      error: string
+      isInterrupt?: boolean
+    }
+  | {
+      event: "PermissionRequest"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      permissionSuggestions?: string[]
+    }
+  | {
+      event: "PermissionDenied"
+      toolUseID?: string
+      toolName: string
+      toolInput: Record<string, unknown>
+      reason: string
+    }
+  | { event: "Notification"; message: string; title?: string; notificationType?: string }
+  | { event: "UserPromptSubmit"; prompt: string }
+  | { event: "Stop"; stopHookActive: boolean; lastAssistantMessage?: string }
+  | { event: "StopFailure"; stopHookActive: boolean; error: string; lastAssistantMessage?: string }
+  | { event: "SubagentStart"; agentID: string; agentType: string }
+  | {
+      event: "SubagentStop"
+      stopHookActive: boolean
+      agentID?: string
+      agentTranscriptPath?: string
+      agentType?: string
+      lastAssistantMessage?: string
+    }
+  | {
+      event: "PreCompact"
+      trigger: "manual" | "auto"
+      customInstructions?: string
+    }
+  | {
+      event: "PostCompact"
+      trigger?: "manual" | "auto"
+      compactSummary?: string
+      customInstructions?: string
+    }
+  | {
+      event: "SessionStart"
+      source: "startup" | "resume" | "clear" | "compact"
+      model?: string
+      agentType?: string
+    }
+  | {
+      event: "SessionEnd"
+      reason: "clear" | "logout" | "prompt_input_exit" | "other"
+    }
+  | { event: "Setup"; trigger: string }
+  | { event: "TeammateIdle"; teammateID?: string; teammateName?: string }
+  | { event: "TaskCreated"; taskID?: string; taskTitle?: string; taskDescription?: string }
+  | { event: "TaskCompleted"; taskID?: string; taskTitle?: string; result?: unknown }
+  | { event: "Elicitation"; prompt?: string; schema?: unknown }
+  | { event: "ElicitationResult"; result?: unknown; cancelled?: boolean }
+  | { event: "ConfigChange"; configPath?: string; changes?: unknown }
+  | { event: "WorktreeCreate"; path?: string; branch?: string }
+  | { event: "WorktreeRemove"; path?: string; branch?: string }
+  | { event: "InstructionsLoaded"; path?: string; content?: string }
+  | { event: "CwdChanged"; oldCwd?: string; newCwd?: string }
+  | { event: "FileChanged"; path?: string; changeType?: string }
+
+export interface TriggerContext {
+  sessionID: string
+  /** Absolute path to a transcript file (may not yet exist). Empty string if N/A. */
+  transcriptPath: string
+  /** CC envelope: "plan" | "default"（fork 通过 agentToPermissionMode 映射 agent name 得出）。其他模式（acceptEdits/bypassPermissions）fork 暂不支持。 */
+  permissionMode?: string
+  /** CC envelope: subagent ID（仅 SubagentStop / 子 agent 上下文有值）*/
+  agentID?: string
+  /** CC envelope: subagent type 名称 */
+  agentType?: string
+  /**
+   * Mark this trigger as running in a sub-agent context (parentID set on the
+   * underlying session). When true, an incoming `event: "Stop"` payload is
+   * routed to **SubagentStop**-registered session hooks instead of Stop ones,
+   * matching CC's lifecycle semantics. Only affects the SessionHookStore lookup;
+   * the on-disk settings chain is still indexed by `payload.event` verbatim
+   * (callers like task.ts already explicitly fire SubagentStop, so settings-side
+   * routing was already correct before WP-5D).
+   */
+  isSubAgent?: boolean
+}
+
+export interface TriggerResult {
+  /** additionalContext strings appended (deduplicated per instance) */
+  additionalContexts: string[]
+  /** systemMessage strings emitted by hooks */
+  systemMessages: string[]
+  /** Block decision — non-undefined means main flow must short-circuit */
+  blocked?: { reason: string; command: string }
+  /** continue=false from any hook */
+  preventContinuation?: boolean
+  /** stopReason aggregated from hooks that requested non-continuation */
+  stopReason?: string
+  /** Permission verdict (PreToolUse only meaningful) */
+  permissionDecision?: "allow" | "deny" | "ask"
+  permissionDecisionReason?: string
+  /** Last hook's updatedInput wins (CC behavior) */
+  updatedInput?: Record<string, unknown>
+}
+
+// ── [FORK:hook-ext] Extension callback interface ────────────────
+//
+// All fork-specific hook processing plugs in here. settings.ts calls
+// these at well-defined points; implementations live in hook/extensions/
+// and are wired in the Effect layer.
+//
+// INVARIANT: Every field is optional. When undefined, behavior is
+// identical to upstream. This ensures forward-compat — if upstream
+// adds new hook features, they flow through without touching extensions.
+export interface ForkHooks {
+  /**
+   * Called BEFORE runEntry() for each matched hook entry.
+   * Return false to skip this entry (e.g., `if` condition not met).
+   * Return true (or undefined) to proceed.
+   *
+   * INTENT: Centralized pre-dispatch filtering for condition-filter,
+   * future rate-limiting, logging, etc.
+   */
+  readonly beforeRunEntry?: (
+    entry: HookCommand,
+    envelope: Record<string, unknown>,
+    event: HookEvent,
+  ) => boolean
+
+  /**
+   * Called AFTER runEntry() for each executed hook entry.
+   * Receives the handler result. Used for post-dispatch tracking
+   * (batch counting, metrics, etc.).
+   *
+   * INTENT: Centralized post-dispatch observation. Never modifies
+   * the result — that's the trigger reducer's job.
+   */
+  readonly afterRunEntry?: (
+    entry: HookCommand,
+    envelope: Record<string, unknown>,
+    event: HookEvent,
+    result: { json?: HookJSONOutput; exitBlock?: string },
+  ) => void
+}
+
+/**
+ * Map fork agent.name to CC `permission_mode` envelope value.
+ *
+ * fork 没有 CC 那种 permission_mode 全局枚举（default / acceptEdits / bypassPermissions / plan）。
+ * 用 agent name 替代：plan agent 等价于 plan mode，其余 primary agent 等价于 default mode。
+ * acceptEdits / bypassPermissions 在 fork 中无对应概念 — 不输出，避免给用户 hook 脚本造假信号。
+ */
+export function agentToPermissionMode(agentName: string | undefined): "plan" | "default" {
+  return agentName === "plan" ? "plan" : "default"
+}
+
+/**
+ * Per-plugin data directory layout (CC plugin contract):
+ *   <Global.Path.data>/hooks/<parentBasename>-<basename>-<sha256(sourceDir).slice(0,6)>
+ *
+ * Hash suffix disambiguates two plugins whose paths happen to share the same
+ * `<parent>/<basename>` tail (e.g. installed under different roots).
+ */
+function computeDataDir(sourceDir: string): string {
+  const hash = createHash("sha256").update(sourceDir).digest("hex").slice(0, 6)
+  const parent = path.basename(path.dirname(sourceDir))
+  const base = path.basename(sourceDir)
+  return path.join(Global.Path.data, "hooks", `${parent}-${base}-${hash}`)
+}
+
+/**
+ * Expand CC-compatible template variables in `entry.command`.
+ *
+ *   ${CLAUDE_PLUGIN_ROOT}  → entry.__sourceDir
+ *   ${CLAUDE_PLUGIN_DATA}  → computeDataDir(entry.__sourceDir)
+ *   ${user_config.<key>}   → entry.options?.[key] (string passthrough; non-string → JSON.stringify)
+ *
+ * Unknown / unresolvable templates are left verbatim so the shell's own env
+ * expansion (or the user's escape strategy) still has a chance to handle them.
+ * Read-only: never mutates `entry`.
+ */
+function expandCommand(entry: HookCommand): string {
+  return commandText(entry).replace(/\$\{([^}]+)\}/g, (full, key) => {
+    if (key === "CLAUDE_PLUGIN_ROOT" && entry.__sourceDir) return entry.__sourceDir
+    if (key === "CLAUDE_PLUGIN_DATA" && entry.__sourceDir) return computeDataDir(entry.__sourceDir)
+    if (key.startsWith("user_config.")) {
+      const optKey = key.slice("user_config.".length)
+      const v = entry.options?.[optKey]
+      if (v !== undefined) return typeof v === "string" ? v : JSON.stringify(v)
+    }
+    return full
+  })
+}
+
+function commandText(entry: HookCommand): string {
+  return entry.command ?? ""
+}
+
+function httpUrl(entry: HookCommand): string {
+  return entry.url ?? entry.command ?? ""
+}
+
+function promptText(entry: HookCommand): string {
+  return entry.prompt ?? entry.command ?? ""
+}
+
+// ── Matcher ─────────────────────────────────────────────────────
+
+/**
+ * Match a string (typically tool name) against a CC matcher pattern.
+ * Supports: exact, pipe list, regex, wildcard "*"/empty.
+ *
+ * For non-tool events (Stop, PreCompact, etc.) callers pass empty target;
+ * matcher should usually be undefined/"*" in those configs.
+ */
+function matches(matcher: string | undefined, target: string): boolean {
+  if (!matcher || matcher === "*") return true
+  const normalized = target.toLowerCase()
+
+  if (/^[a-zA-Z0-9_|]+$/.test(matcher)) {
+    if (matcher.includes("|")) {
+      return matcher
+        .split("|")
+        .map((p) => p.trim().toLowerCase())
+        .includes(normalized)
+    }
+    return normalized === matcher.toLowerCase()
+  }
+
+  try {
+    return new RegExp(matcher, "i").test(target)
+  } catch {
+    log.warn("invalid regex in hook matcher", { matcher })
+    return false
+  }
+}
+
+// ── Settings loader (six-layer chain) ───────────────────────────
+
+function readJSON(filepath: string): Settings | null {
+  if (!existsSync(filepath)) return null
+  try {
+    const data = JSON.parse(readFileSync(filepath, "utf8")) as Settings
+    // Stamp every HookCommand with the directory of the settings file that declared it.
+    // execShell uses this to populate CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA.
+    if (data.hooks) {
+      const sourceDir = path.dirname(filepath)
+      for (const matchers of Object.values(data.hooks)) {
+        if (!matchers) continue
+        for (const m of matchers) {
+          for (const h of m.hooks ?? []) h.__sourceDir = sourceDir
+        }
+      }
+    }
+    log.info("loaded hook settings", {
+      path: filepath,
+      events: Object.keys(data.hooks ?? {}),
+    })
+    return data
+  } catch (err) {
+    log.error("failed to parse settings.json", { path: filepath, error: String(err) })
+    return null
+  }
+}
+
+/**
+ * Concat-merge hook matchers across layers. Later layers append after earlier
+ * ones (matches CC's merge semantics — does NOT replace by matcher key).
+ */
+function mergeSettings(layers: Settings[]): Settings {
+  const out: Settings = { hooks: {} }
+  for (const layer of layers) {
+    if (!layer.hooks) continue
+    for (const [event, matchers] of Object.entries(layer.hooks)) {
+      const ev = event as HookEvent
+      const acc = (out.hooks![ev] ??= [])
+      acc.push(...(matchers ?? []))
+    }
+  }
+  return out
+}
+
+function loadChain(directory: string, worktree: string): Settings {
+  const home = os.homedir()
+  // Best-effort OpenCode global path; falls back to ~/.config/opencode
+  const opencodeGlobal = (() => {
+    try {
+      return Global.Path.config
+    } catch {
+      return path.join(home, ".config", "opencode")
+    }
+  })()
+
+  const candidates = [
+    path.join(home, ".claude", "settings.json"),
+    path.join(opencodeGlobal, "settings.json"),
+    path.join(directory, ".claude", "settings.json"),
+    path.join(directory, ".opencode", "settings.json"),
+    path.join(directory, ".claude", "settings.local.json"),
+    path.join(directory, ".opencode", "settings.local.json"),
+  ]
+
+  // If worktree differs from directory (e.g. git worktree), also check it
+  if (worktree && worktree !== directory) {
+    candidates.push(
+      path.join(worktree, ".claude", "settings.json"),
+      path.join(worktree, ".opencode", "settings.json"),
+      path.join(worktree, ".claude", "settings.local.json"),
+      path.join(worktree, ".opencode", "settings.local.json"),
+    )
+  }
+
+  const layers = candidates
+    .map((fp) => {
+      const data = readJSON(fp)
+      if (data) warnUnsupportedFields(data.hooks, path.dirname(fp))
+      return data
+    })
+    .filter((s): s is Settings => s !== null)
+  return mergeSettings(layers)
+}
+
+/**
+ * Internal: scan loaded settings for HookCommand fields the fork has not yet implemented
+ * (`async`, `asyncRewake`, `if`, `shell`) and emit a single `log.warn` per settings file.
+ * Runtime still proceeds — these fields are silently ignored. Exported for unit testing
+ * only; not part of the public surface.
+ */
+export function warnUnsupportedFields(
+  hooks: Settings["hooks"],
+  sourceDir: string,
+): void {
+  if (!hooks) return
+  const unsupported: Array<{ field: string; value: unknown; eventName: string }> = []
+  for (const [eventName, matchers] of Object.entries(hooks)) {
+    if (!matchers) continue
+    for (const m of matchers) {
+      for (const h of m.hooks ?? []) {
+        if (h.async !== undefined) unsupported.push({ field: "async", value: h.async, eventName })
+        if (h.asyncRewake !== undefined)
+          unsupported.push({ field: "asyncRewake", value: h.asyncRewake, eventName })
+        if (h.if !== undefined) unsupported.push({ field: "if", value: h.if, eventName })
+        if (h.shell !== undefined) unsupported.push({ field: "shell", value: h.shell, eventName })
+        // All 5 known types now have handlers; type-level unsupported set is empty by design.
+      }
+    }
+  }
+  if (unsupported.length > 0) {
+    log.warn("hook settings contains unsupported fields (will be ignored or fail at runtime)", {
+      sourceDir,
+      unsupported,
+    })
+  }
+}
+
+// ── Shell command runner ────────────────────────────────────────
+
+const DEFAULT_TIMEOUT_MS = 60_000 // CC default
+
+function execShell(
+  entry: HookCommand,
+  stdinJSON: string,
+  cwd: string,
+): Promise<{ exitCode: number | null; stdout: string; stderr: string; spawnError?: string }> {
+  return new Promise((resolve) => {
+    const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+    const shell = process.platform === "win32" ? true : "/bin/sh"
+    const expandedCommand = expandCommand(entry)
+
+    const command = commandText(entry)
+    log.debug("hook spawn", { command: command.slice(0, 200), cwd, timeoutMs })
+
+    // WP-6C: plugin-directory liveness pre-check.
+    // When __sourceDir is stamped but the directory has since been GC'd
+    // (plugin uninstalled, repo cleaned, etc.) the expanded command would
+    // either fail at exec time with exit-127 or — worse — silently run a
+    // partial template. Treat the missing dir as "plugin no longer available"
+    // and silent-allow rather than letting the shell turn it into a misleading
+    // exit-2 deny. spawnError stays undefined so the trigger reducer keeps
+    // the same allow path it already uses for spawnError-set entries.
+    if (entry.__sourceDir && !existsSync(entry.__sourceDir)) {
+      log.warn("hook plugin sourceDir missing — silent allow", {
+        command,
+        sourceDir: entry.__sourceDir,
+      })
+      resolve({ exitCode: 0, stdout: "", stderr: "" })
+      return
+    }
+
+    const extraEnv: Record<string, string> = { CLAUDE_PROJECT_DIR: cwd }
+    if (entry.__sourceDir) {
+      extraEnv.CLAUDE_PLUGIN_ROOT = entry.__sourceDir
+      extraEnv.CLAUDE_PLUGIN_DATA = computeDataDir(entry.__sourceDir)
+    }
+    if (entry.options) {
+      for (const [k, v] of Object.entries(entry.options)) {
+        const key = "CLAUDE_PLUGIN_OPTION_" + k.replace(/[^A-Za-z0-9_]/g, "_").toUpperCase()
+        extraEnv[key] = JSON.stringify(v)
+      }
+    }
+
+    const child = spawn(expandedCommand, [], {
+      cwd,
+      shell,
+      env: { ...process.env, ...extraEnv },
+      stdio: ["pipe", "pipe", "pipe"],
+      timeout: timeoutMs,
+    })
+
+    let stdout = ""
+    let stderr = ""
+    child.stdout.setEncoding("utf8")
+    child.stderr.setEncoding("utf8")
+    child.stdout.on("data", (d: string) => (stdout += d))
+    child.stderr.on("data", (d: string) => (stderr += d))
+
+    // EPIPE on stdin must not crash the host process (fork commit 0f3017f33a)
+    child.stdin.on("error", (err) => {
+      log.warn("hook stdin error", { command, error: err.message })
+    })
+
+    try {
+      child.stdin.write(stdinJSON + "\n", "utf8")
+      child.stdin.end()
+    } catch (err) {
+      log.warn("hook stdin write failed", { command, error: String(err) })
+    }
+
+    child.on("error", (err) => {
+      log.error("hook command failed to spawn", { command, error: err.message })
+      resolve({ exitCode: null, stdout, stderr, spawnError: err.message })
+    })
+
+    child.on("close", (code) => {
+      log.debug("hook close", {
+        command: command.slice(0, 80),
+        exitCode: code,
+        stdoutLen: stdout.length,
+        stderrLen: stderr.length,
+      })
+      resolve({ exitCode: code, stdout, stderr })
+    })
+  })
+}
+
+function parseStdout(stdout: string, command: string): HookJSONOutput | undefined {
+  const trimmed = stdout.trim()
+  if (!trimmed || !trimmed.startsWith("{")) {
+    if (trimmed) log.info("hook returned plain text", { command, output: trimmed.slice(0, 200) })
+    return undefined
+  }
+  try {
+    return JSON.parse(trimmed) as HookJSONOutput
+  } catch {
+    log.warn("hook returned invalid JSON", { command, output: trimmed.slice(0, 200) })
+    return undefined
+  }
+}
+
+// ── Payload → stdin envelope ────────────────────────────────────
+
+function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: string): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    hook_event_name: payload.event,
+    session_id: ctx.sessionID,
+    transcript_path: ctx.transcriptPath,
+    cwd,
+  }
+  // Explicit ctx.permissionMode wins; otherwise derive from agentType so callers only pass agent.
+  const permissionMode = ctx.permissionMode ?? (ctx.agentType ? agentToPermissionMode(ctx.agentType) : undefined)
+  if (permissionMode) base.permission_mode = permissionMode
+  if (ctx.agentID !== undefined) base.agent_id = ctx.agentID
+  if (ctx.agentType !== undefined) base.agent_type = ctx.agentType
+  switch (payload.event) {
+    case "PreToolUse":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+      }
+    case "PostToolUse":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        tool_response: payload.toolResponse,
+      }
+    case "PostToolUseFailure":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        error: payload.error,
+        ...(payload.isInterrupt !== undefined ? { is_interrupt: payload.isInterrupt } : {}),
+      }
+    case "PermissionRequest":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        ...(payload.permissionSuggestions !== undefined
+          ? { permission_suggestions: payload.permissionSuggestions }
+          : {}),
+      }
+    case "PermissionDenied":
+      return {
+        ...base,
+        ...(payload.toolUseID !== undefined ? { tool_use_id: payload.toolUseID } : {}),
+        tool_name: payload.toolName,
+        tool_input: payload.toolInput,
+        reason: payload.reason,
+      }
+    case "Notification":
+      return {
+        ...base,
+        message: payload.message,
+        ...(payload.title !== undefined ? { title: payload.title } : {}),
+        ...(payload.notificationType !== undefined ? { notification_type: payload.notificationType } : {}),
+      }
+    case "UserPromptSubmit":
+      return { ...base, prompt: payload.prompt }
+    case "Stop":
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
+    case "StopFailure":
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        error: payload.error,
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
+    case "SubagentStart":
+      return { ...base, agent_id: payload.agentID, agent_type: payload.agentType }
+    case "SubagentStop":
+      return {
+        ...base,
+        stop_hook_active: payload.stopHookActive,
+        ...(payload.agentID !== undefined ? { agent_id: payload.agentID } : {}),
+        ...(payload.agentTranscriptPath !== undefined
+          ? { agent_transcript_path: payload.agentTranscriptPath }
+          : {}),
+        ...(payload.agentType !== undefined ? { agent_type: payload.agentType } : {}),
+        ...(payload.lastAssistantMessage !== undefined
+          ? { last_assistant_message: payload.lastAssistantMessage }
+          : {}),
+      }
+    case "PreCompact":
+      return {
+        ...base,
+        trigger: payload.trigger,
+        custom_instructions: payload.customInstructions ?? "",
+      }
+    case "PostCompact":
+      return {
+        ...base,
+        ...(payload.trigger !== undefined ? { trigger: payload.trigger } : {}),
+        ...(payload.compactSummary !== undefined ? { compact_summary: payload.compactSummary } : {}),
+        ...(payload.customInstructions !== undefined
+          ? { custom_instructions: payload.customInstructions }
+          : {}),
+      }
+    case "SessionStart":
+      return {
+        ...base,
+        source: payload.source,
+        ...(payload.model !== undefined ? { model: payload.model } : {}),
+        ...(payload.agentType !== undefined ? { agent_type: payload.agentType } : {}),
+      }
+    case "SessionEnd":
+      return { ...base, reason: payload.reason }
+    case "Setup":
+      return { ...base, trigger: payload.trigger }
+    case "TeammateIdle":
+      return {
+        ...base,
+        ...(payload.teammateID !== undefined ? { teammate_id: payload.teammateID } : {}),
+        ...(payload.teammateName !== undefined ? { teammate_name: payload.teammateName } : {}),
+      }
+    case "TaskCreated":
+      return {
+        ...base,
+        ...(payload.taskID !== undefined ? { task_id: payload.taskID } : {}),
+        ...(payload.taskTitle !== undefined ? { task_title: payload.taskTitle } : {}),
+        ...(payload.taskDescription !== undefined ? { task_description: payload.taskDescription } : {}),
+      }
+    case "TaskCompleted":
+      return {
+        ...base,
+        ...(payload.taskID !== undefined ? { task_id: payload.taskID } : {}),
+        ...(payload.taskTitle !== undefined ? { task_title: payload.taskTitle } : {}),
+        ...(payload.result !== undefined ? { result: payload.result } : {}),
+      }
+    case "Elicitation":
+      return {
+        ...base,
+        ...(payload.prompt !== undefined ? { prompt: payload.prompt } : {}),
+        ...(payload.schema !== undefined ? { schema: payload.schema } : {}),
+      }
+    case "ElicitationResult":
+      return {
+        ...base,
+        ...(payload.result !== undefined ? { result: payload.result } : {}),
+        ...(payload.cancelled !== undefined ? { cancelled: payload.cancelled } : {}),
+      }
+    case "ConfigChange":
+      return {
+        ...base,
+        ...(payload.configPath !== undefined ? { config_path: payload.configPath } : {}),
+        ...(payload.changes !== undefined ? { changes: payload.changes } : {}),
+      }
+    case "WorktreeCreate":
+    case "WorktreeRemove":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
+      }
+    case "InstructionsLoaded":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.content !== undefined ? { content: payload.content } : {}),
+      }
+    case "CwdChanged":
+      return {
+        ...base,
+        ...(payload.oldCwd !== undefined ? { old_cwd: payload.oldCwd } : {}),
+        ...(payload.newCwd !== undefined ? { new_cwd: payload.newCwd } : {}),
+      }
+    case "FileChanged":
+      return {
+        ...base,
+        ...(payload.path !== undefined ? { path: payload.path } : {}),
+        ...(payload.changeType !== undefined ? { change_type: payload.changeType } : {}),
+      }
+  }
+}
+
+/**
+ * Decide which target string to feed the matcher for a given event.
+ * Tool-bound events match against `tool_name`; others match all matchers
+ * (CC behavior — non-tool events typically have empty matcher).
+ */
+function matcherTarget(payload: HookPayload): string {
+  if (
+    payload.event === "PreToolUse" ||
+    payload.event === "PostToolUse" ||
+    payload.event === "PostToolUseFailure" ||
+    payload.event === "PermissionRequest" ||
+    payload.event === "PermissionDenied"
+  ) {
+    return payload.toolName
+  }
+  return ""
+}
+
+// ── Effect service ──────────────────────────────────────────────
+
+interface State {
+  settings: Settings
+  cwd: string
+  /** Deduplicated additionalContext strings already surfaced in this instance. */
+  seen: Set<string>
+}
+
+export interface Interface {
+  readonly trigger: (
+    payload: HookPayload,
+    ctx: TriggerContext,
+  ) => Effect.Effect<TriggerResult>
+}
+
+export class Service extends Context.Service<Service, Interface>()("@opencode/SettingsHook") {}
+
+// ── HookHandler abstraction (WP-4A) ─────────────────────────────
+//
+// Each handler owns one HookCommand.type. They return the same
+// { json, exitBlock } envelope the trigger aggregator already consumes
+// (no semantic shift vs. the prior inlined branches in runEntry).
+//
+// Handlers do NOT carry CC-protocol aggregation state (dedup, permissionDecision,
+// systemMessages) — that stays in trigger's reducer block. inHook is propagated
+// to every handler so future agent/http handlers can implement re-entry guards.
+//
+// mcpSvc dependency: the registry is built inside the layer's Effect.gen
+// closure (not at module top-level, not per-trigger). This keeps mcpSvc as
+// a captured closure variable instead of a per-call deps parameter — handlers
+// stay pure functions of (entry, envelope, cwd, inHook). The table is a
+// const inside the layer scope, so future http/prompt/agent handlers can
+// register here once they exist.
+interface HookHandler<E extends HookCommand = HookCommand> {
+  readonly type: E["type"]
+  readonly run: (
+    entry: E,
+    envelope: Record<string, unknown>,
+    cwd: string,
+    inHook: boolean,
+  ) => Effect.Effect<{ json?: HookJSONOutput; exitBlock?: string }>
+}
+
+const commandHandler: HookHandler = {
+  type: "command",
+  run: Effect.fn("SettingsHook.handler.command")(function* (entry, envelope, cwd, _inHook) {
+    const stdinJSON = JSON.stringify(envelope)
+    const { exitCode, stdout, stderr, spawnError } = yield* Effect.promise(() =>
+      execShell(entry, stdinJSON, cwd),
+    )
+
+    if (spawnError) {
+      return { json: undefined, exitBlock: undefined }
+    }
+
+    // Exit-code 2: block + stderr-as-reason (CC contract)
+    if (exitCode === 2) {
+      const reason = stderr.trim() || "Hook blocked execution"
+      return { json: parseStdout(stdout, commandText(entry)), exitBlock: reason }
+    }
+
+    // Other non-zero exits: log and continue (do not abort main flow)
+    if (exitCode === null) {
+      log.warn("hook command timed out / killed (non-blocking)", {
+        command: commandText(entry),
+        timeoutMs: entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS,
+      })
+    }
+    if (exitCode !== 0 && exitCode !== null) {
+      log.warn("hook command exited non-zero (non-blocking)", {
+        command: commandText(entry),
+        exitCode,
+        stderr: stderr.trim().slice(0, 200),
+      })
+    }
+
+    return { json: parseStdout(stdout, commandText(entry)), exitBlock: undefined }
+  }),
+}
+
+function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
+  return {
+    type: "mcp",
+    run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
+      if (inHook) {
+        log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      const json = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope)
+      return { json, exitBlock: undefined }
+    }),
+  }
+}
+
+/**
+ * `type: "http"` handler. Per CC protocol, `entry.command` is the endpoint URL;
+ * the envelope is POSTed as JSON. 2xx → body parsed via the same parseStdout path
+ * as command stdout. Non-2xx → synthetic `exitBlock` so the trigger aggregator
+ * surfaces it as a block. Network errors / timeouts → log.warn + silent allow,
+ * mirroring commandHandler's spawnError behavior (hooks must never crash the host).
+ *
+ * Factory takes the resolved HttpClient so the HookHandler.run signature stays
+ * `R = never` (the WP-4A interface contract). Captures `http` in closure scope —
+ * registered once per layer construction inside the layer's Effect.gen block.
+ */
+function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
+  const httpRead = withTransientReadRetry(http)
+  return {
+    type: "http",
+    run: Effect.fn("SettingsHook.handler.http")(function* (entry, envelope, _cwd, _inHook) {
+      // entry.timeout is seconds (matches commandHandler convention); fallback to CC default.
+      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+
+      const url = httpUrl(entry)
+      const exit = yield* HttpClientRequest.post(url).pipe(
+        HttpClientRequest.bodyJson(envelope),
+        Effect.flatMap((req) => httpRead.execute(req)),
+        Effect.flatMap((res) =>
+          Effect.gen(function* () {
+            const text = yield* res.text
+            return { status: res.status, text }
+          }),
+        ),
+        Effect.timeout(timeoutMs),
+        Effect.exit,
+      )
+
+      if (exit._tag === "Failure") {
+        log.warn("http hook request failed (non-blocking)", {
+          command: url,
+          error: String(exit.cause),
+        })
+        return { json: undefined, exitBlock: undefined }
+      }
+
+      const { status, text } = exit.value
+      if (status < 200 || status >= 300) {
+        return { json: undefined, exitBlock: `http hook returned status ${status}` }
+      }
+
+      return { json: parseStdout(text, url), exitBlock: undefined }
+    }),
+  }
+}
+
+/**
+ * `type: "prompt"` handler — single-turn LLM call (CC v1 protocol).
+ *
+ * `entry.command` is interpreted as the system prompt template; the stdin envelope
+ * (already shaped by buildStdinEnvelope) is JSON-stringified into the user message.
+ * The model returns structured output matching HookJSONOutputZodSchema (loose flat
+ * shape; see definition near HookJSONOutput).
+ *
+ * Failure policy is **silent allow** — mirrors httpHandler's network-error path:
+ *   - OpenAI OAuth provider: not supported in v1 (no API key for generateObject).
+ *     log.warn + return undefined json. v2 may switch to small-fast model w/ OAuth path.
+ *   - generateObject reject (auth missing, rate-limit, schema mismatch, …): log.warn +
+ *     return undefined json. Hooks must never crash or block the host on infra errors.
+ *
+ * MUST use `Effect.tryPromise + Effect.exit` (not `Effect.promise`): the latter
+ * turns a reject into a defect, which would propagate as a die and violate the
+ * non-blocking hook contract. The agent.ts:397 pattern is intentionally NOT copied
+ * here for that exact reason.
+ */
+function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): HookHandler {
+  return {
+    type: "prompt",
+    run: Effect.fn("SettingsHook.handler.prompt")(function* (entry, envelope, _cwd, _inHook) {
+      // Outer Effect.exit mirrors httpHandler:697-707 — bottom-line guarantee that
+      // any pre-LLM defect (provider.defaultModel/getModel/getLanguage die,
+      // auth.get die via orDie) cannot escape the handler. Hooks must never crash
+      // the host on infra errors. The inner gen body is the original logic verbatim.
+      const exit = yield* Effect.gen(function* () {
+        const prompt = promptText(entry)
+        const m = yield* provider.defaultModel()
+        const resolved = yield* provider.getModel(m.providerID, m.modelID)
+        const language = yield* provider.getLanguage(resolved)
+
+        // OpenAI OAuth: generateObject doesn't have a working code path under OAuth
+        // creds in v1 (would need streamObject + providerOptions hack like agent.ts).
+        // Skip silently rather than half-implement.
+        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+        if (m.providerID === "openai" && authInfo?.type === "oauth") {
+          log.warn("prompt hook: OpenAI OAuth provider not supported in v1", {
+            command: prompt.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        const params = {
+          temperature: 0.3,
+          model: language,
+          messages: [
+            { role: "system", content: prompt } as ModelMessage,
+            { role: "user", content: JSON.stringify(envelope) } as ModelMessage,
+          ],
+          schema: HookJSONOutputZodSchema,
+        } satisfies Parameters<typeof generateObject>[0]
+
+        const llmExit = yield* Effect.tryPromise({
+          try: () => generateObject(params).then((r) => r.object),
+          catch: (e) => e,
+        }).pipe(Effect.exit)
+
+        if (llmExit._tag === "Failure") {
+          log.warn("prompt hook failed (non-blocking)", { error: String(llmExit.cause) })
+          return { json: undefined, exitBlock: undefined }
+        }
+        return { json: llmExit.value as HookJSONOutput, exitBlock: undefined }
+      }).pipe(Effect.exit)
+
+      if (exit._tag === "Failure") {
+        log.warn("prompt hook setup failed (non-blocking)", { error: String(exit.cause) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return exit.value
+    }),
+  }
+}
+
+/**
+ * `type: "agent"` handler — multi-turn LLM with a tool palette (CC v1 protocol).
+ *
+ * `entry.command` is the system prompt; the stdin envelope is JSON-stringified
+ * into the user message. The model is given 5 read-only tools from `agent-tools.ts`
+ * (read_file / list_dir / grep / bash / synthetic_output) and runs up to
+ * MAX_AGENT_TURNS turns. The hook decision is emitted by calling synthetic_output;
+ * the loop polls the captured slot after each turn.
+ *
+ * Failure policy is **silent allow** — same contract as makePromptHandler. Three
+ * distinct failure log strings differentiate setup defects (provider/auth/getLanguage),
+ * timeout/abort, and generateText reject so operators can grep them apart.
+ *
+ * Structure mirrors WP-4C-fix's prompt handler (outer Effect.exit on the setup
+ * gen) plus an inner tryPromise+exit on the loop Promise so AbortError and
+ * generateText rejects don't escape as defects.
+ */
+function makeAgentHandler(
+  provider: Provider.Interface,
+  auth: Auth.Interface,
+  spawner: ChildProcessSpawner["Service"],
+  fs: FSUtil.Interface,
+): HookHandler {
+  return {
+    type: "agent",
+    run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
+      const exit = yield* Effect.gen(function* () {
+        const prompt = promptText(entry)
+        const m = yield* provider.defaultModel()
+        const resolved = yield* provider.getModel(m.providerID, m.modelID)
+        const language = yield* provider.getLanguage(resolved)
+        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+
+        if (m.providerID === "openai" && authInfo?.type === "oauth") {
+          log.warn("agent hook: OpenAI OAuth provider not supported in v1", {
+            command: prompt.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        // Loop runs in an async Promise so the ai SDK's AbortError / network rejects
+        // can be caught with a single tryPromise. AbortController doubles as the
+        // timeout source (entry.timeout in ms; CC's `timeout` field for command/http
+        // is seconds, but agent's spec — m0021 — keeps ms semantics for parity with
+        // the loop-internal setTimeout). Inner finally clears the timer regardless
+        // of how the loop exited so the normal-completion path doesn't leak it.
+        const captured: { value: HookJSONOutput | null } = { value: null }
+        const ac = new AbortController()
+        const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
+        const timer = setTimeout(() => ac.abort(), timeoutMs)
+
+        const loopExit = yield* Effect.tryPromise({
+          try: async () => {
+            try {
+              const tools = buildAgentTools({ spawner, fs, signal: ac.signal, cwd, captured })
+              const messages: ModelMessage[] = [
+                { role: "system", content: prompt },
+                { role: "user", content: JSON.stringify(envelope) },
+              ]
+              for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
+                const result = await generateText({
+                  model: language,
+                  messages,
+                  tools,
+                  toolChoice: "auto",
+                  abortSignal: ac.signal,
+                  maxOutputTokens: 4096,
+                  allowSystemInMessages: true,
+                } as any)
+                if (captured.value) return captured.value
+                messages.push(...result.response.messages)
+                if (
+                  result.finishReason === "stop" ||
+                  result.finishReason === "length" ||
+                  result.finishReason === "content-filter"
+                )
+                  break
+                // Pure text turn with no tool calls — the model is no longer making
+                // progress toward synthetic_output. Bail rather than spin to MAX_TURNS.
+                if (result.toolCalls.length === 0) break
+              }
+              return null
+            } finally {
+              clearTimeout(timer)
+            }
+          },
+          catch: (e) => e,
+        }).pipe(Effect.exit)
+
+        if (loopExit._tag === "Failure") {
+          const cause = String(loopExit.cause)
+          const isAbort = cause.includes("AbortError") || cause.includes("aborted")
+          if (isAbort) {
+            log.warn("agent hook timeout / aborted (non-blocking)", {
+              error: cause,
+              command: prompt.slice(0, 80),
+            })
+          } else {
+            log.warn("agent hook generateText failed (non-blocking)", {
+              error: cause,
+              command: prompt.slice(0, 80),
+            })
+          }
+          return { json: undefined, exitBlock: undefined }
+        }
+
+        if (!loopExit.value) {
+          log.warn("agent hook reached max turns or no synthetic_output (non-blocking)", {
+            command: prompt.slice(0, 80),
+          })
+          return { json: undefined, exitBlock: undefined }
+        }
+        return { json: loopExit.value, exitBlock: undefined }
+      }).pipe(Effect.exit)
+
+      if (exit._tag === "Failure") {
+        log.warn("agent hook setup failed (non-blocking)", { error: String(exit.cause) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return exit.value
+    }),
+  }
+}
+
+// WP-4D-2 constants. MAX_AGENT_TURNS pinned at 200 by user m0021 — gives the LLM
+// enough headroom for deep-investigation hooks before the loop bails. Default
+// timeout matches DEFAULT_TIMEOUT_MS (60s) used by command/http handlers.
+const MAX_AGENT_TURNS = 200
+const DEFAULT_AGENT_TIMEOUT_MS = 60_000
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const mcpSvc = yield* MCP.Service
+    const http = yield* HttpClient.HttpClient
+    const provider = yield* Provider.Service
+    const auth = yield* Auth.Service
+    const spawner = yield* ChildProcessSpawner
+    const fs = yield* FSUtil.Service
+    const sessionHooks = yield* SessionHooks.Service
+
+    const state = yield* InstanceState.make(
+      Effect.fn("SettingsHook.state")(function* (instCtx) {
+        const settings = loadChain(instCtx.directory, instCtx.worktree)
+        return { settings, cwd: instCtx.directory, seen: new Set<string>() } satisfies State
+      }),
+    )
+
+    // Registry built once per layer construction. WP-4D-2 wires `agent`; the full
+    // 5-type set (command/mcp/http/prompt/agent) is now implemented end-to-end.
+    const handlers: Record<string, HookHandler> = {
+      command: commandHandler,
+      mcp: makeMcpHandler(mcpSvc),
+      http: makeHttpHandler(http),
+      prompt: makePromptHandler(provider, auth),
+      agent: makeAgentHandler(provider, auth, spawner, fs),
+    }
+
+    // [FORK:hook-ext] Assemble fork middleware — wired from hook/extensions/index.ts
+    // When undefined, trigger() behaves identically to upstream.
+    const forkHooks: ForkHooks | undefined = buildForkHooks
+      ? buildForkHooks({ sessionHooks })
+      : undefined
+
+    /**
+     * Execute a single hook entry. Never throws. Returns the parsed JSON
+     * output + a synthetic blocking signal for exit-code-2 protocol.
+     */
+    const runEntry = Effect.fn("SettingsHook.runEntry")(function* (
+      entry: HookCommand,
+      envelope: Record<string, unknown>,
+      cwd: string,
+      inHook: boolean,
+    ) {
+      using _ = log.time("runEntry", { type: entry.type, command: commandText(entry).slice(0, 80) })
+      const handler = handlers[entry.type]
+      if (!handler) {
+        // Defensive fallback: handlers table is exhaustive over the schema's 5 types
+        // (command/mcp/http/prompt/agent). This guards against future schema additions
+        // that miss handler registration. Currently dead-code by construction.
+        log.warn("hook type not registered (defensive fallback)", { type: entry.type, command: commandText(entry) })
+        return {
+          json: undefined as HookJSONOutput | undefined,
+          exitBlock: `hook type "${entry.type}" not yet implemented` as string | undefined,
+        }
+      }
+      return yield* handler.run(entry as never, envelope, cwd, inHook)
+    })
+
+    const trigger = Effect.fn("SettingsHook.trigger")(function* (
+      payload: HookPayload,
+      ctx: TriggerContext,
+    ) {
+      using _ = log.time("trigger", { event: payload.event, sessionID: ctx.sessionID })
+      const s = yield* InstanceState.get(state)
+      const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
+
+      // ── WP-6A: O(1) short-circuit ─────────────────────────────
+      // Skip the entire matcher pipeline (envelope build, target derivation,
+      // session merge allocation, matcher regex) when neither the on-disk
+      // settings chain nor the session store has any entry for this event.
+      // s.settings is already cached on the InstanceState, so the file-side
+      // probe is a property access. The session probe is O(1) (Map.get +
+      // .some over the session's own array, typically empty).
+      const sessionEvent: HookEvent =
+        ctx.isSubAgent && payload.event === "Stop" ? "SubagentStop" : payload.event
+      const hasFile = (s.settings.hooks?.[payload.event]?.length ?? 0) > 0
+      const hasSession = ctx.sessionID
+        ? yield* sessionHooks.hasForEvent(SessionID.make(ctx.sessionID), sessionEvent)
+        : false
+      if (!hasFile && !hasSession) {
+        log.info("trigger short-circuit", { event: payload.event, reason: "no_matchers", hasFile, hasSession })
+        return result
+      }
+
+      // TODO(WP-6B): once a workspace-trust system exists in this fork, gate
+      // execution here with something like:
+      //
+      //   const trusted = yield* Project.isTrusted(s.cwd)
+      //   if (!trusted && !s.settings.allowUntrusted) {
+      //     log.warn("hooks skipped: workspace not trusted", { cwd: s.cwd })
+      //     return result            // silent allow — never deny / throw
+      //   }
+      //
+      // Hooks reach into the user's shell, network, and LLM accounts; running
+      // them inside an untrusted workspace is the same threat model VS Code
+      // gates with workspace-trust. Until then this is a no-op so behavior is
+      // unchanged. The `allowUntrusted` schema field is already accepted on
+      // Settings so user configs written today won't fail-parse later.
+
+      // ── Session-scoped hook resolution (WP-5D) ────────────────
+      // Sub-agent stop semantics: if the caller marks this trigger as
+      // running inside a sub-agent and fires `Stop`, look up SubagentStop
+      // session hooks. Settings-file lookup still uses payload.event verbatim
+      // (the on-disk chain is already correctly addressed by callers).
+      const sessionEntries = ctx.sessionID
+        ? yield* sessionHooks.list(SessionID.make(ctx.sessionID), sessionEvent)
+        : ([] as readonly SessionHookEntry[])
+
+      const fileMatchers = s.settings.hooks?.[payload.event] ?? []
+      // Tag matchers with their origin so once-cleanup can remove session ones
+      // after execution. The settings chain matchers carry no _sessionEntry.
+      type RunMatcher = HookMatcher & { _sessionEntry?: SessionHookEntry }
+      const matchers: RunMatcher[] = [
+        ...fileMatchers.map((m) => m as RunMatcher),
+        ...sessionEntries.map(
+          (e) =>
+            ({
+              matcher: e.matcher,
+              hooks: e.hooks as HookCommand[],
+              _sessionEntry: e,
+            }) satisfies RunMatcher,
+        ),
+      ]
+      if (!matchers.length) {
+        log.info("trigger short-circuit", { event: payload.event, reason: "empty_matchers" })
+        return result
+      }
+
+      const target = matcherTarget(payload)
+      const envelope = buildStdinEnvelope(payload, ctx, s.cwd)
+
+      for (const group of matchers) {
+        if (!matches(group.matcher, target)) continue
+
+        for (const entry of group.hooks) {
+          // Forward-compat: skip truly unknown types so future schema additions don't crash
+          // older handlers. Known types (command/mcp/http/prompt/agent) all flow into runEntry.
+          if (
+            entry.type !== "command" &&
+            entry.type !== "mcp" &&
+            entry.type !== "http" &&
+            entry.type !== "prompt" &&
+            entry.type !== "agent"
+          )
+            continue
+
+          // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
+          if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
+
+          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false)
+
+          // [FORK:hook-ext] Post-dispatch observation — never modifies result
+          forkHooks?.afterRunEntry?.(entry, envelope, payload.event, { json, exitBlock })
+
+          // Exit-code-2 block beats stdout decision
+          if (exitBlock) {
+            result.blocked = { reason: exitBlock, command: commandText(entry) }
+          }
+
+          if (!json) {
+            // once: true entries are cleared after running, regardless of result.
+            if (group._sessionEntry?.once && ctx.sessionID) {
+              yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+            }
+            continue
+          }
+
+          if (json.decision === "block" && !result.blocked) {
+            result.blocked = { reason: json.reason ?? "Blocked by hook", command: commandText(entry) }
+          }
+
+          if (json.continue === false) {
+            result.preventContinuation = true
+            if (json.stopReason && !result.stopReason) result.stopReason = json.stopReason
+          }
+
+          if (json.systemMessage) result.systemMessages.push(json.systemMessage)
+
+          const hso = json.hookSpecificOutput
+          // Property-based narrowing — works across union variants without depending on
+          // hookEventName tag (which the fallback variant may also accept).
+          if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
+            const ctx = hso.additionalContext
+            if (!s.seen.has(ctx)) {
+              s.seen.add(ctx)
+              result.additionalContexts.push(ctx)
+            }
+          }
+          if (hso && "permissionDecision" in hso && hso.permissionDecision) {
+            result.permissionDecision = hso.permissionDecision
+            result.permissionDecisionReason =
+              "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
+          }
+          if (hso && "updatedInput" in hso && hso.updatedInput) {
+            result.updatedInput = hso.updatedInput
+          }
+
+          // once: true cleanup — runs after aggregating this entry's json so
+          // additionalContext etc. still surface on the first (and only) firing.
+          if (group._sessionEntry?.once && ctx.sessionID) {
+            yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+          }
+
+          // CC contract: continue=false short-circuits remaining hooks in this
+          // matcher (and below, in subsequent matchers). Aggregation for the
+          // current entry's json has already happened above — break only after.
+          if (result.preventContinuation) break
+        }
+        if (result.preventContinuation) break
+      }
+
+      return result
+    })
+
+    return Service.of({ trigger })
+  }),
+)
+
+// defaultLayer provides MCP, HttpClient, Provider, Auth, FileSystem, and
+// ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
+// its bash / read_file / list_dir / grep tools. Every module that consumes
+// these spawn/fs services closes them in its own defaultLayer (see
+// git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
+// in makeRuntime deduplicates the underlying instances across services.
+export const defaultLayer = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(MCP.defaultLayer),
+    Layer.provide(FetchHttpClient.layer),
+    Layer.provide(Provider.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(CrossSpawnSpawner.defaultLayer),
+    Layer.provide(SessionHooks.defaultLayer),
+  ),
+)
+
+// ── type:"mcp" hook execution ───────────────────────────────────
+
+/**
+ * Resolve and invoke an MCP tool registered as a hook. Format follows the
+ * Claude Code protocol:
+ *   "mcp__<server>__<tool>"
+ *
+ * The fork's MCP service stores tools under `sanitize(server)_sanitize(tool)`
+ * (see src/mcp/index.ts). We strip the leading `mcp__`, split on `__` for the
+ * server/tool boundary, sanitize each side and rejoin with a single
+ * underscore to look up the tool. This keeps the on-disk hook config in lock
+ * step with Claude Code while staying compatible with the fork's internal
+ * tool registry naming.
+ *
+ * Calls MCP.Service.tools() to get the tool registry and invokes the matching
+ * tool with the hook envelope as `arguments`. Parses the first text content
+ * item as JSON to obtain the standard hook control output.
+ */
+function invokeMcpHook(
+  mcpSvc: MCP.Interface,
+  command: string,
+  envelope: Record<string, unknown>,
+) {
+  return Effect.gen(function* () {
+    if (!command.startsWith("mcp__")) {
+      log.warn("mcp hook command must start with mcp__", { command })
+      return undefined
+    }
+
+    const tools = yield* mcpSvc.tools()
+    // Convert CC-format "mcp__server__tool" to internal key "server_tool"
+    // (sanitized, single underscore separator).
+    const sanitizeIdent = (s: string) => s.replace(/[^a-zA-Z0-9_-]/g, "_")
+    const stripped = command.slice("mcp__".length)
+    const sepIdx = stripped.indexOf("__")
+    const internalKey =
+      sepIdx === -1
+        ? sanitizeIdent(stripped)
+        : sanitizeIdent(stripped.slice(0, sepIdx)) + "_" + sanitizeIdent(stripped.slice(sepIdx + 2))
+    const tool = tools[internalKey] ?? tools[command]
+    if (!tool) {
+      log.warn("mcp hook tool not found", {
+        command,
+        internalKey,
+        available: Object.keys(tools).length,
+      })
+      return undefined
+    }
+
+    if (!tool.execute) {
+      log.warn("mcp hook tool has no execute()", { command })
+      return undefined
+    }
+
+    const result = yield* Effect.promise(() =>
+      Promise.resolve(
+        tool.execute!(envelope as never, {
+          toolCallId: `hook-${Date.now()}`,
+          messages: [],
+          abortSignal: new AbortController().signal,
+        } as never),
+      ).catch((err) => {
+        log.warn("mcp hook execution threw", { command, error: String(err) })
+        return undefined
+      }),
+    )
+
+    if (!result || typeof result !== "object" || !("content" in result)) return undefined
+
+    const content = (result as { content: Array<{ type: string; text?: string }> }).content
+    const firstText = content.find((c) => c.type === "text" && typeof c.text === "string")?.text
+    if (!firstText) return undefined
+
+    return parseStdout(firstText, command)
+  })
+}
+
+export const node = LayerNode.make(layer, [
+  MCP.node,
+  Provider.node,
+  Auth.node,
+  FSUtil.node,
+  SessionHooks.node,
+  CrossSpawnSpawner.node,
+] as any)
+
+export * as SettingsHook from "./settings"

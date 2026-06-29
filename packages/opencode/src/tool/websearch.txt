@@ -12,3 +12,15 @@ Usage notes:
 
 The current year is {{year}}. You MUST use this year when searching for recent information or current events
 - Example: If the current year is 2026 and the user asks for "latest AI news", search for "AI news 2026", NOT "AI news 2025"
+
+## Parameters
+
+- `query` (REQUIRED): Search query string.
+- `numResults` (optional): Number of results to return (default varies by provider).
+- `livecrawl` (optional): Enable live crawling for fresh results.
+- `type` (optional): Search type filter.
+- `contextMaxCharacters` (optional): Maximum characters per result snippet.
+
+## Returns
+
+Search results with titles, URLs, and content snippets.

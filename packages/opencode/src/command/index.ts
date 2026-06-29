@@ -45,6 +45,8 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  GOAL: "goal",
+  SUBGOAL: "subgoal",
 } as const
 
 export interface Interface {
@@ -84,6 +86,20 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.GOAL] = {
+        name: Default.GOAL,
+        description: "set an autonomous goal for the agent",
+        source: "command",
+        template: "",
+        hints: [],
+      }
+      commands[Default.SUBGOAL] = {
+        name: Default.SUBGOAL,
+        description: "add a subgoal to the current goal",
+        source: "command",
+        template: "",
+        hints: [],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

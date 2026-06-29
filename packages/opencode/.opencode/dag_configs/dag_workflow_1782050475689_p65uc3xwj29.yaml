@@ -1,0 +1,11 @@
+name: depth-propagation-E
+nodes:
+  -
+    id: E1
+    name: E1
+    dependencies: []
+    required: false
+    worker_type: general
+    worker_config:
+      prompt: Task for E1
+max_concurrency: 1

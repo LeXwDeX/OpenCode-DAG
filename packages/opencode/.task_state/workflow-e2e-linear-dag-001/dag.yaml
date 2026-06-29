@@ -1,0 +1,44 @@
+name: basic-linear-dag
+description: 基本线性 DAG（skeleton → tdd → implement）
+
+system:
+  sandbox:
+    type: git_worktree
+    base_dir: ".task_state"
+    cleanup_on_complete: false
+    keep_on_failure: true
+  default_merge_strategy: squash
+
+branches:
+  - name: main
+    nodes:
+      - type: required
+        name: skeleton
+        agent: implement
+        prompt_file: .opencode/agents/implement.md
+        task: "创建骨架代码"
+        
+      - type: required
+        name: tdd
+        agent: implement
+        prompt_file: .opencode/agents/implement.md
+        task: "编写单元测试"
+        depends_on: [skeleton]
+        
+      - type: required
+        name: implement
+        agent: implement
+        prompt_file: .opencode/agents/implement.md
+        task: "实现业务代码"
+        depends_on: [tdd]
+
+constraints:
+  max_nodes: 20
+  max_concurrency: 3
+  node_timeout_sec: 600
+  max_pushes: 3
+  max_fallback_chain: 3
+  disable_worktree_isolation: false
+
+fallback:
+  max_chain: 3
