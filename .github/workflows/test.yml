@@ -3,16 +3,18 @@ name: test
 on:
   push:
     branches:
-      - main
       - dev
   pull_request:
+    branches:
+      - dev
+      - main
   workflow_dispatch:
 
 concurrency:
-  # main/dev: every run gets a unique group → never cancelled
+  # dev: every run gets a unique group → never cancelled
   # PRs/other branches: shared group → cancel stale runs to save CI minutes
-  group: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/dev' }}
+  group: ${{ github.ref == 'refs/heads/dev' && format('{0}-{1}', github.workflow, github.run_id) || format('{0}-{1}', github.workflow, github.event.pull_request.number || github.ref) }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/dev' }}
 
 permissions:
   contents: read
