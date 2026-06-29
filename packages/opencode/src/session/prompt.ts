@@ -572,11 +572,14 @@ export const layer = Layer.effect(
             return { msg, part, cwd: ctx.directory }
           }).pipe(Effect.ensuring(markReady))
 
+          // Reassign part to mutable for hook updates
+          let mutablePart = part
           const cfg = yield* config.get()
           const sh = Shell.preferred(cfg.shell)
           const args = Shell.args(sh, input.command, cwd)
           let output = ""
           let aborted = false
+          let shellHookDenied = false
 
           const finish = Effect.uninterruptible(
             Effect.gen(function* () {
@@ -588,7 +591,7 @@ export const layer = Layer.effect(
                 yield* events.publish(SessionEvent.Shell.Ended, {
                   sessionID: input.sessionID,
                   timestamp: DateTime.makeUnsafe(completed),
-                  callID: part.callID,
+                  callID: mutablePart.callID,
                   output,
                 })
               }
@@ -596,16 +599,16 @@ export const layer = Layer.effect(
                 msg.time.completed = completed
                 yield* sessions.updateMessage(msg)
               }
-              if (part.state.status === "running") {
-                part.state = {
+              if (mutablePart.state.status === "running") {
+                mutablePart.state = {
                   status: "completed",
-                  time: { ...part.state.time, end: completed },
-                  input: part.state.input,
+                  time: { ...mutablePart.state.time, end: completed },
+                  input: mutablePart.state.input,
                   title: "",
                   metadata: { output },
                   output,
                 }
-                yield* sessions.updatePart(part)
+                yield* sessions.updatePart(mutablePart)
               }
             }),
           )
@@ -614,24 +617,22 @@ export const layer = Layer.effect(
             Effect.gen(function* () {
               const shellEnv = yield* plugin.trigger(
                 "shell.env",
-                { cwd, sessionID: input.sessionID, callID: part.callID },
+                { cwd, sessionID: input.sessionID, callID: mutablePart.callID },
                 { env: {} },
               )
               // SettingsHook: PreToolUse for shell — can deny/block execution
-              let shellHookDenied = false
               if (settingsHook) {
                 const preResult = yield* settingsHook
                   .trigger(
-                    { event: "PreToolUse", toolName: "bash", toolInput: { command: input.command }, toolUseID: part.callID } as any,
+                    { event: "PreToolUse", toolName: "bash", toolInput: { command: input.command }, toolUseID: mutablePart.callID } as any,
                     { sessionID: input.sessionID, transcriptPath: "" },
                   )
                   .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, permissionDecision: undefined as "allow" | "deny" | "ask" | undefined, permissionDecisionReason: undefined as string | undefined } as any)))
                 if (preResult.permissionDecision === "deny" || preResult.blocked) {
                   shellHookDenied = true
                   const reason = preResult.permissionDecisionReason ?? (preResult.blocked as any)?.reason ?? "Denied by PreToolUse hook"
-                  const errorState = { status: "error" as const, error: reason, time: { start: (part.state as any).time?.start ?? Date.now(), end: Date.now() }, input: part.state.input }
-                  const updatedPart: SessionV1.ToolPart = { ...part, state: errorState as any }
-                  yield* sessions.updatePart(updatedPart)
+                  const errorState = { status: "error" as const, error: reason, time: { start: (mutablePart.state as any).time?.start ?? Date.now(), end: Date.now() }, input: mutablePart.state.input }
+                  mutablePart = yield* sessions.updatePart({ ...mutablePart, state: errorState as any } satisfies SessionV1.ToolPart)
                 }
               }
               if (!shellHookDenied) {
@@ -646,9 +647,9 @@ export const layer = Layer.effect(
               yield* Stream.runForEach(Stream.decodeText(handle.all), (chunk) =>
                 Effect.gen(function* () {
                   output += chunk
-                  if (part.state.status === "running") {
-                    part.state.metadata = { output }
-                    yield* sessions.updatePart(part)
+                  if (mutablePart.state.status === "running") {
+                    mutablePart.state.metadata = { output }
+                    yield* sessions.updatePart(mutablePart)
                   }
                 }),
               )
@@ -662,11 +663,11 @@ export const layer = Layer.effect(
           }
           yield* finish
 
-          // SettingsHook: PostToolUse for shell command
-          if (settingsHook) {
+          // SettingsHook: PostToolUse for shell command (skip if hook denied)
+          if (settingsHook && !shellHookDenied) {
             yield* settingsHook
               .trigger(
-                { event: "PostToolUse", toolName: "bash", toolInput: { command: input.command }, toolResponse: output, toolUseID: part.callID } as any,
+                { event: "PostToolUse", toolName: "bash", toolInput: { command: input.command }, toolResponse: output, toolUseID: mutablePart.callID } as any,
                 { sessionID: input.sessionID, transcriptPath: "" },
               )
               .pipe(Effect.ignore)
@@ -676,7 +677,7 @@ export const layer = Layer.effect(
             return yield* Effect.failCause(exit.cause)
           }
 
-          return { info: msg, parts: [part] }
+          return { info: msg, parts: [mutablePart] }
         }),
       )
     })
@@ -1229,22 +1230,8 @@ export const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
-      // SettingsHook: drain HookStartContext queued by SessionStart hooks
-      if (startContext) {
-        const drained = yield* startContext.consume(input.sessionID)
-        for (const ctx of drained) {
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            messageID: message.info.id,
-            sessionID: input.sessionID,
-            type: "text",
-            text: ctx,
-            synthetic: true,
-          } satisfies SessionV1.TextPart)
-        }
-      }
-
       // SettingsHook: UserPromptSubmit — gives hooks a chance to block or modify the turn
+      let hookAdditionalContexts: string[] = []
       if (settingsHook) {
         const hookResult = yield* settingsHook
           .trigger(
@@ -1252,17 +1239,25 @@ export const layer = Layer.effect(
             { sessionID: input.sessionID, transcriptPath: "" },
           )
           .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, additionalContexts: [] as string[] } as any)))
-        for (const ctx of hookResult.additionalContexts ?? []) {
-          yield* sessions.updatePart({
-            id: PartID.ascending(),
-            messageID: message.info.id,
-            sessionID: input.sessionID,
-            type: "text",
-            text: ctx,
-            synthetic: true,
-          } satisfies SessionV1.TextPart)
-        }
+        hookAdditionalContexts = hookResult.additionalContexts ?? []
         if (hookResult.blocked) return message
+      }
+
+      // SettingsHook: drain HookStartContext queued by SessionStart hooks (only if not blocked)
+      let startContextTexts: string[] = []
+      if (startContext) {
+        startContextTexts = [...(yield* startContext.consume(input.sessionID))]
+      }
+
+      for (const ctx of [...startContextTexts, ...hookAdditionalContexts]) {
+        yield* sessions.updatePart({
+          id: PartID.ascending(),
+          messageID: message.info.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: ctx,
+          synthetic: true,
+        } satisfies SessionV1.TextPart)
       }
 
       const permissions: PermissionV1.Rule[] = []
