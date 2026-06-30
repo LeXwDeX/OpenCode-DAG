@@ -1,4 +1,5 @@
 import { Context, Effect, Layer } from "effect"
+import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { SessionID } from "@/session/schema"
 import { InstanceState } from "@/effect/instance-state"
 
@@ -37,5 +38,7 @@ export const layer = Layer.effect(
 )
 
 export const defaultLayer = layer
+
+export const node = LayerNode.make(layer, [])
 
 export * as HookStartContext from "./start-context"
