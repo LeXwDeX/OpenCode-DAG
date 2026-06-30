@@ -1,4 +1,5 @@
-import type { TuiPlugin, TuiPluginApi, TuiPluginModule } from "@opencode-ai/plugin/tui"
+import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
+import type { BuiltinTuiPlugin } from "../builtins"
 import { Show } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 
@@ -11,17 +12,15 @@ interface GoalState {
   maxTurns: number
 }
 
-const [goals, setGoals] = createStore<Record<string, GoalState>>({})
-
 const STATUS_LABEL: Record<string, string> = {
   active: "进行中",
   achieved: "已达成",
   paused: "已暂停",
 }
 
-function View(props: { api: TuiPluginApi; session_id: string }) {
+function View(props: { api: TuiPluginApi; session_id: string; goals: Record<string, GoalState> }) {
   const theme = () => props.api.theme.current
-  const goal = () => goals[props.session_id]
+  const goal = () => props.goals[props.session_id]
   const goalText = () => goal()?.goal
 
   return (
@@ -42,6 +41,10 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
 }
 
 const tui: TuiPlugin = async (api) => {
+  // Store created inside tui() — after the Solid runtime is fully initialized.
+  // Module-level createStore was interfering with TUI render init in Windows Terminal.
+  const [goals, setGoals] = createStore<Record<string, GoalState>>({})
+
   const on = api.event.on as (type: string, handler: (event: { type: string; properties: Record<string, unknown> }) => void) => () => void
 
   on("goal.set", (e) => {
@@ -83,13 +86,13 @@ const tui: TuiPlugin = async (api) => {
     order: 150,
     slots: {
       sidebar_content(_ctx, props) {
-        return <View api={api} session_id={props.session_id} />
+        return <View api={api} session_id={props.session_id} goals={goals} />
       },
     },
   })
 }
 
-const plugin: TuiPluginModule & { id: string } = {
+const plugin: BuiltinTuiPlugin = {
   id,
   tui,
 }
