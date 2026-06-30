@@ -148,7 +148,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const settingsHook = yield* SettingsHook.Service
     const startContext = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
     const goal = yield* Goal.Service
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
@@ -1456,12 +1456,13 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, hooksDocs, modelMsgs] = yield* Effect.all([
+            const [skills, env, instructions, mcpInstructions, hooksDocs, goalDocs, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
               sys.hooks(),
+              sys.goal(),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
@@ -1470,6 +1471,7 @@ export const layer = Layer.effect(
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
               ...hooksDocs,
+              ...goalDocs,
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
@@ -1958,7 +1960,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   RuntimeFlags.node,
   Database.node,
-  Goal.node,
+  Goal.node, SettingsHook.node,
 ])
 
 export * as SessionPrompt from "./prompt"

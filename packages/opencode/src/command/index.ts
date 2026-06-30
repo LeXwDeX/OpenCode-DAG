@@ -89,17 +89,17 @@ export const layer = Layer.effect(
       }
       commands[Default.GOAL] = {
         name: Default.GOAL,
-        description: "set an autonomous goal for the agent",
+        description: "设定持久目标，自动循环执行直到完成 [status|pause|resume|clear|stop]",
         source: "command",
         template: "",
-        hints: [],
+        hints: ["$ARGUMENTS"],
       }
       commands[Default.SUBGOAL] = {
         name: Default.SUBGOAL,
-        description: "add a subgoal to the current goal",
+        description: "管理子目标 [list|<text>|remove <n>|clear]",
         source: "command",
         template: "",
-        hints: [],
+        hints: ["$ARGUMENTS"],
       }
 
       for (const [name, command] of Object.entries(cfg.command ?? {})) {

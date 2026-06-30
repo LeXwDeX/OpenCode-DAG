@@ -169,7 +169,7 @@ export const layer = Layer.effect(
     const provider = yield* Provider.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
-    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const settingsHook = yield* SettingsHook.Service
 
     const isOverflow = Effect.fn("SessionCompaction.isOverflow")(function* (input: {
       tokens: SessionV1.Assistant["tokens"]
@@ -631,6 +631,6 @@ export const node = LayerNode.make(layer, [
   Provider.node,
   EventV2Bridge.node,
   RuntimeFlags.node,
-])
+, SettingsHook.node])
 
 export * as SessionCompaction from "./compaction"

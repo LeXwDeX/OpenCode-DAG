@@ -52,6 +52,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { HookStartContext } from "@/hook/start-context"
+import { SettingsHook } from "@/hook/settings"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
 
@@ -76,12 +77,14 @@ export const AppLayer = Layer.mergeAll(
     Question.defaultLayer,
     Permission.defaultLayer,
     Todo.defaultLayer,
+    Goal.defaultLayer,
     Session.defaultLayer,
     SessionStatus.defaultLayer,
     BackgroundJob.defaultLayer,
     RuntimeFlags.defaultLayer,
     EventV2Bridge.defaultLayer,
     SessionRunState.defaultLayer,
+    SettingsHook.defaultLayer,
   ),
   Layer.mergeAll(
     SessionProcessor.defaultLayer,
@@ -106,7 +109,6 @@ export const AppLayer = Layer.mergeAll(
     ShareNext.defaultLayer,
     SessionShare.defaultLayer,
     HookStartContext.defaultLayer,
-    Goal.defaultLayer,
   ),
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
