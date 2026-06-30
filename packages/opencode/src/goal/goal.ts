@@ -58,6 +58,19 @@ export const layer = Layer.effect(
     const { db } = yield* Database.Service
     const sessionStatus = yield* SessionStatus.Service
 
+    // Unified event publisher — every state change publishes goal.updated
+    // with the full snapshot, identical to Todo's todo.updated pattern.
+    const publishGoal = (sessionID: SessionID, state: GoalState.Info) =>
+      events.publish(GoalEvent.Updated, {
+        sessionID,
+        goal: {
+          goal: state.goal,
+          status: state.status as "active" | "paused" | "done",
+          turnsUsed: Number(state.turns_used),
+          maxTurns: Number(state.max_turns),
+        },
+      })
+
     const fibers = new Map<SessionID, Fiber.Fiber<unknown, unknown>>()
 
     const registerFiber = Effect.fnUntraced(function* (
@@ -130,11 +143,7 @@ export const layer = Layer.effect(
         subgoals: [],
       })
       yield* saveState(sessionID, state)
-      yield* events.publish(GoalEvent.Set, {
-        sessionID,
-        goal,
-        maxTurns: state.max_turns,
-      })
+      yield* publishGoal(sessionID, state)
       return state
     })
 
@@ -149,7 +158,7 @@ export const layer = Layer.effect(
       })
       yield* saveState(sessionID, updated)
       yield* clearFiber(sessionID)
-      yield* events.publish(GoalEvent.Paused, { sessionID, reason })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -165,13 +174,7 @@ export const layer = Layer.effect(
         last_turn_at: Date.now(),
       })
       yield* saveState(sessionID, updated)
-      yield* events.publish(GoalEvent.Updated, {
-        sessionID,
-        goal: updated.goal,
-        status: updated.status,
-        turnsUsed: updated.turns_used,
-        maxTurns: updated.max_turns,
-      })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -193,7 +196,7 @@ export const layer = Layer.effect(
       })
       yield* saveState(sessionID, updated)
       yield* clearFiber(sessionID)
-      yield* events.publish(GoalEvent.Achieved, { sessionID, reason })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -206,13 +209,7 @@ export const layer = Layer.effect(
         last_turn_at: Date.now(),
       })
       yield* saveState(sessionID, updated)
-      yield* events.publish(GoalEvent.Updated, {
-        sessionID,
-        goal: updated.goal,
-        status: updated.status,
-        turnsUsed: updated.turns_used,
-        maxTurns: updated.max_turns,
-      })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -228,13 +225,7 @@ export const layer = Layer.effect(
         last_turn_at: Date.now(),
       })
       yield* saveState(sessionID, updated)
-      yield* events.publish(GoalEvent.Updated, {
-        sessionID,
-        goal: updated.goal,
-        status: updated.status,
-        turnsUsed: updated.turns_used,
-        maxTurns: updated.max_turns,
-      })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -247,13 +238,7 @@ export const layer = Layer.effect(
         last_turn_at: Date.now(),
       })
       yield* saveState(sessionID, updated)
-      yield* events.publish(GoalEvent.Updated, {
-        sessionID,
-        goal: updated.goal,
-        status: updated.status,
-        turnsUsed: updated.turns_used,
-        maxTurns: updated.max_turns,
-      })
+      yield* publishGoal(sessionID, updated)
       return updated
     })
 
@@ -296,7 +281,7 @@ export const layer = Layer.effect(
           consecutive_parse_failures: newParseFailures as any,
         })
         yield* saveState(sessionID, updated)
-        yield* events.publish(GoalEvent.Achieved, { sessionID, reason })
+        yield* publishGoal(sessionID, updated)
         return {
           state: updated,
           shouldContinue: false,
@@ -321,7 +306,7 @@ export const layer = Layer.effect(
         })
         yield* saveState(sessionID, updated)
         yield* clearFiber(sessionID)
-        yield* events.publish(GoalEvent.Paused, { sessionID, reason: pauseReason })
+        yield* publishGoal(sessionID, updated)
         return {
           state: updated,
           shouldContinue: false,
@@ -343,7 +328,7 @@ export const layer = Layer.effect(
         })
         yield* saveState(sessionID, updated)
         yield* clearFiber(sessionID)
-        yield* events.publish(GoalEvent.Paused, { sessionID, reason: "轮次预算耗尽" })
+        yield* publishGoal(sessionID, updated)
         return {
           state: updated,
           shouldContinue: false,
@@ -361,12 +346,7 @@ export const layer = Layer.effect(
         consecutive_parse_failures: newParseFailures as any,
       })
       yield* saveState(sessionID, updated)
-      yield* events.publish(GoalEvent.Continued, {
-        sessionID,
-        turnsUsed: updated.turns_used,
-        maxTurns: updated.max_turns,
-        reason,
-      })
+      yield* publishGoal(sessionID, updated)
       return {
         state: updated,
         shouldContinue: true,

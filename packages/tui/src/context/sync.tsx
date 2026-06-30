@@ -19,6 +19,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  GoalInfo,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -88,6 +89,9 @@ export const {
       todo: {
         [sessionID: string]: Todo[]
       }
+      goal: {
+        [sessionID: string]: GoalInfo | undefined
+      }
       message: {
         [sessionID: string]: Message[]
       }
@@ -126,6 +130,7 @@ export const {
       session_status: {},
       session_diff: {},
       todo: {},
+      goal: {},
       message: {},
       part: {},
       lsp: [],
@@ -247,6 +252,14 @@ export const {
 
         case "todo.updated":
           setStore("todo", event.properties.sessionID, event.properties.todos)
+          break
+
+        case "goal.updated":
+          setStore("goal", event.properties.sessionID, event.properties.goal)
+          break
+
+        case "goal.cleared":
+          setStore("goal", event.properties.sessionID, undefined)
           break
 
         case "session.diff":
