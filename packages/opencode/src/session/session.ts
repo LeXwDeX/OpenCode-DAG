@@ -495,7 +495,10 @@ export const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
-    const goal = yield* Goal.Service
+    // Goal cleanup is optional — Session must not require Goal at construction
+    // (that would force every Session.defaultLayer consumer to provide Goal's
+    // transitive deps). Resolved lazily via serviceOption, like SettingsHook.
+    const goalOpt = yield* Effect.serviceOption(Goal.Service)
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -621,8 +624,10 @@ export const layer: Layer.Layer<
         }
 
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
-        // Cleanup goal state
-        yield* goal.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
+        // Cleanup goal state (only when Goal service is available in context)
+        if (goalOpt._tag === "Some") {
+          yield* goalOpt.value.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
+        }
         // Cleanup post-tool-batch tracking
         PostToolBatch.resetBatch(sessionID)
         yield* events.remove(sessionID)
