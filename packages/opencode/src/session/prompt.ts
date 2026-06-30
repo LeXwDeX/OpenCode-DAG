@@ -148,7 +148,7 @@ export const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
-    const settingsHook = yield* SettingsHook.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const startContext = yield* HookStartContext.Service
     const goal = yield* Goal.Service
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
@@ -1960,7 +1960,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   RuntimeFlags.node,
   Database.node,
-  Goal.node, SettingsHook.node, HookStartContext.node,
+  Goal.node, HookStartContext.node,
 ])
 
 export * as SessionPrompt from "./prompt"

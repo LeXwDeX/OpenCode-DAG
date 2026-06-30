@@ -25,7 +25,7 @@ export const layer = Layer.effect(
     const shareNext = yield* ShareNext.Service
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
-    const settingsHook = yield* SettingsHook.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const startCtx = yield* HookStartContext.Service
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
@@ -75,6 +75,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(RuntimeFlags.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, SettingsHook.node, HookStartContext.node])
+export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, HookStartContext.node])
 
 export * as SessionShare from "./session"

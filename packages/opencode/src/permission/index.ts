@@ -46,7 +46,7 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const events = yield* EventV2Bridge.Service
-    const settingsHook = yield* SettingsHook.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -270,6 +270,6 @@ export const defaultLayer = layer.pipe(
 
 export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
-, SettingsHook.node])
+, ])
 
 export * as Permission from "."
