@@ -11,7 +11,6 @@ import { Provider } from "@/provider/provider"
 import { Goal } from "./goal"
 import { GoalJudge } from "./judge"
 import { GoalPrompts } from "./prompts"
-import { GoalEvent } from "./events"
 import { generateText } from "ai"
 import { SessionID } from "@/session/schema"
 
@@ -158,12 +157,7 @@ export const layer = Layer.effect(
         parts: [{ type: "text", text: continuationText, ignored: true }],
       })
 
-      yield* events.publish(GoalEvent.Continued, {
-        sessionID,
-        turnsUsed: reloadedState.turns_used,
-        maxTurns: reloadedState.max_turns,
-        reason: verdict.reason,
-      })
+      // updateAfterJudge already published goal.updated — no duplicate publish needed here.
 
       yield* goal.clearLoopFiber(sessionID)
     })

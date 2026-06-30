@@ -520,6 +520,28 @@ export type EventTodoUpdated = {
   }
 }
 
+export type GoalInfo = {
+  goal: string
+  status: string
+  turnsUsed: number
+  maxTurns: number
+}
+
+export type EventGoalUpdated = {
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: GoalInfo
+  }
+}
+
+export type EventGoalCleared = {
+  type: "goal.cleared"
+  properties: {
+    sessionID: string
+  }
+}
+
 export type EventCommandExecuted = {
   type: "command.executed"
   properties: {
@@ -718,6 +740,8 @@ export type Event =
   | EventSessionCompacted
   | EventFileEdited
   | EventTodoUpdated
+  | EventGoalUpdated
+  | EventGoalCleared
   | EventCommandExecuted
   | EventSessionCreated
   | EventSessionUpdated
