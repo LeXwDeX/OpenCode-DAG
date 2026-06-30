@@ -1637,12 +1637,9 @@ function invokeMcpHook(
 }
 
 export const node = LayerNode.make(layer, [
-  MCP.node,
-  Provider.node,
-  Auth.node,
-  FSUtil.node,
+  EventV2Bridge.node,
+  Database.node,
   SessionHooks.node,
-  CrossSpawnSpawner.node,
-] as any)
+])
 
 export * as SettingsHook from "./settings"
