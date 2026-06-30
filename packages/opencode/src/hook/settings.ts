@@ -1570,13 +1570,17 @@ export const layer = Layer.effect(
 // ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
 // its bash / read_file / list_dir / grep tools. Every module that consumes
 // these spawn/fs services closes them in its own defaultLayer (see
-// git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
-// in makeRuntime deduplicates the underlying instances across services.
-// Only provide deps that are NOT already in AppLayer group1.
-// MCP/Provider/Auth/FSUtil/CrossSpawnSpawner/FetchHttpClient are all in
-// group1 and will be available from the outer context. Self-providing them
-// here creates duplicate instances that break EventV2Bridge sharing.
+// Self-provide all deps so this layer can be built standalone (tests, server).
+// The shared memoMap in ManagedRuntime deduplicates instances across services,
+// so providing them here does NOT create duplicates when the outer context
+// already has them — Effect's layer system memoizes by service tag.
 export const defaultLayer = layer.pipe(
+  Layer.provide(MCP.defaultLayer),
+  Layer.provide(FetchHttpClient.layer),
+  Layer.provide(Provider.defaultLayer),
+  Layer.provide(Auth.defaultLayer),
+  Layer.provide(FSUtil.defaultLayer),
+  Layer.provide(CrossSpawnSpawner.defaultLayer),
   Layer.provide(SessionHooks.defaultLayer),
 )
 
