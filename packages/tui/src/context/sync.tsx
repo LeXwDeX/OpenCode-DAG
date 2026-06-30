@@ -594,11 +594,12 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff] = await Promise.all([
+            const [session, messages, todo, diff, goal] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
+              sdk.client.session.goal({ sessionID }).catch(() => ({ data: undefined })),
             ])
             setStore(
               produce((draft) => {
@@ -606,6 +607,7 @@ export const {
                 if (match.found) draft.session[match.index] = session.data!
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
+                draft.goal[sessionID] = goal.data ?? undefined
                 const currentMessages = draft.message[sessionID] ?? []
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]
