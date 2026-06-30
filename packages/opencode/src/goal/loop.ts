@@ -170,6 +170,11 @@ export const layer = Layer.effect(
   }),
 )
 
+// GoalLoop.defaultLayer self-provides its construction deps. Because
+// Layer.provideMerge(self, layer) requires `layer` (GoalLoop) to be
+// self-contained — self's context is NOT fed into layer — every dep in the
+// chain must be provided here, transitively. memoMap dedups these with the
+// AppLayer's own instances so no duplicate services are created.
 export const defaultLayer = layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Session.defaultLayer),

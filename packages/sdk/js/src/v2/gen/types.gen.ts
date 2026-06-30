@@ -81,6 +81,8 @@ export type Event =
   | EventProjectUpdated
   | EventSessionStatus
   | EventSessionIdle
+  | EventGoalUpdated
+  | EventGoalCleared
   | EventQuestionAsked
   | EventQuestionReplied
   | EventQuestionRejected
@@ -691,6 +693,19 @@ export type SessionStatus =
   | {
       type: "busy"
     }
+
+export type Goal = {
+  /**
+   * The autonomous goal text
+   */
+  goal: string
+  /**
+   * Current status: active, paused, achieved
+   */
+  status: "active" | "paused" | "done"
+  turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
 
 export type QuestionOption = {
   /**
@@ -1548,6 +1563,21 @@ export type GlobalEvent = {
     | {
         id: string
         type: "session.idle"
+        properties: {
+          sessionID: string
+        }
+      }
+    | {
+        id: string
+        type: "goal.updated"
+        properties: {
+          sessionID: string
+          goal: Goal
+        }
+      }
+    | {
+        id: string
+        type: "goal.cleared"
         properties: {
           sessionID: string
         }
@@ -2872,6 +2902,8 @@ export type V2Event =
   | V2EventProjectUpdated
   | V2EventSessionStatus
   | V2EventSessionIdle
+  | V2EventGoalUpdated
+  | V2EventGoalCleared
   | V2EventQuestionAsked
   | V2EventQuestionReplied
   | V2EventQuestionRejected
@@ -2955,6 +2987,25 @@ export type EventTuiSessionSelect2 = {
      */
     sessionID: string
   }
+}
+
+export type Goal1 = {
+  /**
+   * The autonomous goal text
+   */
+  goal: string
+  /**
+   * Current status: active, paused, achieved
+   */
+  status: "active" | "paused" | "done"
+  /**
+   * Turns used so far
+   */
+  turnsUsed: number | "NaN" | "Infinity" | "-Infinity"
+  /**
+   * Maximum turns allowed
+   */
+  maxTurns: number | "NaN" | "Infinity" | "-Infinity"
 }
 
 export type CredentialValue = CredentialOAuth | CredentialKey
@@ -5903,6 +5954,41 @@ export type V2EventSessionIdle = {
   }
 }
 
+export type V2EventGoalUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  type: "goal.updated"
+  data: {
+    sessionID: string
+    goal: Goal
+  }
+}
+
+export type V2EventGoalCleared = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  type: "goal.cleared"
+  data: {
+    sessionID: string
+  }
+}
+
 export type V2EventQuestionAsked = {
   id: string
   metadata?: {
@@ -6998,6 +7084,23 @@ export type EventSessionStatus = {
 export type EventSessionIdle = {
   id: string
   type: "session.idle"
+  properties: {
+    sessionID: string
+  }
+}
+
+export type EventGoalUpdated = {
+  id: string
+  type: "goal.updated"
+  properties: {
+    sessionID: string
+    goal: Goal1
+  }
+}
+
+export type EventGoalCleared = {
+  id: string
+  type: "goal.cleared"
   properties: {
     sessionID: string
   }
@@ -9790,6 +9893,40 @@ export type SessionTodoResponses = {
 }
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
+
+export type SessionGoalData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/goal"
+}
+
+export type SessionGoalErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionGoalError = SessionGoalErrors[keyof SessionGoalErrors]
+
+export type SessionGoalResponses = {
+  /**
+   * Goal state
+   */
+  200: Goal
+}
+
+export type SessionGoalResponse = SessionGoalResponses[keyof SessionGoalResponses]
 
 export type SessionDiffData = {
   body?: never

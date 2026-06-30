@@ -19,7 +19,7 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
-  GoalInfo,
+  Goal,
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
@@ -90,7 +90,7 @@ export const {
         [sessionID: string]: Todo[]
       }
       goal: {
-        [sessionID: string]: GoalInfo | undefined
+        [sessionID: string]: Goal | undefined
       }
       message: {
         [sessionID: string]: Message[]

@@ -40,7 +40,7 @@ import os from "os"
 import { existsSync, readFileSync } from "fs"
 import { spawn } from "child_process"
 import { createHash } from "crypto"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -1008,14 +1008,7 @@ interface HookHandler<E extends HookCommand = HookCommand> {
     envelope: Record<string, unknown>,
     cwd: string,
     inHook: boolean,
-  ) => Effect.Effect<
-    { json?: HookJSONOutput; exitBlock?: string },
-    never,
-    // Handler deps resolved lazily at trigger time from ambient context.
-    // This keeps SettingsHook.layer lightweight (only EventV2Bridge + Database + SessionHooks
-    // needed at construction), following the Todo pattern exactly.
-    MCP.Service | Provider.Service | Auth.Service | FSUtil.Service | HttpClient.HttpClient | ChildProcessSpawner
-  >
+  ) => Effect.Effect<{ json?: HookJSONOutput; exitBlock?: string }>
 }
 
 const commandHandler: HookHandler = {
@@ -1062,7 +1055,11 @@ const mcpHandler: HookHandler = {
       log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
       return { json: undefined, exitBlock: undefined }
     }
-    const mcpSvc = yield* MCP.Service
+    const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
+    if (!mcpSvc) {
+      log.warn("mcp hook skipped: MCP service not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
     const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
     const exit = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope).pipe(
       Effect.timeout(timeoutMs),
@@ -1093,7 +1090,11 @@ const mcpHandler: HookHandler = {
 const httpHandler: HookHandler = {
   type: "http",
   run: Effect.fn("SettingsHook.handler.http")(function* (entry, envelope, _cwd, _inHook) {
-    const http = yield* HttpClient.HttpClient
+    const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
+    if (!http) {
+      log.warn("http hook skipped: HttpClient not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
     const httpRead = withTransientReadRetry(http)
     const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
 
@@ -1150,8 +1151,12 @@ const httpHandler: HookHandler = {
 const promptHandler: HookHandler = {
   type: "prompt",
   run: Effect.fn("SettingsHook.handler.prompt")(function* (entry, envelope, _cwd, _inHook) {
-    const provider = yield* Provider.Service
-    const auth = yield* Auth.Service
+    const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
+    const auth = Option.getOrUndefined(yield* Effect.serviceOption(Auth.Service))
+    if (!provider || !auth) {
+      log.warn("prompt hook skipped: Provider/Auth not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
     const exit = yield* Effect.gen(function* () {
       const prompt = promptText(entry)
       const m = yield* provider.defaultModel()
@@ -1216,10 +1221,14 @@ const promptHandler: HookHandler = {
 const agentHandler: HookHandler = {
   type: "agent",
   run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
-    const provider = yield* Provider.Service
-    const auth = yield* Auth.Service
-    const spawner = yield* ChildProcessSpawner
-    const fs = yield* FSUtil.Service
+    const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
+    const auth = Option.getOrUndefined(yield* Effect.serviceOption(Auth.Service))
+    const spawner = Option.getOrUndefined(yield* Effect.serviceOption(ChildProcessSpawner))
+    const fs = Option.getOrUndefined(yield* Effect.serviceOption(FSUtil.Service))
+    if (!provider || !auth || !spawner || !fs) {
+      log.warn("agent hook skipped: Provider/Auth/Spawner/FS not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
     const exit = yield* Effect.gen(function* () {
       const prompt = promptText(entry)
       const m = yield* provider.defaultModel()

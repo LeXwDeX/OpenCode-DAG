@@ -26,7 +26,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
-    const startCtx = yield* HookStartContext.Service
+    const startCtx = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()

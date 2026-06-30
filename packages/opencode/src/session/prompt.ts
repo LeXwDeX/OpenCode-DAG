@@ -149,8 +149,8 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
     const { db } = database
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
-    const startContext = yield* HookStartContext.Service
-    const goal = yield* Goal.Service
+    const startContext = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
+    const goal = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),

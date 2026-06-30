@@ -170,7 +170,7 @@ export const SessionApi = HttpApi.make("session")
         HttpApiEndpoint.get("goal", SessionPaths.goal, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
-          success: described(Schema.Optional(SessionGoal.Info), "Goal state"),
+          success: described(Schema.optional(SessionGoal.Info), "Goal state"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({

@@ -52,6 +52,7 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { HookStartContext } from "@/hook/start-context"
+import { SettingsHook } from "@/hook/settings"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
 
@@ -112,11 +113,13 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
-  // GoalLoop + SettingsHook must be provided AFTER mergeAll so they see
-  // the shared EventV2Bridge/Database/MCP/etc instances from group1/group2.
-  // SettingsHook.defaultLayer now only self-provides EventV2Bridge + Database +
-  // SessionHooks (lightweight, like Todo). Handler deps (MCP/Provider/Auth/etc)
-  // are resolved lazily at trigger time from the ambient context.
+  // GoalLoop + SettingsHook go in provideMerge (NOT mergeAll) because they need
+  // services from BOTH group1 and group2. mergeAll siblings cannot see each
+  // other's outputs, but provideMerge gives the layer access to the full
+  // accumulated context (group1 + group2 merged). Both use defaultLayer = layer
+  // (no self-provides) so their construction deps resolve from this ambient
+  // context rather than from isolated sub-contexts that can't satisfy the full
+  // transitive chain.
   Layer.provideMerge(GoalLoop.defaultLayer),
   Layer.provideMerge(SettingsHook.defaultLayer),
 )
