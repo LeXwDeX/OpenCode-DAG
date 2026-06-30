@@ -1456,11 +1456,12 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, modelMsgs] = yield* Effect.all([
+            const [skills, env, instructions, mcpInstructions, hooksDocs, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
+              sys.hooks(),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
@@ -1468,6 +1469,7 @@ export const layer = Layer.effect(
               ...instructions,
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
+              ...hooksDocs,
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
@@ -1574,8 +1576,38 @@ export const layer = Layer.effect(
       if (goal && (input.command === "goal" || input.command === "subgoal")) {
         const dispatch = input.command === "goal" ? goal.dispatch : goal.dispatchSubgoal
         const dispatchResult = yield* dispatch(input.sessionID, input.arguments).pipe(
-          Effect.catchCause(() => Effect.succeed(undefined)),
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logError("goal dispatch failed", { command: input.command, cause: String(cause) })
+              return undefined
+            }),
+          ),
         )
+        if (!dispatchResult) {
+          // Dispatch failed — return error message to user instead of silent fallthrough
+          const m = yield* currentModel(input.sessionID)
+          const agentName = input.agent ?? (yield* agents.defaultAgent())
+          const userMsg: SessionV1.User = {
+            id: input.messageID ?? MessageID.ascending(),
+            role: "user",
+            sessionID: input.sessionID,
+            time: { created: Date.now() },
+            agent: agentName,
+            model: { providerID: m.providerID, modelID: m.modelID },
+          }
+          yield* sessions.updateMessage(userMsg)
+          const errorPart: SessionV1.TextPart = {
+            id: PartID.ascending(),
+            messageID: userMsg.id,
+            sessionID: input.sessionID,
+            type: "text",
+            text: `⚠️ /${input.command} 执行失败，请检查日志。`,
+            synthetic: true,
+          }
+          yield* sessions.updatePart(errorPart)
+          yield* sessions.touch(input.sessionID)
+          return { info: userMsg, parts: [errorPart] }
+        }
         if (dispatchResult) {
           const m = yield* currentModel(input.sessionID)
           const agentName = input.agent ?? (yield* agents.defaultAgent())

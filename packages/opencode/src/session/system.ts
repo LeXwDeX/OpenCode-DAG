@@ -12,6 +12,7 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
+import PROMPT_HOOKS from "./prompt/hooks.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
 import { Permission } from "@/permission"
@@ -43,6 +44,7 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
+  readonly hooks: () => Effect.Effect<string[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -123,6 +125,10 @@ export const layer = Layer.effect(
           ]),
           "</mcp_instructions>",
         ].join("\n")
+      }),
+
+      hooks: Effect.fn("SystemPrompt.hooks")(function* () {
+        return [PROMPT_HOOKS]
       }),
     })
   }),

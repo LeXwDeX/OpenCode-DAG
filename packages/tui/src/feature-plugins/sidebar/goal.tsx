@@ -18,32 +18,32 @@ const STATUS_LABEL: Record<string, string> = {
   paused: "已暂停",
 }
 
-function View(props: { api: TuiPluginApi; session_id: string; goals: Record<string, GoalState> }) {
-  const theme = () => props.api.theme.current
-  const goal = () => props.goals[props.session_id]
-  const goalText = () => goal()?.goal
-
-  return (
-    <Show when={goalText()}>
-      {(text) => {
-        const g = goal()
-        if (!g) return null
-        return (
-          <box>
-            <text fg={theme().text}>{`目标 [${STATUS_LABEL[g.status] ?? g.status}]`}</text>
-            <text fg={theme().textMuted}>{text().length > 60 ? text().slice(0, 57) + "..." : text()}</text>
-            <text fg={theme().textMuted}>{`${g.turnsUsed}/${g.maxTurns} 轮`}</text>
-          </box>
-        )
-      }}
-    </Show>
-  )
-}
-
 const tui: TuiPlugin = async (api) => {
   // Store created inside tui() — after the Solid runtime is fully initialized.
   // Module-level createStore was interfering with TUI render init in Windows Terminal.
   const [goals, setGoals] = createStore<Record<string, GoalState>>({})
+
+  function View(props: { api: TuiPluginApi; session_id: string }) {
+    const theme = () => props.api.theme.current
+    const goal = () => goals[props.session_id]
+    const goalText = () => goal()?.goal
+
+    return (
+      <Show when={goalText()}>
+        {(text) => {
+          const g = goal()
+          if (!g) return null
+          return (
+            <box>
+              <text fg={theme().text}>{`目标 [${STATUS_LABEL[g.status] ?? g.status}]`}</text>
+              <text fg={theme().textMuted}>{text().length > 60 ? text().slice(0, 57) + "..." : text()}</text>
+              <text fg={theme().textMuted}>{`${g.turnsUsed}/${g.maxTurns} 轮`}</text>
+            </box>
+          )
+        }}
+      </Show>
+    )
+  }
 
   const on = api.event.on as (type: string, handler: (event: { type: string; properties: Record<string, unknown> }) => void) => () => void
 
@@ -86,7 +86,7 @@ const tui: TuiPlugin = async (api) => {
     order: 150,
     slots: {
       sidebar_content(_ctx, props) {
-        return <View api={api} session_id={props.session_id} goals={goals} />
+        return <View api={api} session_id={props.session_id} />
       },
     },
   })

@@ -7,6 +7,7 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
 import { SettingsHook } from "@/hook/settings"
+import { HookStartContext } from "@/hook/start-context"
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -25,6 +26,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const startCtx = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
@@ -44,12 +46,17 @@ export const layer = Layer.effect(
       if (result.parentID) return result
       // Fire SessionStart hook for top-level sessions only
       if (settingsHook) {
-        yield* settingsHook
+        const exit = yield* settingsHook
           .trigger(
             { event: "SessionStart", source: "startup", sessionID: result.id } as any,
             { sessionID: result.id, transcriptPath: "" },
           )
-          .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+          .pipe(Effect.exit)
+        if (exit._tag === "Success" && startCtx && exit.value.additionalContexts?.length) {
+          for (const ctx of exit.value.additionalContexts) {
+            if (ctx) yield* startCtx.append(result.id, ctx)
+          }
+        }
       }
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
