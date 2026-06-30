@@ -51,7 +51,6 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { SettingsHook } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
@@ -106,7 +105,6 @@ export const AppLayer = Layer.mergeAll(
     Installation.defaultLayer,
     ShareNext.defaultLayer,
     SessionShare.defaultLayer,
-    SettingsHook.defaultLayer,
     HookStartContext.defaultLayer,
     Goal.defaultLayer,
     GoalLoop.defaultLayer,

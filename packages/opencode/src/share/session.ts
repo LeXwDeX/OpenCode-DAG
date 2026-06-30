@@ -66,7 +66,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
-  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node])

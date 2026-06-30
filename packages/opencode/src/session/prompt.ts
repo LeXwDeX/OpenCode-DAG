@@ -1790,7 +1790,6 @@ export const defaultLayer = Layer.suspend(() =>
         CrossSpawnSpawner.defaultLayer,
         RuntimeFlags.defaultLayer,
         EventV2Bridge.defaultLayer,
-        SettingsHook.defaultLayer,
         HookStartContext.defaultLayer,
         Goal.defaultLayer,
       ),

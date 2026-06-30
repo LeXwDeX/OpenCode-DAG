@@ -639,7 +639,6 @@ export const appLayer = layer.pipe(
   Layer.provide(Database.defaultLayer),
   Layer.provide(FSUtil.defaultLayer),
   Layer.provide(NodePath.layer),
-  Layer.provide(SettingsHook.defaultLayer),
 )
 
 export const defaultLayer = appLayer.pipe(Layer.provide(InstanceLayer.layer))
@@ -652,7 +651,6 @@ export const node = LayerNode.make(layer, [
   Project.node,
   InstanceStore.node,
   Database.node,
-  SettingsHook.node as any,
 ])
 
 export * as Worktree from "."
