@@ -166,6 +166,15 @@ const table = sqliteTable("session", {
 ## Type Checking
 
 - Always run `bun typecheck` from package directories (e.g., `packages/opencode`), never `tsc` directly.
+- `bun run build` does not typecheck — esbuild transpiles only. A green build can still ship a missing import or a non-existent API, so it is not proof the code is sound. `bun typecheck` (`tsgo --noEmit`) is the commit gate.
+
+## Extending the Codebase (二次开发)
+
+Guiding invariants for adding services, HTTP API routes, or features. The build pipeline will not catch violations of these — only an understanding of the architecture will. Read the surrounding modules first (the Todo module is the reference for a lightweight, self-contained service) before wiring new dependencies.
+
+- Keep each `X.defaultLayer` self-contained. It must `Layer.provide` every dependency its layer body `yield*`s at construction. `Layer.provideMerge(self, layer)` builds `layer` in isolation — the context accumulated by `self` is not fed to it — and `Layer.mergeAll` does not cross-provide siblings. A layer that quietly assumes an ambient service will construct in one entry point and crash in another, surfacing as a runtime crash or a blank/unresponsive TUI rather than a build error.
+- Resolve optional or heavyweight cross-dependencies lazily. When a service needs something already built elsewhere in `AppLayer` — especially something with deep transitive deps (Provider, MCP, HttpClient) — reach for `Effect.serviceOption(Tag)` at the call site instead of a hard `yield* Tag` in the layer body. This keeps the layer lightweight, leaves the consumer's requirements (`R`) empty, and stops transitive deps from being dragged into every entry point that builds the layer.
+- Regenerate the JS SDK after touching HTTP API routes. The SDK under `packages/sdk/js` is generated from the API's OpenAPI spec; adding or renaming a route does not update it. A stale SDK breaks the TUI at runtime — calling a client method that does not yet exist — in a way typecheck cannot catch, because the generated types are the client's source of truth. After route changes, run `./packages/sdk/js/script/build.ts` and rebuild the consumers.
 
 ## V2 Session Core
 
