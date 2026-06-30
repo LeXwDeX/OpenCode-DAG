@@ -236,13 +236,6 @@ export default {
           CONSTRAINT \`fk_session_share_session_id_session_id_fk\` FOREIGN KEY (\`session_id\`) REFERENCES \`session\`(\`id\`) ON DELETE CASCADE
         );
       `)
-      yield* tx.run(`
-        CREATE TABLE IF NOT EXISTS "goal_state" (
-          "session_id" text PRIMARY KEY NOT NULL,
-          "payload" text NOT NULL,
-          "updated_at" integer NOT NULL
-        );
-      `)
       yield* tx.run(`CREATE UNIQUE INDEX \`event_aggregate_seq_idx\` ON \`event\` (\`aggregate_id\`,\`seq\`);`)
       yield* tx.run(`CREATE INDEX \`event_aggregate_type_seq_idx\` ON \`event\` (\`aggregate_id\`,\`type\`,\`seq\`);`)
       yield* tx.run(
@@ -276,7 +269,6 @@ export default {
       yield* tx.run(`CREATE INDEX \`session_workspace_idx\` ON \`session\` (\`workspace_id\`);`)
       yield* tx.run(`CREATE INDEX \`session_parent_idx\` ON \`session\` (\`parent_id\`);`)
       yield* tx.run(`CREATE INDEX \`todo_session_idx\` ON \`todo\` (\`session_id\`);`)
-      yield* tx.run(`CREATE INDEX IF NOT EXISTS "goal_state_updated_at_idx" ON "goal_state" ("updated_at");`)
     })
   },
 } satisfies Omit<DatabaseMigration.Migration, "id">
