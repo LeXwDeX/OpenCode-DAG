@@ -1,4 +1,3 @@
-import { SettingsHook } from "@/hook/settings"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
@@ -434,7 +433,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Format.node,
   Truncate.node,
   RuntimeFlags.node,
-  Database.node, SettingsHook.node,
+  Database.node,
 ])
 
 export * as ToolRegistry from "./registry"

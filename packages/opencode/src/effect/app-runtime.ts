@@ -52,7 +52,6 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { HookStartContext } from "@/hook/start-context"
-import { SettingsHook } from "@/hook/settings"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
 
@@ -84,6 +83,7 @@ export const AppLayer = Layer.mergeAll(
     RuntimeFlags.defaultLayer,
     EventV2Bridge.defaultLayer,
     SessionRunState.defaultLayer,
+    SettingsHook.defaultLayer,
   ),
   Layer.mergeAll(
     SessionProcessor.defaultLayer,
@@ -118,7 +118,6 @@ export const AppLayer = Layer.mergeAll(
   // If inside mergeAll as siblings, they self-provide duplicate instances
   // (SettingsHook.defaultLayer provides MCP/Provider/Auth/etc internally).
   Layer.provideMerge(GoalLoop.defaultLayer),
-  Layer.provideMerge(SettingsHook.defaultLayer),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

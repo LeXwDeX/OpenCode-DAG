@@ -56,7 +56,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   const registry = yield* ToolRegistry.Service
   const mcp = yield* MCP.Service
   const truncate = yield* Truncate.Service
-  const settingsHook = yield* SettingsHook.Service
+  const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
   const context = (args: Record<string, unknown>, options: ToolExecutionOptions): Tool.Context => ({
     sessionID: input.session.id,
