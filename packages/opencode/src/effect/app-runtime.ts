@@ -83,7 +83,6 @@ export const AppLayer = Layer.mergeAll(
     RuntimeFlags.defaultLayer,
     EventV2Bridge.defaultLayer,
     SessionRunState.defaultLayer,
-    SettingsHook.defaultLayer,
   ),
   Layer.mergeAll(
     SessionProcessor.defaultLayer,
@@ -115,9 +114,11 @@ export const AppLayer = Layer.mergeAll(
   Layer.provideMerge(Observability.layer),
   // GoalLoop + SettingsHook must be provided AFTER mergeAll so they see
   // the shared EventV2Bridge/Database/MCP/etc instances from group1/group2.
-  // If inside mergeAll as siblings, they self-provide duplicate instances
-  // (SettingsHook.defaultLayer provides MCP/Provider/Auth/etc internally).
+  // SettingsHook.defaultLayer now only self-provides EventV2Bridge + Database +
+  // SessionHooks (lightweight, like Todo). Handler deps (MCP/Provider/Auth/etc)
+  // are resolved lazily at trigger time from the ambient context.
   Layer.provideMerge(GoalLoop.defaultLayer),
+  Layer.provideMerge(SettingsHook.defaultLayer),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
