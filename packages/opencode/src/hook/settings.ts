@@ -1572,16 +1572,12 @@ export const layer = Layer.effect(
 // these spawn/fs services closes them in its own defaultLayer (see
 // git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
 // in makeRuntime deduplicates the underlying instances across services.
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(MCP.defaultLayer),
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(Provider.defaultLayer),
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(CrossSpawnSpawner.defaultLayer),
-    Layer.provide(SessionHooks.defaultLayer),
-  ),
+// Only provide deps that are NOT already in AppLayer group1.
+// MCP/Provider/Auth/FSUtil/CrossSpawnSpawner/FetchHttpClient are all in
+// group1 and will be available from the outer context. Self-providing them
+// here creates duplicate instances that break EventV2Bridge sharing.
+export const defaultLayer = layer.pipe(
+  Layer.provide(SessionHooks.defaultLayer),
 )
 
 // ── type:"mcp" hook execution ───────────────────────────────────
