@@ -495,6 +495,7 @@ export const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const goal = yield* Goal.Service
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -620,13 +621,8 @@ export const layer: Layer.Layer<
         }
 
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
-        // Cleanup goal state if Goal service is available
-        yield* Effect.serviceOption(Goal.Service).pipe(
-          Effect.flatMap((goalOpt) => {
-            if (goalOpt._tag === "Some") return goalOpt.value.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
-            return Effect.void
-          }),
-        )
+        // Cleanup goal state
+        yield* goal.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
         // Cleanup post-tool-batch tracking
         PostToolBatch.resetBatch(sessionID)
         yield* events.remove(sessionID)
@@ -1081,6 +1077,6 @@ export function* listGlobal(input?: {
   }
 }
 
-export const node = LayerNode.make(layer, [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node])
+export const node = LayerNode.make(layer, [BackgroundJob.node, RuntimeFlags.node, Database.node, EventV2Bridge.node, Goal.node])
 
 export * as Session from "./session"

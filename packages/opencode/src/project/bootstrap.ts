@@ -9,6 +9,7 @@ import { InstanceState } from "@/effect/instance-state"
 import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
+import { SettingsHook } from "@/hook/settings"
 import { GoalLoop } from "@/goal/loop"
 import { Service } from "./bootstrap-service"
 
@@ -74,7 +75,7 @@ export const node = LayerNode.make(layer, [
   ShareNext.node,
   Snapshot.node,
   Vcs.node,
-  GoalLoop.node,
+  GoalLoop.node, SettingsHook.node,
 ])
 
 export * as InstanceBootstrap from "./bootstrap"

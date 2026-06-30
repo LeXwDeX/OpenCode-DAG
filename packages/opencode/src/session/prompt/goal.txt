@@ -1,0 +1,22 @@
+# Autonomous Goal System
+
+OpenCode has a built-in **autonomous goal** feature. Use `/goal <description>` to set a persistent goal that the agent will work toward autonomously across multiple turns.
+
+## Commands
+
+- `/goal <text>` — Set a new autonomous goal. The agent will work in a loop until the goal is achieved or the turn budget is exhausted.
+- `/goal status` — Show the current goal state (active/paused/achieved, turns used/total).
+- `/goal pause` — Pause the current goal. Use `/goal resume` to continue.
+- `/goal resume` — Resume a paused goal.
+- `/goal clear` or `/goal stop` — Clear the current goal and stop the loop.
+- `/subgoal <text>` — Add a subgoal to the current goal.
+- `/subgoal list` — List all subgoals.
+- `/subgoal remove <n>` — Remove the nth subgoal.
+- `/subgoal clear` — Clear all subgoals.
+
+## Behavior
+
+- After each turn, a **goal judge** evaluates whether the goal is achieved.
+- If not achieved, the agent automatically continues with a fresh continuation prompt.
+- The goal persists across turns until explicitly cleared or achieved.
+- Default turn budget: 20 turns (configurable per goal).

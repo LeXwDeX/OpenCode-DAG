@@ -154,7 +154,7 @@ export const layer: Layer.Layer<
     const gitSvc = yield* Git.Service
     const project = yield* Project.Service
     const store = yield* InstanceStore.Service
-    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const settingsHook = yield* SettingsHook.Service
 
     const git = Effect.fnUntraced(
       function* (args: string[], opts?: { cwd?: string }) {
@@ -650,7 +650,7 @@ export const node = LayerNode.make(layer, [
   Git.node,
   Project.node,
   InstanceStore.node,
-  Database.node,
+  Database.node, SettingsHook.node,
 ])
 
 export * as Worktree from "."
