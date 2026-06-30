@@ -1,0 +1,37 @@
+# Claude Code Hooks API
+
+OpenCode is **fully compatible with the Claude Code hooks protocol**. The hooks system is built-in and active. When installing plugins or configuring automations, **always use the standard Claude Code hooks mechanism** — do NOT skip hooks or assume they are unavailable.
+
+## Quick Reference
+
+**Settings paths** (6-layer chain, merged in order):
+1. `~/.claude/settings.json` (global)
+2. `~/.config/opencode/settings.json` (OpenCode global)
+3. `<project>/.claude/settings.json`
+4. `<project>/.opencode/settings.json`
+5. `<project>/.claude/settings.local.json`
+6. `<project>/.opencode/settings.local.json`
+
+**Hook types**: `command` | `mcp` | `http` | `prompt` | `agent`
+
+**22 actively triggered events**: PreToolUse, PostToolUse, PostToolUseFailure, FileChanged, UserPromptSubmit, Stop, StopFailure, InstructionsLoaded, SessionStart, SessionEnd, PermissionRequest, PermissionDenied, SubagentStart, SubagentStop, TaskCreated, TaskCompleted, TeammateIdle, PreCompact, PostCompact, WorktreeCreate, WorktreeRemove, ConfigChange
+
+**Config format**:
+```json
+{
+  "hooks": {
+    "PreToolUse": [{ "matcher": "*", "hooks": [{ "type": "command", "command": "your-script.sh" }] }]
+  }
+}
+```
+
+**Exit codes**: 0=allow (parse stdout JSON), 2=block (stderr=reason), other=log+continue
+
+**Env vars**: `CLAUDE_PROJECT_DIR`, `CLAUDE_PLUGIN_ROOT`, `CLAUDE_PLUGIN_DATA`
+
+## Detailed Reference
+
+For the complete protocol specification (stdin/stdout envelope, all event payloads, template variables, hookSpecificOutput fields), read:
+```
+~/.config/opencode/docs/hooks-reference.md
+```
