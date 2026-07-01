@@ -12,6 +12,8 @@
 #                            Leave blank for auto timestamped version.
 #           create_release — when true, create a GitHub Release with the
 #                            built binaries + SHA256SUMS attached.
+#           platforms      — comma-separated subset of linux,macos,windows
+#                            to build. Leave blank to build all three.
 # Jobs    : build-cli — 3-OS matrix, bundles ripgrep + single-file binary
 #           release   — optional, creates GitHub Release from build-cli artifacts
 #           register  — no-op for push triggers, just registers in Actions UI
@@ -33,6 +35,10 @@ on:
         required: false
         type: boolean
         default: false
+      platforms:
+        description: "Platforms to build, comma-separated (linux,macos,windows). Leave blank for all."
+        required: false
+        type: string
   # Also run on push to main/dev so the workflow registers in Actions UI
   push:
     branches:
@@ -50,8 +56,11 @@ env:
 jobs:
   build-cli:
     name: Build CLI (${{ matrix.name }})
-    # Skip the actual build when triggered by push (registration-only)
-    if: github.event_name == 'workflow_dispatch'
+    # Skip the actual build when triggered by push (registration-only), and
+    # skip matrix entries not requested via the `platforms` input (blank = all).
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      (inputs.platforms == '' || contains(inputs.platforms, matrix.name))
     strategy:
       fail-fast: false
       matrix:
