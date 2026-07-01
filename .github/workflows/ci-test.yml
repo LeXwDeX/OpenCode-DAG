@@ -73,7 +73,14 @@ jobs:
             turbo-${{ runner.os }}-
 
       - name: Run unit tests
-        timeout-minutes: 20
+        # opencode:test alone (244 files / 3048 tests, many spawning real CLI
+        # subprocesses via cliIt) measured at 803s / 13m24s locally on Linux.
+        # turbo buffers a concurrent task's output until it completes, so
+        # this step is silent the whole time it runs — that silence looks
+        # like a hang but isn't one. 20m was never sized against real data;
+        # raise it to give Windows runners (slower process spawn/IO) margin
+        # above the measured baseline instead of racing it.
+        timeout-minutes: 35
         run: GITHUB_ACTIONS=false bun turbo test
         env:
           OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: ${{ runner.os == 'Windows' && 'true' || 'false' }}
