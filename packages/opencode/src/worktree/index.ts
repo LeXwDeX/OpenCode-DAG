@@ -651,6 +651,7 @@ export const node = LayerNode.make(layer, [
   Project.node,
   InstanceStore.node,
   Database.node,
+  SettingsHook.node,
 ])
 
 export * as Worktree from "."
