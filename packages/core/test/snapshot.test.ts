@@ -68,6 +68,9 @@ describe("Snapshot", () => {
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+    // Git I/O heavy: several git init/config/add/commit spawns. Default 5s
+    // timeout flakes on slow Windows CI runners.
+    30000,
   )
 
   testEffect(Layer.empty).live("treats capture outside Git as unavailable", () =>
@@ -132,6 +135,8 @@ describe("Snapshot", () => {
         }),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ),
+    // Same Windows CI slow-git rationale as the test above.
+    30000,
   )
 
   testEffect(Layer.empty).live("checks out a legacy revert snapshot without removing unrelated files", () =>
