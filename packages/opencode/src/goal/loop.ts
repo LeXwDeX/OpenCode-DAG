@@ -152,6 +152,17 @@ export const layer = Layer.effect(
       if (!reloadedState || reloadedState.status !== "active") return
       const continuationText = GoalPrompts.renderContinuation(reloadedState.goal, reloadedState.subgoals ?? [])
 
+      // Surface the per-turn progress indicator visibly (e.g.
+      // "↻ 继续推进目标（2/10）：…"). updateAfterJudge computed this message;
+      // emit it as a noReply non-synthetic part so it renders in the transcript
+      // without spawning another agent turn. The continuation prompt below
+      // (ignored) is what actually drives the next loop iteration.
+      yield* promptSvc.prompt({
+        sessionID,
+        noReply: true,
+        parts: [{ type: "text", text: updateResult.message }],
+      }).pipe(Effect.ignore)
+
       yield* promptSvc.prompt({
         sessionID,
         parts: [{ type: "text", text: continuationText, ignored: true }],
