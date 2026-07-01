@@ -11,7 +11,7 @@ import { Truncate } from "@/tool/truncate"
 
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
-import { SettingsHook } from "@/hook/settings"
+import { SettingsHook, type TriggerResult } from "@/hook/settings"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
 import * as Option from "effect/Option"
@@ -110,17 +110,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               { args },
             )
             // SettingsHook PreToolUse
+            let preContexts: string[] = []
             if (settingsHook) {
               const preResult = yield* settingsHook
                 .trigger(
-                  { event: "PreToolUse", toolName: item.id, toolInput: toRecord(args), toolUseID: ctx.callID } as any,
+                  { event: "PreToolUse", toolName: item.id, toolInput: toRecord(args), toolUseID: ctx.callID },
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
-                .pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined, blocked: undefined } as any)))
-              if ((preResult as any).permissionDecision === "deny" || (preResult as any).blocked) {
-                const reason = (preResult as any).permissionDecisionReason ?? (preResult as any).blocked?.reason ?? "Denied by PreToolUse hook"
+                .pipe(Effect.catch(() => Effect.succeed<TriggerResult>({ additionalContexts: [], systemMessages: [] })))
+              if (preResult.permissionDecision === "deny" || preResult.blocked) {
+                const reason = preResult.permissionDecisionReason ?? preResult.blocked?.reason ?? "Denied by PreToolUse hook"
                 return { output: `[Tool denied by hook] ${reason}`, attachments: [], metadata: { hookDenied: true } } as any
               }
+              preContexts = preResult.additionalContexts ?? []
             }
             const result = yield* item.execute(args, ctx)
             const output = {
@@ -131,6 +133,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 sessionID: ctx.sessionID,
                 messageID: input.processor.message.id,
               })),
+            }
+            // PreToolUse additionalContexts: prepend so the model sees any hook-injected
+            // gate/reminder before the tool result (mirrors PostToolUse surfacing below).
+            if (preContexts.length) {
+              output.output = `${preContexts.join("\n\n")}\n\n${output.output ?? ""}`
             }
             yield* plugin.trigger(
               "tool.execute.after",
@@ -453,17 +460,19 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             { args },
           )
           // SettingsHook PreToolUse
+          let preContexts: string[] = []
           if (settingsHook) {
             const preResult = yield* settingsHook
               .trigger(
-                { event: "PreToolUse", toolName: key, toolInput: toRecord(args), toolUseID: opts.toolCallId } as any,
+                { event: "PreToolUse", toolName: key, toolInput: toRecord(args), toolUseID: opts.toolCallId },
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
-              .pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined, blocked: undefined } as any)))
-            if ((preResult as any).permissionDecision === "deny" || (preResult as any).blocked) {
-              const reason = (preResult as any).permissionDecisionReason ?? (preResult as any).blocked?.reason ?? "Denied by PreToolUse hook"
+              .pipe(Effect.catch(() => Effect.succeed<TriggerResult>({ additionalContexts: [], systemMessages: [] })))
+            if (preResult.permissionDecision === "deny" || preResult.blocked) {
+              const reason = preResult.permissionDecisionReason ?? preResult.blocked?.reason ?? "Denied by PreToolUse hook"
               return { content: [{ type: "text", text: `[Tool denied by hook] ${reason}` }] } as any
             }
+            preContexts = preResult.additionalContexts ?? []
           }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
             yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
@@ -540,6 +549,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               messageID: input.processor.message.id,
             })),
             content: result.content,
+          }
+          // PreToolUse additionalContexts: prepend so the model sees any hook-injected
+          // gate/reminder before the tool result (mirrors PostToolUse surfacing below).
+          if (preContexts.length) {
+            output.output = `${preContexts.join("\n\n")}\n\n${output.output ?? ""}`
           }
           // SettingsHook PostToolUse
           if (settingsHook) {
