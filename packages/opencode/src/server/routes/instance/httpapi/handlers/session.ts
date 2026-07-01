@@ -99,15 +99,17 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const goal = Effect.fn("SessionHttpApi.goal")(function* (ctx: { params: { sessionID: SessionID } }) {
       yield* requireSession(ctx.params.sessionID)
       const state = yield* goalSvc.load(ctx.params.sessionID)
-      // "cleared" is a transient status in GoalState.Status that is never persisted
-      // (Goal.clear deletes the row). Treat it as "no goal" so the response matches
-      // the SessionGoal.Info schema (active | paused | done).
-      if (!state || state.status === "cleared") return undefined
+      // Goal.clear deletes the row outright, so a missing row means "no goal".
+      // (done is also transient in practice — auto-cleared after the completion
+      // message is emitted — so the only states returned are active / paused.)
+      if (!state) return undefined
       return {
         goal: state.goal,
         status: state.status,
         turnsUsed: Number(state.turns_used),
         maxTurns: Number(state.max_turns),
+        subgoals: state.subgoals ?? [],
+        ...(state.paused_reason !== undefined ? { pausedReason: state.paused_reason } : {}),
       }
     })
 
