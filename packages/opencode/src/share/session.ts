@@ -8,6 +8,9 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
 import { SettingsHook } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
+import * as Log from "@/util/log"
+
+const log = Log.create({ service: "share.session" })
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -46,6 +49,7 @@ export const layer = Layer.effect(
       if (result.parentID) return result
       // Fire SessionStart hook for top-level sessions only
       if (settingsHook) {
+        log.info("SessionStart hook: firing trigger", { sessionID: result.id })
         const exit = yield* settingsHook
           .trigger(
             { event: "SessionStart", source: "startup", sessionID: result.id } as any,
@@ -57,6 +61,12 @@ export const layer = Layer.effect(
             if (ctx) yield* startCtx.append(result.id, ctx)
           }
         }
+      } else {
+        // Diagnostic: SettingsHook.Service is not in this runtime context, so
+        // SessionStart hooks cannot fire here. If you configured hooks in
+        // .claude/settings.json and still see no effect, this entry point did
+        // not wire SettingsHook into its layer tree.
+        log.warn("SessionStart hook skipped: SettingsHook.Service not in context", { sessionID: result.id })
       }
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
