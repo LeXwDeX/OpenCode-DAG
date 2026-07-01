@@ -1235,7 +1235,7 @@ export const layer = Layer.effect(
       if (settingsHook) {
         const hookResult = yield* settingsHook
           .trigger(
-            { event: "UserPromptSubmit", userPrompt: input.parts.map((p: any) => p.type === "text" ? p.text : "").join("\n") } as any,
+            { event: "UserPromptSubmit", prompt: input.parts.map((p: any) => p.type === "text" ? p.text : "").join("\n") },
             { sessionID: input.sessionID, transcriptPath: "" },
           )
           .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, additionalContexts: [] as string[] } as any)))
