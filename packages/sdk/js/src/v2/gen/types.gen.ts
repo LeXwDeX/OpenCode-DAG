@@ -705,6 +705,8 @@ export type Goal = {
   status: "active" | "paused" | "done"
   turnsUsed: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
   maxTurns: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  subgoals?: Array<string>
+  pausedReason?: string
 }
 
 export type QuestionOption = {
@@ -3006,6 +3008,8 @@ export type Goal1 = {
    * Maximum turns allowed
    */
   maxTurns: number | "NaN" | "Infinity" | "-Infinity"
+  subgoals?: Array<string>
+  pausedReason?: string
 }
 
 export type CredentialValue = CredentialOAuth | CredentialKey

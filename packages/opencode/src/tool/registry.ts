@@ -12,6 +12,8 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
+import { GoalTool } from "./goal"
+import { SettingsHook } from "@/hook/settings"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
@@ -94,6 +96,7 @@ export const layer = Layer.effect(
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
+    const goaltool = yield* GoalTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -206,6 +209,7 @@ export const layer = Layer.effect(
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
+          goal: Tool.init(goaltool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
@@ -228,6 +232,7 @@ export const layer = Layer.effect(
             tool.task,
             tool.fetch,
             tool.todo,
+            tool.goal,
             tool.search,
             tool.skill,
             tool.patch,
@@ -436,6 +441,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   Truncate.node,
   RuntimeFlags.node,
   Database.node,
+  SettingsHook.node,
 ])
 
 export * as ToolRegistry from "./registry"

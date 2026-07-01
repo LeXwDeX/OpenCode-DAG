@@ -1,6 +1,6 @@
 export * as SessionGoal from "./session-goal"
 
-import { Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { define, inventory } from "./event"
 import { SessionID } from "./session-id"
 
@@ -11,6 +11,12 @@ export const Info = Schema.Struct({
   status: GoalStatus.annotate({ description: "Current status: active, paused, achieved" }),
   turnsUsed: Schema.Number.annotate({ description: "Turns used so far" }),
   maxTurns: Schema.Number.annotate({ description: "Maximum turns allowed" }),
+  subgoals: Schema.Array(Schema.String)
+    .pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed([] as ReadonlyArray<string>)))
+    .annotate({ description: "Sub-goals attached to this goal (empty array when none)" }),
+  pausedReason: Schema.optional(Schema.String).annotate({
+    description: "Reason the goal was paused (only set when status === 'paused')",
+  }),
 }).annotate({ identifier: "Goal" })
 export type Info = typeof Info.Type
 export const SessionGoalInfo = Info
