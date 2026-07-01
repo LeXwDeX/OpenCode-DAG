@@ -1,0 +1,1273 @@
+#!/usr/bin/env bash
+# oc — opencode (LeXwDeX fork) version manager TUI
+# 升级渠道：https://github.com/LeXwDeX/OpenCode-DAG/releases
+# 依赖：bash, curl, tar/unzip, fzf（必需）；gh（可选，无 token 走 curl）
+
+set -euo pipefail
+
+REPO="LeXwDeX/OpenCode-DAG"
+RELEASES_URL="https://github.com/${REPO}/releases"
+INSTALL_DIR="${OC_INSTALL_DIR:-/usr/local/bin}"
+INSTALL_NAME="${OC_OPENCODE_NAME:-opencode}"
+OC_VERSION="1.4.0"
+
+C_RESET=$'\033[0m'; C_DIM=$'\033[2m'; C_BOLD=$'\033[1m'
+C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_RED=$'\033[31m'; C_CYAN=$'\033[36m'
+
+die()  { printf "%s[err]%s %s\n" "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+info() { printf "%s[oc]%s %s\n" "$C_CYAN" "$C_RESET" "$*"; }
+warn() { printf "%s[warn]%s %s\n" "$C_YELLOW" "$C_RESET" "$*" >&2; }
+ok()   { printf "%s[ok]%s %s\n" "$C_GREEN" "$C_RESET" "$*"; }
+
+# ---------- 插件管理配置 ----------
+# 动态解析：OPENCODE_CONFIG_DIR 优先，其次 .jsonc > .json，最终回退默认路径
+_resolve_oc_config() {
+    local conf_dir="${OPENCODE_CONFIG_DIR:-${HOME}/.config/opencode}"
+    [ -f "${conf_dir}/opencode.json" ]  && echo "${conf_dir}/opencode.json"  && return
+    if [ -f "${conf_dir}/opencode.jsonc" ]; then
+        warn "仅存在 opencode.jsonc；脚本会用 json.dump 写回，可能丢失 JSONC 注释"
+        echo "${conf_dir}/opencode.jsonc"
+        return
+    fi
+    echo "${conf_dir}/opencode.json"
+}
+OC_CONFIG_FILE=$(_resolve_oc_config)
+THINK_PKG="think-mcp-tool"
+DCP_PKG="@lexwdex-org/opencode-dcp"
+OC_RAW_URL="https://raw.githubusercontent.com/${REPO}/main/oc"
+
+_resolve_oc_script_dir() {
+    local src="${BASH_SOURCE[0]:-$0}"
+    while [ -L "$src" ]; do
+        local dir link
+        dir=$(cd -P "$(dirname "$src")" && pwd)
+        link=$(readlink "$src")
+        case "$link" in
+            /*) src="$link" ;;
+            *)  src="$dir/$link" ;;
+        esac
+    done
+    cd -P "$(dirname "$src")" && pwd
+}
+
+# 本地包目录候选（按顺序尝试）：
+#   1) $OC_LOCAL_DIR  显式指定
+#   2) oc 脚本所在目录（仓内 packages/opencode/ 直接执行场景）
+#   3) ~/.cache/oc    在线下载产物缓存
+# 目录里需含 VERSION 文件（BUNDLED_VERSION + SHA256_*）和对应平台压缩包
+OC_SCRIPT_DIR="$(_resolve_oc_script_dir)"
+LOCAL_DIR_CANDIDATES=(
+    "${OC_LOCAL_DIR:-}"
+    "$OC_SCRIPT_DIR"
+    "$HOME/.cache/oc"
+)
+
+# _run_with_timeout <seconds> <command...>
+# 跨平台超时：优先用系统 timeout (Linux GNU coreutils / macOS brew coreutils)，
+# 不存在则降级为纯 bash 实现（& sleep kill）。
+_run_with_timeout() {
+    local secs="$1"; shift
+    if command -v timeout >/dev/null 2>&1; then
+        # Linux (GNU coreutils) 或 macOS brew install coreutils (gtimeout 软链到 timeout)
+        timeout "$secs" "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        # macOS brew install coreutils 但无 PATH 别名
+        gtimeout "$secs" "$@"
+    else
+        # 纯 bash 降级：后台执行 + sleep + kill
+        "$@" &
+        local _tid=$!
+        (sleep "$secs"; kill "$_tid" 2>/dev/null) &
+        local _killer=$!
+        wait "$_tid" 2>/dev/null
+        local _rc=$?
+        kill "$_killer" 2>/dev/null || true
+        wait "$_killer" 2>/dev/null || true
+        return "$_rc"
+    fi
+}
+
+_version_gt() {
+    local a="${1#v}" b="${2#v}"
+    local IFS=.
+    local -a av bv
+    read -r -a av <<< "$a"
+    read -r -a bv <<< "$b"
+    local i ai bi
+    for i in 0 1 2; do
+        ai=${av[$i]:-0}
+        bi=${bv[$i]:-0}
+        ai=${ai%%[^0-9]*}
+        bi=${bi%%[^0-9]*}
+        ai=${ai:-0}
+        bi=${bi:-0}
+        if [ "$ai" -gt "$bi" ]; then return 0; fi
+        if [ "$ai" -lt "$bi" ]; then return 1; fi
+    done
+    return 1
+}
+
+_find_bun_cache_package() {
+    local bare_name="$1"
+    local cache_dir="${HOME}/.bun/install/cache"
+    [ -d "$cache_dir" ] || return 1
+    local pattern="${bare_name}@*"
+    case "$bare_name" in
+        */*) pattern="$(basename "$bare_name")@*" ;;
+    esac
+    find "$cache_dir" -type d -name "$pattern" 2>/dev/null | sort | tail -1
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || die "缺少依赖：$1"; }
+need curl
+need fzf
+# shasum 或 sha256sum 至少有一个
+command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 \
+    || die "缺少依赖：shasum 或 sha256sum"
+
+# ---------- 平台检测 ----------
+detect_asset() {
+    local os arch
+    os=$(uname -s); arch=$(uname -m)
+    case "$os" in
+        Linux)
+            case "$arch" in
+                x86_64|amd64) echo "opencode-linux-x64.tar.gz" ;;
+                *) die "不支持的 Linux 架构：$arch（fork 当前仅发布 linux-x64）" ;;
+            esac ;;
+        Darwin)
+            case "$arch" in
+                arm64|aarch64) echo "opencode-darwin-arm64.zip" ;;
+                *) die "不支持的 macOS 架构：$arch（fork 当前仅发布 darwin-arm64）" ;;
+            esac ;;
+        MINGW*|MSYS*|CYGWIN*) echo "opencode-windows-x64.zip" ;;
+        *) die "未知操作系统：$os" ;;
+    esac
+}
+
+# ---------- 当前版本 ----------
+current_version() {
+    local bin
+    bin=$(command -v "$INSTALL_NAME" 2>/dev/null || true)
+    [ -z "$bin" ] && { echo "(未安装)"; return; }
+    # 穿透 tmux shim + wrapper，找到真实 opencode 二进制
+    local real="$bin"
+    if head -n5 "$bin" 2>/dev/null | grep -q "opencode-tmux"; then
+        # shim 里 exec 的是 wrapper.sh，wrapper.sh 里有 OPENCODE_REAL_BIN=
+        local wrapper
+        wrapper=$(grep -m1 'exec ' "$bin" 2>/dev/null | sed 's/exec //' | tr -d '"' | awk '{print $1}' || true)
+        if [ -n "$wrapper" ] && [ -f "$wrapper" ]; then
+            local extracted
+            extracted=$(printf '%s\n' "$wrapper" | grep -oE 'OPENCODE_REAL_BIN="[^"]*"|OPENCODE_REAL_BIN='\''[^'\'']*'\''' | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'")
+            [ -n "$extracted" ] && [ -x "$extracted" ] && real="$extracted"
+        fi
+    fi
+    "$real" --version 2>/dev/null | head -n1 || echo "(无法读取)"
+}
+
+# ---------- GitHub API ----------
+gh_api() {
+    # 调用方式：gh_api "latest" 或 gh_api "?per_page=100"
+    # 自动拼接到 .../releases 后面（path 以 ? 开头时无分隔符，否则加 /）
+    local path="$1"
+    local sep="/"
+    [[ "$path" == \?* ]] && sep=""
+    local relpath="repos/${REPO}/releases${sep}${path}"
+    if command -v gh >/dev/null 2>&1; then
+        local gh_out
+        if gh_out=$(gh api "$relpath" 2>/dev/null); then
+            printf '%s' "$gh_out"
+            return 0
+        fi
+    fi
+    local hdr=()
+    [ -n "${GITHUB_TOKEN:-}" ] && hdr+=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    curl -fsSL --connect-timeout 5 --max-time 20 "${hdr[@]}" -H "Accept: application/vnd.github+json" \
+        "https://api.github.com/${relpath}"
+}
+
+list_releases() {
+    # 输出 TSV：tag<TAB>name<TAB>publishedAt<TAB>prerelease
+    gh_api "?per_page=100" \
+        | python3 -c '
+import json, sys
+for r in json.load(sys.stdin):
+    tag = r.get("tag_name","")
+    name = r.get("name","") or tag
+    pub = (r.get("published_at","") or "")[:10]
+    pre = "pre" if r.get("prerelease") else "stable"
+    print(f"{tag}\t{name}\t{pub}\t{pre}")
+'
+}
+
+latest_tag() {
+    gh_api "latest" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))'
+}
+
+# ---------- 下载与校验 ----------
+download_asset() {
+    local tag="$1" asset="$2" out="$3"
+    local url="${RELEASES_URL}/download/${tag}/${asset}"
+    info "下载 $url"
+    curl -fL --progress-bar -o "$out" "$url" || die "下载失败：$url"
+}
+
+try_verify_sha256() {
+    # 尝试拉取 SHA256SUMS / *.sha256，存在则校验，不存在跳过并 warn
+    local tag="$1" asset="$2" file="$3" tmpdir="$4"
+    local sums_url="${RELEASES_URL}/download/${tag}/SHA256SUMS"
+    local sums="$tmpdir/SHA256SUMS"
+    if curl -fsSL -o "$sums" "$sums_url" 2>/dev/null && [ -s "$sums" ]; then
+        local expect actual
+        expect=$(awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}' "$sums")
+        if [ -n "$expect" ]; then
+            actual=$(file_sha256 "$file")
+            [ "$expect" = "$actual" ] || die "SHA256 不匹配：期望 $expect，实际 $actual"
+            ok "SHA256 校验通过"
+            return
+        fi
+    fi
+    warn "上游未提供 SHA256SUMS，跳过校验（仍依赖 GitHub HTTPS 安全传输）"
+}
+
+# ---------- 本地包发现 ----------
+file_sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
+# 当前平台对应 VERSION 里的 SHA256_* 字段名
+asset_hash_key() {
+    case "$(detect_asset)" in
+        opencode-linux-x64.tar.gz)   echo "SHA256_LINUX_X64" ;;
+        opencode-darwin-arm64.zip)   echo "SHA256_DARWIN_ARM64" ;;
+        opencode-windows-x64.zip)    echo "SHA256_WINDOWS_X64" ;;
+    esac
+}
+
+# 在候选目录里找一个同时具备 VERSION + 当前平台压缩包的目录；返回路径或空
+find_local_dir() {
+    local asset key dir
+    asset=$(detect_asset)
+    for dir in "${LOCAL_DIR_CANDIDATES[@]}"; do
+        [ -z "$dir" ] && continue
+        [ -f "$dir/VERSION" ] && [ -f "$dir/$asset" ] || continue
+        echo "$dir"
+        return 0
+    done
+    return 1
+}
+
+# 从 VERSION 读 key=value（key 形如 BUNDLED_VERSION / SHA256_LINUX_X64）
+read_version_field() {
+    local file="$1" key="$2"
+    [ -f "$file" ] || return 1
+    awk -F= -v k="$key" '$1==k {print $2; exit}' "$file" | tr -d '[:space:]'
+}
+
+# 用本地包安装；前置：local_dir 已找到，且本地包 hash 与 VERSION 自洽
+install_from_local() {
+    local local_dir="$1" asset
+    asset=$(detect_asset)
+    local file="$local_dir/$asset"
+    local key actual expect
+    key=$(asset_hash_key)
+    expect=$(read_version_field "$local_dir/VERSION" "$key" || true)
+    actual=$(file_sha256 "$file")
+    if [ -n "$expect" ] && [ "$expect" != "$actual" ]; then
+        die "本地包 hash 与 VERSION 不一致（$asset）：VERSION=$expect 实际=$actual"
+    fi
+    info "使用本地包：$file"
+    ok "本地 SHA256 自洽"
+    local tmpdir; tmpdir=$(mktemp -d); trap "rm -rf '$tmpdir'" EXIT
+    extract_and_install "$file" "$tmpdir"
+    ok "安装完成：$(${INSTALL_DIR}/${INSTALL_NAME} --version 2>/dev/null || echo "(版本未知)")"
+    check_brew_shadow
+}
+
+extract_and_install() {
+    local file="$1" tmpdir="$2"
+    local extract_dir="$tmpdir/extract"
+    mkdir -p "$extract_dir"
+    case "$file" in
+        *.tar.gz) tar -xzf "$file" -C "$extract_dir" ;;
+        *.zip)
+            command -v unzip >/dev/null 2>&1 || die "需要 unzip 命令"
+            unzip -q "$file" -d "$extract_dir" ;;
+        *) die "未知压缩格式：$file" ;;
+    esac
+
+    local bin
+    bin=$(find "$extract_dir" -type f -name "opencode*" ! -name "*.zip" ! -name "*.tar.gz" \
+           -perm -u+x 2>/dev/null | head -n1 || true)
+    [ -z "$bin" ] && bin=$(find "$extract_dir" -type f -name "opencode*" 2>/dev/null | head -n1 || true)
+    [ -z "$bin" ] && die "解包后未找到 opencode 二进制"
+
+    local target="${INSTALL_DIR}/${INSTALL_NAME}"
+    info "安装到 $target"
+    if [ -d "$INSTALL_DIR" ] && [ -w "$INSTALL_DIR" ]; then
+        mkdir -p "$INSTALL_DIR"
+        cp -f "$bin" "$target" && chmod +x "$target"
+    else
+        sudo mkdir -p "$INSTALL_DIR"
+        sudo cp -f "$bin" "$target" && sudo chmod +x "$target"
+    fi
+
+    # macOS: 清除 quarantine 属性 + ad-hoc 重签名（否则 Gatekeeper SIGKILL）
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if [ -w "$target" ]; then
+            xattr -cr "$target" 2>/dev/null || true
+            codesign -fs - "$target" 2>/dev/null || warn "ad-hoc 签名失败，可能需要 sudo codesign -fs - $target"
+        else
+            sudo xattr -cr "$target" 2>/dev/null || true
+            sudo codesign -fs - "$target" 2>/dev/null || warn "ad-hoc 签名失败"
+        fi
+    fi
+}
+
+# ---------- TUI ----------
+# 显示宽度（去掉 ANSI 转义，非 ASCII 字符按 2 列估算——覆盖大多数 CJK/emoji 图标）
+_display_width() {
+    local s w=0 i char
+    s=$(printf '%s' "$1" | sed -E $'s/\x1b\\[[0-9;]*m//g')
+    local len=${#s}
+    for (( i=0; i<len; i++ )); do
+        char="${s:i:1}"
+        case "$char" in
+            [\ -\~]) w=$((w+1)) ;;
+            *) w=$((w+2)) ;;
+        esac
+    done
+    printf '%d' "$w"
+}
+
+_repeat_char() {
+    local char="$1" n="$2" out=""
+    for (( i=0; i<n; i++ )); do out+="$char"; done
+    printf '%s' "$out"
+}
+
+# 计算居中左边距
+_center_pad() {
+    local content_width="$1"
+    local term_width
+    term_width=$(tput cols 2>/dev/null || echo 80)
+    local pad=$(( (term_width - content_width) / 2 ))
+    [ "$pad" -lt 0 ] && pad=0
+    printf '%*s' "$pad" ''
+}
+
+# 框体内容宽度：取传入各行里最宽的一行，夹在 [44, 72] 之间
+_box_inner_width() {
+    local max=0 s w
+    for s in "$@"; do
+        w=$(_display_width "$s")
+        [ "$w" -gt "$max" ] && max=$w
+    done
+    max=$((max + 2))
+    [ "$max" -lt 44 ] && max=44
+    [ "$max" -gt 72 ] && max=72
+    printf '%d' "$max"
+}
+
+_box_top() {
+    local pad="$1" inner_w="$2"
+    echo "${pad}${C_CYAN}╭$(_repeat_char '─' "$inner_w")╮${C_RESET}"
+}
+
+_box_bottom() {
+    local pad="$1" inner_w="$2"
+    echo "${pad}${C_CYAN}╰$(_repeat_char '─' "$inner_w")╯${C_RESET}"
+}
+
+# 框内一行文字，自动按 inner_w 补齐右侧空格再收边
+_box_line() {
+    local pad="$1" inner_w="$2" content="$3"
+    local w right
+    w=$(_display_width "$content")
+    right=$(( inner_w - w - 1 ))
+    [ "$right" -lt 0 ] && right=0
+    printf '%s%s│%s %s%*s%s│%s\n' "$pad" "$C_CYAN" "$C_RESET" "$content" "$right" "" "$C_CYAN" "$C_RESET"
+}
+
+# 记录当前面板的左边距，供随后的 _status_row 复用，保证跟框对齐
+_OC_PANEL_PAD=""
+
+_panel_title() {
+    local title="$1" subtitle="${2:-}"
+    local inner_w
+    inner_w=$(_box_inner_width "$title" "$subtitle")
+    _OC_PANEL_PAD=$(_center_pad $((inner_w + 2)))
+    _box_top "$_OC_PANEL_PAD" "$inner_w"
+    _box_line "$_OC_PANEL_PAD" "$inner_w" "${C_BOLD}${title}${C_RESET}"
+    [ -n "$subtitle" ] && _box_line "$_OC_PANEL_PAD" "$inner_w" "${C_DIM}${subtitle}${C_RESET}"
+    _box_bottom "$_OC_PANEL_PAD" "$inner_w"
+}
+
+_status_row() {
+    local icon="$1" label="$2" value="$3" color="${4:-$C_CYAN}"
+    local pad="${_OC_PANEL_PAD:-$(_center_pad 46)}"
+    printf '%s  %b%-2s%b %-16s %b%s%b\n' "$pad" "$color" "$icon" "$C_RESET" "$label" "$color" "$value" "$C_RESET"
+}
+
+__OC_FZF_HELP_CACHE=""
+
+_fzf_help_cache() {
+    if [ -z "$__OC_FZF_HELP_CACHE" ]; then
+        __OC_FZF_HELP_CACHE=$(fzf --help 2>/dev/null || true)
+    fi
+    printf '%s' "$__OC_FZF_HELP_CACHE"
+}
+
+_fzf_supports() {
+    local opt="$1"
+    _fzf_help_cache | awk -v opt="$opt" '
+        {
+            pos = index($0, opt)
+            if (pos == 0) next
+            next_char = substr($0, pos + length(opt), 1)
+            if (next_char == "" || next_char ~ /[[:space:]=\[,]/) { found = 1; exit }
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
+_fzf_supports_border_style() {
+    _fzf_help_cache | awk '
+        {
+            pos = index($0, "--border")
+            if (pos == 0) next
+            next_char = substr($0, pos + length("--border"), 1)
+            if (next_char != "" && next_char !~ /[[:space:]=\[]/) next
+            if ($0 ~ /--border\[[^]]*=/ || $0 ~ /--border=[^[:space:]]*STYLE/ || $0 ~ /\[[^]]*rounded[^]]*\]/) {
+                found = 1
+                exit
+            }
+        }
+        END { exit found ? 0 : 1 }
+    '
+}
+
+_fzf_run() {
+    local label="" prompt="" header="" preview="" height="" border="rounded" margin="" pointer="▶" marker="◆"
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --label) label="$2"; shift 2 ;;
+            --prompt) prompt="$2"; shift 2 ;;
+            --header) header="$2"; shift 2 ;;
+            --preview) preview="$2"; shift 2 ;;
+            --height) height="$2"; shift 2 ;;
+            --border) border="$2"; shift 2 ;;
+            --margin) margin="$2"; shift 2 ;;
+            --pointer) pointer="$2"; shift 2 ;;
+            --marker) marker="$2"; shift 2 ;;
+            *) shift ;;
+        esac
+    done
+
+    local args=()
+    _fzf_supports "--ansi" && args+=(--ansi)
+    [ -n "$height" ] && _fzf_supports "--height" && args+=("--height=$height")
+    [ -n "$prompt" ] && _fzf_supports "--prompt" && args+=("--prompt=$prompt")
+    [ -n "$pointer" ] && _fzf_supports "--pointer" && args+=("--pointer=$pointer")
+    [ -n "$marker" ] && _fzf_supports "--marker" && args+=("--marker=$marker")
+    _fzf_supports "--no-info" && args+=(--no-info)
+    [ -n "$header" ] && _fzf_supports "--header" && args+=("--header=$header")
+    if [ -n "$border" ] && _fzf_supports "--border"; then
+        if _fzf_supports_border_style; then
+            args+=(--border "$border")
+        else
+            args+=(--border)
+        fi
+    fi
+    [ -n "$label" ] && _fzf_supports "--border-label" && args+=("--border-label=$label")
+    [ -n "$label" ] && _fzf_supports "--border-label-pos" && args+=(--border-label-pos=center)
+    [ -n "$margin" ] && _fzf_supports "--margin" && args+=("--margin=$margin")
+    [ -n "$preview" ] && _fzf_supports "--preview" && args+=("--preview=$preview")
+    fzf "${args[@]}"
+}
+
+banner() {
+    local cur="$1" latest="$2" oc_ver="$3"
+    # current_version() 输出裸版本号（无 v 前缀），latest_tag() 返回的是 git tag
+    # （惯例带 v 前缀）；仅在展示时去掉前缀对齐，"$latest" 本身（含 v）仍原样
+    # 传给 do_upgrade/choose_action 用于下载 URL 拼接。
+    local latest_display="${latest#v}"
+    clear
+    echo
+    _panel_title "OPENCODE CONTROL // oc v${oc_ver}" "LeXwDeX fork release manager"
+    echo
+    _status_row "◆" "Current" "$cur" "$C_CYAN"
+    _status_row "▲" "Latest" "$latest_display" "$C_GREEN"
+    _status_row "●" "Channel" "$RELEASES_URL" "$C_DIM"
+    echo
+}
+
+choose_action() {
+    local latest="$1"
+    local options
+    options=$(printf '%s\n' \
+        "🚀 升级到最新版本 (${latest})" \
+        "📋 手工选择具体版本号..." \
+        "👁  仅查看已发布版本（不安装）" \
+        "🔌 插件管理 (MCP / plugin / NPM 工具)" \
+        "🔄 自更新 oc 脚本" \
+        "❌ 退出")
+    printf '%s' "$options" | _fzf_run --height "55%" --prompt "oc ▸ " \
+        --header " ↑/↓ navigate   Enter run   Esc quit " \
+        --border "rounded" --label " COMMANDS " --margin "1,18"
+}
+
+choose_release() {
+    # 输入 list_releases 输出，列出全部 release 给用户选
+    local picked
+    picked=$(list_releases | \
+        awk -F'\t' '{
+            mark = ($4=="pre") ? "[预] " : "    ";
+            printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+        }' | \
+        _fzf_run --height "70%" --prompt "选择版本 > " \
+            --header "标 [预] 为预发布；↑/↓ 移动，Enter 确认，Esc 取消" \
+            --preview "echo '查看详情：${RELEASES_URL}/tag/'\$(echo {} | sed -E 's/^\[预\] +//' | awk '{print \$1}')")
+    [ -z "$picked" ] && return 1
+    # 取第一列（去掉 [预] 前缀）
+    echo "$picked" | sed -E 's/^\[预\] +//' | awk '{print $1}'
+}
+
+# ---------- Homebrew 遮蔽检测 ----------
+check_brew_shadow() {
+    # 安装后检测 PATH 中实际解析到的 opencode 是否为 Homebrew 管理的版本
+    local resolved
+    resolved=$(command -v "$INSTALL_NAME" 2>/dev/null || true)
+    [ -z "$resolved" ] && return 0
+    local target="${INSTALL_DIR}/${INSTALL_NAME}"
+    # 如果 PATH 解析到的就是我们刚装的，没问题
+    [ "$resolved" = "$target" ] && return 0
+    # 检测是否是 Homebrew 路径
+    if echo "$resolved" | grep -qE '/(opt/homebrew|Cellar|Homebrew)/'; then
+        echo
+        warn "检测到 Homebrew 的 opencode 正在遮蔽 fork 版本："
+        warn "  PATH 解析到：$resolved (Homebrew)"
+        warn "  fork 已装到：$target"
+        warn ""
+        warn "解决方法（任选其一）："
+        warn "  brew unlink opencode    # 取消 Homebrew 的 PATH 链接"
+        warn "  brew uninstall opencode # 完全卸载 Homebrew 版本"
+        echo
+    fi
+}
+
+# ---------- 自更新 ----------
+self_update() {
+    info "检查脚本更新..."
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    if ! curl -fsSL --connect-timeout 5 --max-time 15 -o "$tmp_file" "$OC_RAW_URL" 2>/dev/null; then
+        rm -f "$tmp_file"
+        warn "下载失败（网络不通或超时），请检查网络连接"
+        return 1
+    fi
+
+    if ! head -1 "$tmp_file" | grep -q "^#!/usr/bin/env bash"; then
+        rm -f "$tmp_file"
+        warn "下载内容不是有效的 bash 脚本"
+        return 1
+    fi
+
+    local remote_version
+    remote_version=$(grep '^OC_VERSION=' "$tmp_file" | head -1 | cut -d'"' -f2)
+    if [ -z "$remote_version" ]; then
+        rm -f "$tmp_file"
+        warn "远程脚本缺少 OC_VERSION，可能版本过旧"
+        return 1
+    fi
+
+    info "当前版本: v${OC_VERSION}"
+    info "远程版本: v${remote_version}"
+
+    if [ "$OC_VERSION" = "$remote_version" ]; then
+        rm -f "$tmp_file"
+        ok "已是最新版 (v${OC_VERSION})"
+        return 0
+    fi
+
+    if _version_gt "$OC_VERSION" "$remote_version"; then
+        rm -f "$tmp_file"
+        ok "本地版本 (v${OC_VERSION}) 比远程 (v${remote_version}) 更新，无需更新"
+        return 0
+    fi
+
+    info "发现新版本: v${OC_VERSION} → v${remote_version}"
+
+    local self_path
+    self_path="$(_resolve_oc_script_dir)/$(basename "${BASH_SOURCE[0]}")"
+
+    if [ ! -w "$self_path" ]; then
+        rm -f "$tmp_file"
+        warn "当前脚本无写入权限: $self_path"
+        warn "请手动更新: sudo cp <新脚本> $self_path"
+        return 1
+    fi
+
+    local backup_path="${self_path}.bak.${OC_VERSION}"
+    cp "$self_path" "$backup_path"
+    info "已备份: $(basename "$backup_path")"
+
+    cp "$tmp_file" "$self_path"
+    chmod +x "$self_path"
+    rm -f "$tmp_file"
+
+    ok "已更新到 v${remote_version}"
+    return 2  # 特殊返回值：需要重启
+}
+
+# ---------- 插件管理 ----------
+# 静默获取插件状态（不打印 info）
+_get_plugin_status() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        echo "error|config_missing"
+        return 1
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        echo "error|python_missing"
+        return 1
+    fi
+
+    python3 - "$OC_CONFIG_FILE" <<'PYEOF'
+import json, sys, shutil
+
+config_file = sys.argv[1]
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+# think MCP
+think = cfg.get("mcp", {}).get("think")
+if think:
+    cmd = think.get("command", [])
+    runner = cmd[0] if cmd else "unknown"
+    pkg = cmd[1] if len(cmd) > 1 else ""
+    enabled = think.get("enabled", True)
+    status = "enabled" if enabled else "disabled"
+    print(f"think|found|{runner}|{pkg}|{status}")
+else:
+    print("think|missing|||")
+
+# DCP plugin
+plugins = cfg.get("plugin", [])
+dcp_pkg = "@lexwdex-org/opencode-dcp"
+if dcp_pkg in plugins:
+    print("dcp|found")
+else:
+    print("dcp|missing")
+
+# bun
+print(f"bun|{'ok' if shutil.which('bun') else 'missing'}")
+PYEOF
+}
+
+plugins_check() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        die "opencode 配置文件不存在: $OC_CONFIG_FILE"
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装（JSON 操作需要）"
+    fi
+
+    info "检查插件状态..."
+    _get_plugin_status
+}
+
+plugins_install_think() {
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    local runner="bunx"
+    if ! command -v bun &>/dev/null; then
+        if command -v npx &>/dev/null; then
+            warn "bun 未安装，将使用 npx"
+            runner="npx"
+        else
+            die "bun 和 npx 均未安装"
+        fi
+    fi
+
+    info "添加 think MCP ($runner $THINK_PKG@latest)..."
+    python3 - "$OC_CONFIG_FILE" "$runner" "$THINK_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+runner = sys.argv[2]
+pkg = sys.argv[3]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+cfg.setdefault("mcp", {})
+cfg["mcp"]["think"] = {
+    "type": "local",
+    "command": [runner, f"{pkg}@latest"],
+    "enabled": True,
+    "timeout": 30000
+}
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print(f"[ok] think MCP 已添加 ({runner} {pkg}@latest)")
+PYEOF
+    ok "think MCP 已配置"
+}
+
+plugins_switch_think_bunx() {
+    if ! command -v bun &>/dev/null; then
+        die "bun 未安装"
+    fi
+
+    info "切换 think MCP 到 bunx..."
+    python3 - "$OC_CONFIG_FILE" "$THINK_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+pkg = sys.argv[2]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+think = cfg.get("mcp", {}).get("think", {})
+think["command"] = ["bunx", f"{pkg}@latest"]
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print("[ok] think MCP 已切换到 bunx")
+PYEOF
+    ok "think MCP 已切换到 bunx"
+}
+
+plugins_install_dcp() {
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    info "添加 DCP plugin ($DCP_PKG)..."
+    python3 - "$OC_CONFIG_FILE" "$DCP_PKG" <<'PYEOF'
+import json, sys
+
+config_file = sys.argv[1]
+pkg = sys.argv[2]
+
+with open(config_file, encoding="utf-8") as f:
+    cfg = json.load(f)
+
+plugins = cfg.get("plugin", [])
+if pkg not in plugins:
+    plugins.append(pkg)
+    cfg["plugin"] = plugins
+
+with open(config_file, "w", encoding="utf-8") as f:
+    json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+print(f"[ok] DCP plugin 已添加 ({pkg})")
+PYEOF
+    ok "DCP plugin 已配置"
+
+    local oc_dir
+    oc_dir=$(dirname "$OC_CONFIG_FILE")
+    if [ -f "${oc_dir}/package.json" ]; then
+        info "安装 DCP npm 包..."
+        (cd "$oc_dir" && npm install "$DCP_PKG" --save 2>/dev/null) \
+            && ok "DCP 包已安装" \
+            || warn "npm install 失败，opencode 首次启动时会自动拉取"
+    fi
+}
+
+# 扫描 opencode.json, 输出 TSV (一组 + 诊断)
+#   A|<name>|<runner>|<pkg>   MCP local command (runner 必须是 bunx/npx)
+#   B|<name>                  plugin 数组条目 (去重)
+#   C|<name>                  provider.*.npm 字段值 (内置包, 调用方需跳过)
+#   W|<msg>                   warn: 配置异常 (如 command 形如不匹配)
+#   I|<msg>                   info: 跳过 (如 runner 非 bunx/npx)
+# 失败: opencode.json 缺失/解析失败 → 返回非 0 + stderr 错误
+_scan_opencode_packages() {
+    local cfg="$OC_CONFIG_FILE"
+    if [ ! -f "$cfg" ]; then
+        echo "[err] opencode.json 不存在: $cfg" >&2
+        return 1
+    fi
+    python3 - "$cfg" <<'PYEOF'
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        cfg = json.load(f)
+except json.JSONDecodeError as e:
+    print(f"[err] opencode.json 解析失败: {e}", file=sys.stderr)
+    sys.exit(1)
+
+# Group A: MCP local command (runner 必须是 bunx/npx)
+for name, mcp in cfg.get("mcp", {}).items():
+    if mcp.get("type") != "local":
+        continue
+    cmd = mcp.get("command", []) or []
+    if len(cmd) < 2:
+        print(f"W|mcp.{name}.command 形如 [runner, pkg], 实际 {cmd}")
+        continue
+    runner, pkg = cmd[0], cmd[1]
+    if runner not in ("bunx", "npx"):
+        print(f"I|mcp.{name} runner={runner} 非 bunx/npx, 跳过")
+        continue
+    print(f"A|{name}|{runner}|{pkg}")
+
+# Group B: plugin 列表 (去重)
+seen = set()
+for pkg in cfg.get("plugin", []):
+    if pkg in seen:
+        continue
+    seen.add(pkg)
+    print(f"B|{pkg}")
+
+# Group C: provider.*.npm (内置包, 仅列出)
+for _pname, prov in cfg.get("provider", {}).items():
+    npm = prov.get("npm", "")
+    if npm:
+        print(f"C|{npm}")
+PYEOF
+}
+
+# 刷新一个 bunx/npx 包 (MCP local)
+# 参数: name (MCP 条目名), runner (bunx|npx), pkg_spec (形如 name@latest 或 name)
+# DRY_RUN=1 时跳过真实 bun pm cache rm / bunx, 仅打印
+_refresh_bunx_package() {
+    local name="$1" runner="$2" pkg_spec="$3"
+    if [ -z "$pkg_spec" ]; then
+        warn "$name: 缺少包名, 跳过"
+        return 0
+    fi
+    case "$pkg_spec" in
+        *@*) ;;
+        *)   pkg_spec="${pkg_spec}@latest" ;;
+    esac
+
+    if [ "$runner" = "npx" ] || ! command -v bun >/dev/null 2>&1; then
+        warn "$name: 需 bun (当前 runner=$runner); 请在 TUI「插件管理」菜单选择「切换 think MCP 到 bunx」后再刷"
+        return 0
+    fi
+
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        info "[DRY_RUN] $name: 跳过 bun pm cache rm + bunx $pkg_spec"
+        ok "$name: $pkg_spec (dry-run)"
+        return 0
+    fi
+
+    info "清除 $name bun 缓存..."
+    bun pm cache rm 2>/dev/null || true
+
+    info "重新拉取 $name 最新版..."
+    _run_with_timeout 15 bunx "$pkg_spec" --version 2>/dev/null &
+    wait $! 2>/dev/null || true
+
+    local bare_name="${pkg_spec%@*}"
+    local cached
+    cached=$(_find_bun_cache_package "$bare_name" || true)
+    if [ -n "$cached" ]; then
+        ok "$name: $(basename "$cached")"
+    else
+        warn "$name: 未找到缓存, 首次启动时会自动拉取"
+    fi
+}
+
+# 刷新一个 npm plugin 包
+# 参数: name (plugin 条目名)
+# DRY_RUN=1 时跳过真实 npm update, 仅打印
+_refresh_npm_package() {
+    local name="$1"
+    local oc_dir
+    oc_dir=$(dirname "$OC_CONFIG_FILE")
+
+    if [ ! -f "${oc_dir}/package.json" ]; then
+        warn "$name: opencode 目录无 package.json, 首次启动时会自动拉取"
+        return 0
+    fi
+    if ! command -v npm >/dev/null 2>&1; then
+        warn "$name: npm 未安装, 跳过"
+        return 0
+    fi
+
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        info "[DRY_RUN] $name: 跳过 npm update $name"
+        ok "$name: v? (dry-run)"
+        return 0
+    fi
+
+    info "更新 $name (npm update)..."
+    if (cd "$oc_dir" && npm update "$name" 2>/dev/null); then
+        local ver
+        ver=$(cd "$oc_dir" && node -e "try{console.log(require('${name}/package.json').version)}catch(e){console.log('?')}" 2>/dev/null || echo "?")
+        ok "$name: v${ver}"
+    else
+        warn "$name: npm update 失败, opencode 启动时会自动拉取"
+    fi
+}
+
+_refresh_global_npm_package() {
+    local name="$1"
+    local npm_runner=""
+    if command -v bun >/dev/null 2>&1; then
+        npm_runner="bun"
+    elif command -v npm >/dev/null 2>&1; then
+        npm_runner="npm"
+    else
+        warn "$name: bun/npm 均未安装, 跳过"
+        return 0
+    fi
+
+    if [ "${DRY_RUN:-0}" = "1" ]; then
+        info "[DRY_RUN] $name: 跳过 $npm_runner install -g $name@latest"
+        ok "$name: v? (dry-run)"
+        return 0
+    fi
+
+    info "更新全局工具 $name..."
+    if $npm_runner install -g "$name"@latest 2>&1; then
+        local ver
+        ver=$($name --version 2>/dev/null || echo "?")
+        ok "$name: v${ver}"
+    else
+        warn "$name: 全局更新失败"
+    fi
+}
+
+# 刷新所有插件缓存 (从 opencode.json 全量扫描)
+# 环境变量: DRY_RUN=1 跳过真实网络/磁盘 (用于测试/预览)
+plugins_refresh_cache() {
+    echo
+    echo "${C_BOLD}刷新 NPM 工具${C_RESET}"
+    echo
+
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        warn "opencode 配置文件不存在: $OC_CONFIG_FILE"
+        return 1
+    fi
+    if ! command -v python3 &>/dev/null; then
+        warn "python3 未安装 (JSON 操作需要)"
+        return 1
+    fi
+
+    local scan_output
+    if ! scan_output=$(_scan_opencode_packages); then
+        warn "扫描 opencode.json 失败 (见上方错误)"
+        return 1
+    fi
+
+    # 分组
+    local -a builtin_names=()
+    local mcp_n=0 plugin_n=0 builtin_n=0
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        case "$line" in
+            A\|*)
+                mcp_n=$((mcp_n+1))
+                local name runner pkg
+                name=$(echo "$line" | cut -d'|' -f2)
+                runner=$(echo "$line" | cut -d'|' -f3)
+                pkg=$(echo "$line" | cut -d'|' -f4)
+                _refresh_bunx_package "$name" "$runner" "$pkg" || true
+                ;;
+            B\|*)
+                plugin_n=$((plugin_n+1))
+                local name
+                name=$(echo "$line" | cut -d'|' -f2)
+                _refresh_npm_package "$name" || true
+                ;;
+            C\|*)
+                builtin_n=$((builtin_n+1))
+                builtin_names+=("$(echo "$line" | cut -d'|' -f2)")
+                ;;
+            W\|*)
+                warn "$(echo "$line" | cut -d'|' -f2-)"
+                ;;
+            I\|*)
+                info "$(echo "$line" | cut -d'|' -f2-)"
+                ;;
+        esac
+    done <<< "$scan_output"
+
+    if [ "${#builtin_names[@]}" -gt 0 ]; then
+        info "跳过 ${#builtin_names[@]} 个内置包: $(IFS=,; echo "${builtin_names[*]}")"
+    fi
+    _refresh_global_npm_package "codegraph" || true
+    info "扫描结果: $mcp_n 个 MCP 包, $plugin_n 个 plugin 包, $builtin_n 个内置 ai-sdk 包"
+}
+
+plugins_tui() {
+    if [ ! -f "$OC_CONFIG_FILE" ]; then
+        die "opencode 配置文件不存在: $OC_CONFIG_FILE"
+    fi
+
+    if ! command -v python3 &>/dev/null; then
+        die "python3 未安装"
+    fi
+
+    while true; do
+        clear
+        echo
+        _panel_title "PLUGIN TOOLING" "MCP · plugins · npm tools"
+        echo
+
+        local status_output
+        status_output=$(_get_plugin_status)
+
+        local think_status think_runner think_pkg think_enabled
+        think_status=$(echo "$status_output" | grep "^think|" | cut -d'|' -f2)
+        think_runner=$(echo "$status_output" | grep "^think|" | cut -d'|' -f3)
+        think_pkg=$(echo "$status_output" | grep "^think|" | cut -d'|' -f4)
+        think_enabled=$(echo "$status_output" | grep "^think|" | cut -d'|' -f5)
+
+        local dcp_status bun_status
+        dcp_status=$(echo "$status_output" | grep "^dcp|" | cut -d'|' -f2)
+        bun_status=$(echo "$status_output" | grep "^bun|" | cut -d'|' -f2)
+
+        if [ "$think_status" = "found" ]; then
+            if [ "$think_enabled" = "enabled" ]; then
+                _status_row "✓" "think MCP" "$think_runner $think_pkg" "$C_GREEN"
+            else
+                _status_row "!" "think MCP" "disabled" "$C_YELLOW"
+            fi
+        else
+            _status_row "×" "think MCP" "missing" "$C_RED"
+        fi
+
+        if [ "$dcp_status" = "found" ]; then
+            _status_row "✓" "DCP plugin" "$DCP_PKG" "$C_GREEN"
+        else
+            _status_row "×" "DCP plugin" "missing" "$C_RED"
+        fi
+
+        if [ "$bun_status" = "ok" ]; then
+            local bun_ver
+            bun_ver=$(bun --version 2>/dev/null || echo "?")
+            _status_row "✓" "bun" "v${bun_ver}" "$C_GREEN"
+        else
+            _status_row "!" "bun" "not installed" "$C_YELLOW"
+        fi
+        echo
+
+        local options=()
+        if [ "$think_status" = "missing" ]; then
+            options+=("➕ 安装 think MCP")
+        elif [ "$think_runner" = "npx" ] && [ "$bun_status" = "ok" ]; then
+            options+=("🔄 切换 think MCP 到 bunx")
+        fi
+
+        if [ "$dcp_status" = "missing" ]; then
+            options+=("➕ 安装 DCP plugin")
+        fi
+
+        if [ "$bun_status" = "ok" ] && [ "$think_status" = "found" ]; then
+            # 动态扫描当前要刷的 NPM 包名 (MCP local + plugin), 列在菜单里
+            local all_pkgs
+            all_pkgs=$(python3 - "$OC_CONFIG_FILE" <<'PYEOF' 2>/dev/null || echo ""
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as f:
+        cfg = json.load(f)
+    names = []
+    for ename, mcp in cfg.get("mcp", {}).items():
+        if mcp.get("type") != "local":
+            continue
+        cmd = mcp.get("command", []) or []
+        if len(cmd) < 2 or cmd[0] not in ("bunx", "npx"):
+            continue
+        names.append(ename)
+    for pkg in cfg.get("plugin", []):
+        if pkg and pkg not in names:
+            names.append(pkg)
+    print(" / ".join(names))
+except Exception:
+    pass
+PYEOF
+)
+            if [ -n "$all_pkgs" ]; then
+                options+=("🔄 刷新 NPM 工具: ${all_pkgs} / codegraph")
+            else
+                options+=("🔄 刷新所有 NPM 工具")
+            fi
+        fi
+
+        options+=("⬅  返回主菜单")
+
+        local action
+        action=$(printf '%s\n' "${options[@]}" | _fzf_run --height "55%" --prompt "plugins ▸ " \
+            --border "rounded" --label " PLUGINS " --margin "1,18" || true)
+
+        case "${action:-}" in
+            *"安装 think MCP"*)
+                plugins_install_think
+                ;;
+            *"切换 think MCP 到 bunx"*)
+                plugins_switch_think_bunx
+                ;;
+            *"安装 DCP plugin"*)
+                plugins_install_dcp
+                ;;
+            *"刷新 NPM 工具"*|*"刷新所有 NPM 工具"*)
+                plugins_refresh_cache
+                ;;
+            *)
+                return
+                ;;
+        esac
+    done
+}
+
+# ---------- 主流程 ----------
+# 在线获取指定 tag 的 SHA256SUMS 中当前 asset 的 hash；失败返回非 0
+fetch_remote_hash() {
+    local tag="$1" asset
+    asset=$(detect_asset)
+    local sums_url="${RELEASES_URL}/download/${tag}/SHA256SUMS"
+    local sums; sums=$(curl -fsSL --connect-timeout 5 --max-time 15 "$sums_url" 2>/dev/null) || return 1
+    [ -n "$sums" ] || return 1
+    printf '%s\n' "$sums" | awk -v a="$asset" '$2==a || $2=="*"a {print $1; exit}'
+}
+
+# 主升级入口：tag 必填
+# 策略：
+#   1) 优先看本地包 + 在线 hash 是否命中 → 直接装本地（节省下载）
+#   2) 在线能拿到 hash 但本地没命中 → 在线下载 + 校验 + 装
+#   3) 在线拿不到（网络/限流）→ fallback：本地 VERSION 与 opencode --version 不一致就装本地
+do_upgrade() {
+    local tag="$1" asset
+    asset=$(detect_asset)
+
+    local local_dir=""; local_dir=$(find_local_dir 2>/dev/null || true)
+    local local_ver=""
+    [ -n "$local_dir" ] && local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
+
+    local remote_hash=""
+    remote_hash=$(fetch_remote_hash "$tag" 2>/dev/null || true)
+
+    # ---------- 路径 A：在线可用 ----------
+    if [ -n "$remote_hash" ]; then
+        if [ -n "$local_dir" ]; then
+            local local_hash; local_hash=$(file_sha256 "$local_dir/$asset")
+            if [ "$remote_hash" = "$local_hash" ]; then
+                info "本地包 hash 与 GitHub ($tag) 一致，跳过下载"
+                install_from_local "$local_dir"
+                return
+            fi
+            info "本地包与 $tag 不一致，转在线下载"
+        fi
+        # 在线下载流程
+        local tmpdir; tmpdir=$(mktemp -d); trap "rm -rf '$tmpdir'" EXIT
+        local file="$tmpdir/$asset"
+        download_asset "$tag" "$asset" "$file"
+        try_verify_sha256 "$tag" "$asset" "$file" "$tmpdir"
+        extract_and_install "$file" "$tmpdir"
+        ok "安装完成：$(${INSTALL_DIR}/${INSTALL_NAME} --version 2>/dev/null || echo "(版本未知)")"
+        check_brew_shadow
+        return
+    fi
+
+    # ---------- 路径 B：在线不可用，尝试本地 fallback ----------
+    warn "无法在线获取 $tag 的 SHA256SUMS（网络/限流）"
+    [ -z "$local_dir" ] && die "本地无可用包（候选：${LOCAL_DIR_CANDIDATES[*]}），无法离线安装"
+    local cur; cur=$(current_version)
+    if [ -n "$local_ver" ] && echo "$cur" | grep -qF "$local_ver"; then
+        ok "已安装版本与本地包一致 ($local_ver)，无需操作"
+        return
+    fi
+    info "离线 fallback：用本地包 $local_dir (BUNDLED=$local_ver) 替换当前 $cur"
+    install_from_local "$local_dir"
+}
+
+main() {
+    local cur latest local_dir local_ver
+    cur=$(current_version)
+    info "查询 GitHub releases..."
+    latest=$(latest_tag 2>/dev/null || true)
+
+    if [ -z "$latest" ]; then
+        warn "无法获取最新 release（网络或 API 限流）"
+        latest="(offline)"
+        warn "版本升级相关功能不可用，其他功能仍可正常使用"
+    fi
+
+    while true; do
+        banner "$cur" "$latest" "$OC_VERSION"
+
+        local action; action=$(choose_action "$latest" || true)
+        case "${action:-}" in
+            *"升级到最新"*)
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法在线升级"
+                    local_dir=$(find_local_dir 2>/dev/null || true)
+                    if [ -n "$local_dir" ]; then
+                        local_ver=$(read_version_field "$local_dir/VERSION" BUNDLED_VERSION || true)
+                        info "本地包 BUNDLED_VERSION=$local_ver"
+                        if echo "$cur" | grep -qF "$local_ver"; then
+                            ok "已安装版本与本地包一致，无需操作"
+                        else
+                            install_from_local "$local_dir"
+                            cur=$(current_version)
+                        fi
+                    else
+                        die "且本地无可用包，无法离线升级"
+                    fi
+                else
+                    do_upgrade "$latest"
+                    cur=$(current_version)
+                fi
+                ;;
+            *"手工选择"*)
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法连接 GitHub 拉取版本列表"
+                else
+                    local pick; pick=$(choose_release || true)
+                    [ -z "${pick:-}" ] && continue
+                    do_upgrade "$pick"
+                    cur=$(current_version)
+                fi
+                ;;
+            *"仅查看"*)
+                if [ "$latest" = "(offline)" ]; then
+                    warn "当前离线模式，无法查询版本列表"
+                else
+                    local pager_cmd="${PAGER:-}"
+                    [ -z "$pager_cmd" ] && { command -v less >/dev/null 2>&1 && pager_cmd="less -R"; } || true
+                    [ -z "$pager_cmd" ] && pager_cmd="cat"
+                    list_releases | awk -F'\t' '{
+                        mark = ($4=="pre") ? "[预] " : "    ";
+                        printf "%s%-30s  %s  %s\n", mark, $1, $3, $2
+                    }' | $pager_cmd
+                fi
+                ;;
+            *"插件管理"*)
+                plugins_tui
+                ;;
+            *"自更新"*)
+                local ret=0
+                self_update || ret=$?
+                if [ $ret -eq 2 ]; then
+                    echo
+                    info "脚本已更新，请重新运行 oc"
+                    exit 0
+                fi
+                ;;
+            *)
+                info "已退出"
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# OC 不提供 CLI 子命令。所有功能通过 TUI 菜单访问。
+# 无论传入何种参数，均直接进入 TUI 主界面。
+main
