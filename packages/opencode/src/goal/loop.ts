@@ -11,7 +11,6 @@ import { Provider } from "@/provider/provider"
 import { Goal } from "./goal"
 import { GoalJudge } from "./judge"
 import { GoalPrompts } from "./prompts"
-import { GoalEvent } from "./events"
 import { generateText } from "ai"
 import { SessionID } from "@/session/schema"
 
@@ -124,8 +123,37 @@ export const layer = Layer.effect(
       if (!updateResult) return
 
       if (!updateResult.shouldContinue) {
-        // Inject visible completion message when goal is achieved
+        // Inject visible completion message when goal is achieved, then
+        // auto-clear the goal state. `updateAfterJudge` already persisted
+        // a done snapshot and published goal.updated — that snapshot is
+        // only kept long enough to emit the completion message, then the
+        // row is removed so done is a transient visual-only state (mirrors
+        // how /goal clear behaves). This is what makes goal completion
+        // not require a manual /goal clear afterwards.
         if (verdict.verdict === "done") {
+          yield* promptSvc.prompt({
+            sessionID,
+            noReply: true,
+            parts: [{ type: "text", text: updateResult.message }],
+          }).pipe(Effect.ignore)
+          // Use deleteAndPublishDone (NOT goal.clear) because we ARE the
+          // loop fiber: goal.clear() internally calls clearFiber which
+          // would interrupt ourselves before events.publish(GoalEvent.Cleared)
+          // runs — the .pipe(Effect.ignore) would silently swallow the
+          // self-interrupt and goal.cleared would never reach SSE/TUI.
+          // deleteAndPublishDone only touches DB + event bus, never the
+          // fiber map, so it is safe to call from inside the loop fiber.
+          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
+        } else {
+          // Auto-pause branch: updateAfterJudge paused the goal due to
+          // judge-parse-failure or budget exhaustion (verdict.verdict is
+          // still "continue"). Without surfacing the message here, these
+          // automatic pauses would be invisible to the user — updateAfterJudge
+          // already saved the paused state and published goal.updated, but
+          // nothing rendered the "⏸ 目标已暂停 — …" line into the transcript.
+          // Emit it as a noReply part so it shows up without spawning a new
+          // agent turn; the fiber then naturally terminates (no clearFiber
+          // needed, see updateAfterJudge).
           yield* promptSvc.prompt({
             sessionID,
             noReply: true,
@@ -145,7 +173,13 @@ export const layer = Layer.effect(
       const freshMsgs = yield* sessions.messages({ sessionID, limit: 20 })
 
       if (shouldPreempt(freshMsgs)) {
-        yield* goal.pause(sessionID, "当前轮被中断").pipe(Effect.ignore) // user preempted
+        // Same self-interrupt hazard as the done branch above: we ARE the
+        // fiber tracked in the fibers map, so goal.pause() (which internally
+        // calls clearFiber) would interrupt ourselves before
+        // publishGoal(paused) reaches the event bus. Use pauseAndPublish
+        // which skips fiber management — the fiber naturally terminates
+        // when this function returns.
+        yield* goal.pauseAndPublish(sessionID, "当前轮被中断").pipe(Effect.ignore) // user preempted
         return
       }
 
@@ -153,19 +187,30 @@ export const layer = Layer.effect(
       if (!reloadedState || reloadedState.status !== "active") return
       const continuationText = GoalPrompts.renderContinuation(reloadedState.goal, reloadedState.subgoals ?? [])
 
+      // Surface the per-turn progress indicator visibly (e.g.
+      // "↻ 继续推进目标（2/10）：…"). updateAfterJudge computed this message;
+      // emit it as a noReply non-synthetic part so it renders in the transcript
+      // without spawning another agent turn. The continuation prompt below
+      // (ignored) is what actually drives the next loop iteration.
+      yield* promptSvc.prompt({
+        sessionID,
+        noReply: true,
+        parts: [{ type: "text", text: updateResult.message }],
+      }).pipe(Effect.ignore)
+
       yield* promptSvc.prompt({
         sessionID,
         parts: [{ type: "text", text: continuationText, ignored: true }],
       })
 
-      yield* events.publish(GoalEvent.Continued, {
-        sessionID,
-        turnsUsed: reloadedState.turns_used,
-        maxTurns: reloadedState.max_turns,
-        reason: verdict.reason,
-      })
-
-      yield* goal.clearLoopFiber(sessionID)
+      // NOTE: We deliberately DO NOT call goal.clearLoopFiber here. The
+      // promptSvc.prompt above triggers a fresh agent loop, which when it
+      // goes idle will cause the SessionStatus idle subscription to fork
+      // a NEW afterIdle fiber and registerLoopFiber will auto-override the
+      // (naturally completed) current fiber in the map. An explicit
+      // clearLoopFiber from within ourselves would race with that override
+      // and could interrupt the newly registered fiber C, silently
+      // stalling the goal loop.
     })
 
     const init = Effect.fn("GoalLoop.init")(function* () {
@@ -176,6 +221,11 @@ export const layer = Layer.effect(
   }),
 )
 
+// GoalLoop.defaultLayer self-provides its construction deps. Because
+// Layer.provideMerge(self, layer) requires `layer` (GoalLoop) to be
+// self-contained — self's context is NOT fed into layer — every dep in the
+// chain must be provided here, transitively. memoMap dedups these with the
+// AppLayer's own instances so no duplicate services are created.
 export const defaultLayer = layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Session.defaultLayer),

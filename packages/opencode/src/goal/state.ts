@@ -3,7 +3,7 @@ export * as GoalState from "./state"
 import { Effect, Schema } from "effect"
 import { NonNegativeInt } from "@opencode-ai/schema/schema"
 
-export const Status = Schema.Literals(["active", "paused", "done", "cleared"])
+export const Status = Schema.Literals(["active", "paused", "done"])
 export type Status = Schema.Schema.Type<typeof Status>
 
 export const Verdict = Schema.Literals(["done", "continue", "skipped"])

@@ -273,18 +273,17 @@ export function buildAgentTools(deps: BuildAgentToolsDeps): Record<string, Tool>
       const reject = whitelistReject(command)
       if (reject) return { output: `Error: ${reject}` }
 
-      // v1 POSIX-only. Windows lacks `sh -c` — bail out loudly so the LLM can
-      // adapt rather than the host hanging on a missing binary.
-      if (process.platform === "win32") {
-        return { output: "Error: bash tool unavailable on Windows in v1 (POSIX only)" }
-      }
+      // Align with settings.ts execShell: use cmd.exe on Windows (no `sh`),
+      // POSIX `sh -c` elsewhere. Previously this bailed on win32 while command
+      // hooks ran fine via cmd.exe — asymmetric behavior across handler types.
+      const isWin = process.platform === "win32"
 
       try {
         const result = await Effect.runPromise(
           Effect.scoped(
             Effect.gen(function* () {
               const handle = yield* spawner.spawn(
-                ChildProcess.make("sh", ["-c", command], {
+                ChildProcess.make(isWin ? "cmd.exe" : "sh", isWin ? ["/c", command] : ["-c", command], {
                   cwd,
                   extendEnv: true,
                   stdin: "ignore",

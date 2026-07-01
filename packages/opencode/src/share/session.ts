@@ -7,6 +7,10 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ShareNext } from "./share-next"
 import { SettingsHook } from "@/hook/settings"
+import { HookStartContext } from "@/hook/start-context"
+import * as Log from "@/util/log"
+
+const log = Log.create({ service: "share.session" })
 
 export interface Interface {
   readonly create: (input?: Session.CreateInput) => Effect.Effect<Session.Info>
@@ -25,6 +29,7 @@ export const layer = Layer.effect(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    const startCtx = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
 
     const share = Effect.fn("SessionShare.share")(function* (sessionID: SessionID) {
       const conf = yield* cfg.get()
@@ -42,14 +47,23 @@ export const layer = Layer.effect(
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
       if (result.parentID) return result
-      // Fire SessionStart hook for top-level sessions only
+      // Fire SessionStart hook for top-level sessions only.
+      // SettingsHook.Service is guaranteed available because SettingsHook.node
+      // is now listed in this layer's dependencies; the previous diagnostic
+      // else-branch (log.warn about missing service) is removed as dead code.
       if (settingsHook) {
-        yield* settingsHook
+        log.info("SessionStart hook: firing trigger", { sessionID: result.id })
+        const exit = yield* settingsHook
           .trigger(
             { event: "SessionStart", source: "startup", sessionID: result.id } as any,
             { sessionID: result.id, transcriptPath: "" },
           )
-          .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+          .pipe(Effect.exit)
+        if (exit._tag === "Success" && startCtx && exit.value.additionalContexts?.length) {
+          for (const ctx of exit.value.additionalContexts) {
+            if (ctx) yield* startCtx.append(result.id, ctx)
+          }
+        }
       }
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
@@ -66,9 +80,8 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Session.defaultLayer),
   Layer.provide(Config.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
-  Layer.provide(SettingsHook.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node])
+export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, HookStartContext.node, SettingsHook.node])
 
 export * as SessionShare from "./session"

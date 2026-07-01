@@ -631,6 +631,7 @@ export const node = LayerNode.make(layer, [
   Provider.node,
   EventV2Bridge.node,
   RuntimeFlags.node,
+  SettingsHook.node,
 ])
 
 export * as SessionCompaction from "./compaction"

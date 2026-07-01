@@ -204,7 +204,11 @@ export function withCliFixture<A, E>(
 
     const spawn = Effect.fn("opencode.spawn")(function* (args: string[], opts?: SpawnOpts) {
       const start = Date.now()
-      const timeoutMs = opts?.timeoutMs ?? 30_000
+      // `opencode run` boots bun + transpiles + runs a turn against the in-process
+      // TestLLMServer. Locally ~23s for the happy path; CI runners are 2-3x slower,
+      // so 30s killed the subprocess there. 120s gives margin without masking a real
+      // hang (per-test timeouts in run-process.test.ts are the outer bound).
+      const timeoutMs = opts?.timeoutMs ?? 120_000
       // stdin: "ignore" so the child doesn't see a piped stdin and block
       // on `Bun.stdin.text()` (see src/cli/cmd/run.ts — non-TTY stdin is
       // consumed as the prompt). The old Process.run wrapper defaulted to

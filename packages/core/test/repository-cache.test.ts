@@ -34,8 +34,10 @@ describe("RepositoryCache", () => {
     ),
   )
 
-  it.live("serializes concurrent materialization for the same checkout", () =>
-    withRemote((fixture) =>
+  it.live(
+    "serializes concurrent materialization for the same checkout",
+    () =>
+      withRemote((fixture) =>
       Effect.gen(function* () {
         const cache = yield* RepositoryCache.Service
         const results = yield* Effect.all(
@@ -47,10 +49,15 @@ describe("RepositoryCache", () => {
         expect(results[0].localPath).toBe(results[1].localPath)
       }).pipe(Effect.provide(cacheLayer(fixture.root))),
     ),
+    // Git I/O heavy: gitRemote fixture spawns ~11 git calls + concurrent clone.
+    // Default 5s timeout flakes on slow Windows CI runners (saw 5005ms).
+    30000,
   )
 
-  it.live("replaces an existing checkout whose origin does not match", () =>
-    withRemote((fixture) =>
+  it.live(
+    "replaces an existing checkout whose origin does not match",
+    () =>
+      withRemote((fixture) =>
       Effect.gen(function* () {
         const cache = yield* RepositoryCache.Service
         const initial = yield* cache.ensure({ reference: fixture.reference })
@@ -65,6 +72,8 @@ describe("RepositoryCache", () => {
         expect(yield* exists(path.join(replaced.localPath, "stale.txt"))).toBe(false)
       }).pipe(Effect.provide(cacheLayer(fixture.root))),
     ),
+    // Same Windows CI slow-git rationale as the test above.
+    30000,
   )
 
   it.live("returns typed validation and clone failures", () =>
