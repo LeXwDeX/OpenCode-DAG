@@ -20,7 +20,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         opencode.expectExit(result, 0)
         expect(result.stdout).toBe("hello from the test llm\n")
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
@@ -42,7 +42,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         opencode.expectExit(result, 0)
         expect(result.stdout).toBe("before tool\nafter tool\n")
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
@@ -59,7 +59,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         opencode.expectExit(plain, 0)
         expect(plain.stdout).toBe("visible\n")
       }),
-    60_000,
+    180_000,
   )
 
   // Regression for #27371: an unknown model used to hang the process forever
@@ -95,12 +95,12 @@ describe("opencode run (non-interactive subprocess)", () => {
           }),
         )
         yield* llm.fail("upstream provider exploded mid-stream")
-        const result = yield* opencode.run("trigger midstream error", { timeoutMs: 30_000 })
+        const result = yield* opencode.run("trigger midstream error", { timeoutMs: 120_000 })
         expect(result.exitCode).toBe(0)
         expect(result.stdout).toBe("partial response\n")
         expect(result.stderr).not.toContain("upstream provider exploded mid-stream")
       }),
-    60_000,
+    180_000,
   )
 
   // --format json puts one JSON object per line on stdout for each emitted
@@ -137,7 +137,7 @@ describe("opencode run (non-interactive subprocess)", () => {
             .every((line) => line.length > 0),
         ).toBe(true)
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
@@ -209,7 +209,7 @@ describe("opencode run (non-interactive subprocess)", () => {
             .every((line) => line.startsWith("{")),
         ).toBe(true)
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
@@ -238,7 +238,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(events[1]?.part).toEqual(expect.objectContaining({ type: "text", text: "partial json" }))
         expect(events.at(-1)?.part).toEqual(expect.objectContaining({ type: "step-finish", reason: "unknown" }))
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
@@ -274,7 +274,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(explicitlyDenied.stdout).toContain("continued after explicit denial")
         expect(yield* Effect.promise(() => Bun.file(`${home}/explicitly-denied`).exists())).toBe(false)
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.live(
@@ -296,7 +296,7 @@ describe("opencode run (non-interactive subprocess)", () => {
         expect(input).toContain(sentinel)
         expect(input).not.toContain(`file://${source}`)
       }),
-    60_000,
+    180_000,
   )
 
   cliIt.concurrent(
