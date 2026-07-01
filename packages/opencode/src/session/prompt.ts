@@ -1630,6 +1630,9 @@ export const layer = Layer.effect(
             text: `/${input.command} ${input.arguments}`.trim(),
           }
           yield* sessions.updatePart(cmdText)
+          // Non-synthetic so UserMessage renders it — the command confirmation
+          // (e.g. "⏸ 目标已暂停") must be visible. Matches the goal "done" case
+          // (loop.ts), which emits visible goal messages as non-synthetic parts.
           const text = dispatchResult.announce ?? dispatchResult.text
           const responsePart: SessionV1.TextPart = {
             id: PartID.ascending(),
@@ -1637,7 +1640,6 @@ export const layer = Layer.effect(
             sessionID: input.sessionID,
             type: "text",
             text,
-            synthetic: true,
           }
           yield* sessions.updatePart(responsePart)
           yield* sessions.touch(input.sessionID)
