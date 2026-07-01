@@ -268,8 +268,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [
-  EventV2Bridge.node,
-])
+export const node = LayerNode.make(layer, [EventV2Bridge.node, SettingsHook.node])
 
 export * as Permission from "."

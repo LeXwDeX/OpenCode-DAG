@@ -51,8 +51,8 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { SettingsHook } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
+import { SettingsHook } from "@/hook/settings"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
 
@@ -77,6 +77,7 @@ export const AppLayer = Layer.mergeAll(
     Question.defaultLayer,
     Permission.defaultLayer,
     Todo.defaultLayer,
+    Goal.defaultLayer,
     Session.defaultLayer,
     SessionStatus.defaultLayer,
     BackgroundJob.defaultLayer,
@@ -106,15 +107,21 @@ export const AppLayer = Layer.mergeAll(
     Installation.defaultLayer,
     ShareNext.defaultLayer,
     SessionShare.defaultLayer,
-    SettingsHook.defaultLayer,
     HookStartContext.defaultLayer,
-    Goal.defaultLayer,
-    GoalLoop.defaultLayer,
   ),
 ).pipe(
   Layer.provideMerge(Ripgrep.defaultLayer),
   Layer.provideMerge(InstanceLayer.layer),
   Layer.provideMerge(Observability.layer),
+  // GoalLoop + SettingsHook go in provideMerge (NOT mergeAll) because they need
+  // services from BOTH group1 and group2. mergeAll siblings cannot see each
+  // other's outputs, but provideMerge gives the layer access to the full
+  // accumulated context (group1 + group2 merged). Both use defaultLayer = layer
+  // (no self-provides) so their construction deps resolve from this ambient
+  // context rather than from isolated sub-contexts that can't satisfy the full
+  // transitive chain.
+  Layer.provideMerge(GoalLoop.defaultLayer),
+  Layer.provideMerge(SettingsHook.defaultLayer),
 )
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })

@@ -1,0 +1,30 @@
+Interact with the autonomous goal loop that drives your session (when one is running).
+
+## Actions
+
+- `status` — Query the current goal: its text, status, turns used/remaining, subgoals, and pause reason (if any). Returns clear information when no goal is active. Use this to know whether you are inside a goal loop, how many turns the budget has left, and whether subgoals remain.
+- `complete` — Declare the current goal achieved. Bypasses the external judge model and ends the loop immediately. Pass `reason` as a one-sentence summary of what was delivered (e.g., "created `src/foo.ts` and all 7 tests pass"). After `complete`, the goal is auto-cleared; the next call to `status` will report "no goal".
+
+## When to use `status`
+
+- At the start of any non-trivial turn, when you are not sure whether a goal loop is running — this costs nothing and tells you the budget you are consuming.
+- After each significant step, to report progress against the goal's turns budget.
+- When you suspect the goal might be close to budget exhaustion and you need to decide whether to compress work or extend.
+
+## When to use `complete`
+
+- When the goal produced verifiable deliverables (files written, tests passing, command succeeded) and no subgoals remain.
+- When the user's task was subjective (research, diagnosis, exploration) and you have produced an answer you believe is sufficient.
+- **Do not** call `complete` just because a sub-step looks done — call it only when the top-level goal the user set via `/goal <text>` is actually done.
+
+## When NOT to use `complete`
+
+- When you have pending subgoals (check via `status` first; complete any subgoals before declaring the top-level goal done).
+- When the goal is clearly in progress and you have not yet produced the deliverable.
+
+## Examples
+
+```json
+{"action": "status"}
+{"action": "complete", "reason": "Goal delivered: 3 test files created, all assertions pass after refactor."}
+```

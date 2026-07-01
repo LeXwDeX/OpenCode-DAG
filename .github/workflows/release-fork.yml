@@ -12,6 +12,8 @@
 #                            Leave blank for auto timestamped version.
 #           create_release — when true, create a GitHub Release with the
 #                            built binaries + SHA256SUMS attached.
+#           platforms      — comma-separated subset of linux,macos,windows
+#                            to build. Leave blank to build all three.
 # Jobs    : build-cli — 3-OS matrix, bundles ripgrep + single-file binary
 #           release   — optional, creates GitHub Release from build-cli artifacts
 #           register  — no-op for push triggers, just registers in Actions UI
@@ -33,6 +35,10 @@ on:
         required: false
         type: boolean
         default: false
+      platforms:
+        description: "Platforms to build, comma-separated (linux,macos,windows). Leave blank for all."
+        required: false
+        type: string
   # Also run on push to main/dev so the workflow registers in Actions UI
   push:
     branches:
@@ -50,7 +56,9 @@ env:
 jobs:
   build-cli:
     name: Build CLI (${{ matrix.name }})
-    # Skip the actual build when triggered by push (registration-only)
+    # Skip the actual build when triggered by push (registration-only). Per-
+    # matrix-entry platform filtering can't live here — `matrix` isn't in
+    # scope for a job-level `if:` — so it's applied to each step below instead.
     if: github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
@@ -69,14 +77,17 @@ jobs:
 
     steps:
       - name: Checkout Repository
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
       - name: Setup Bun
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         uses: ./.github/actions/setup-bun
 
       - name: Build CLI
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         run: ./packages/opencode/script/build.ts --single --skip-install
         env:
           OPENCODE_CHANNEL: latest
@@ -85,9 +96,11 @@ jobs:
       # Bundle ripgrep into each dist/opencode-*/bin so air-gapped users do not
       # hit the runtime download in packages/core/src/ripgrep/binary.ts.
       - name: Prefetch Ripgrep
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         run: bun run ./packages/opencode/script/prefetch-ripgrep.ts
 
       - name: Package Artifacts
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         working-directory: packages/opencode/dist
         run: |
           for dir in opencode-*/; do
@@ -106,6 +119,7 @@ jobs:
           done
 
       - name: Upload Artifacts
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         uses: actions/upload-artifact@v4
         with:
           name: opencode-${{ matrix.name }}

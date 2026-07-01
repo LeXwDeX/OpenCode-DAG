@@ -40,7 +40,7 @@ import os from "os"
 import { existsSync, readFileSync } from "fs"
 import { spawn } from "child_process"
 import { createHash } from "crypto"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -57,6 +57,8 @@ import { Auth } from "@/auth"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { buildAgentTools } from "./agent-tools"
 import { SessionHooks } from "./session-hooks"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
 import { buildForkHooks } from "./extensions" // [FORK:hook-ext]
@@ -1046,18 +1048,32 @@ const commandHandler: HookHandler = {
   }),
 }
 
-function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
-  return {
-    type: "mcp",
-    run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
-      if (inHook) {
-        log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
-        return { json: undefined, exitBlock: undefined }
-      }
-      const json = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope)
-      return { json, exitBlock: undefined }
-    }),
-  }
+const mcpHandler: HookHandler = {
+  type: "mcp",
+  run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
+    if (inHook) {
+      log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
+    if (!mcpSvc) {
+      log.warn("mcp hook skipped: MCP service not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+    const exit = yield* invokeMcpHook(mcpSvc, commandText(entry), envelope).pipe(
+      Effect.timeout(timeoutMs),
+      Effect.exit,
+    )
+    if (exit._tag === "Failure") {
+      log.warn("mcp hook timed out or failed (non-blocking)", {
+        command: commandText(entry),
+        error: String(exit.cause),
+      })
+      return { json: undefined, exitBlock: undefined }
+    }
+    return { json: exit.value, exitBlock: undefined }
+  }),
 }
 
 /**
@@ -1071,44 +1087,46 @@ function makeMcpHandler(mcpSvc: MCP.Interface): HookHandler {
  * `R = never` (the WP-4A interface contract). Captures `http` in closure scope —
  * registered once per layer construction inside the layer's Effect.gen block.
  */
-function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
-  const httpRead = withTransientReadRetry(http)
-  return {
-    type: "http",
-    run: Effect.fn("SettingsHook.handler.http")(function* (entry, envelope, _cwd, _inHook) {
-      // entry.timeout is seconds (matches commandHandler convention); fallback to CC default.
-      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
+const httpHandler: HookHandler = {
+  type: "http",
+  run: Effect.fn("SettingsHook.handler.http")(function* (entry, envelope, _cwd, _inHook) {
+    const http = Option.getOrUndefined(yield* Effect.serviceOption(HttpClient.HttpClient))
+    if (!http) {
+      log.warn("http hook skipped: HttpClient not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    const httpRead = withTransientReadRetry(http)
+    const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_TIMEOUT_MS
 
-      const url = httpUrl(entry)
-      const exit = yield* HttpClientRequest.post(url).pipe(
-        HttpClientRequest.bodyJson(envelope),
-        Effect.flatMap((req) => httpRead.execute(req)),
-        Effect.flatMap((res) =>
-          Effect.gen(function* () {
-            const text = yield* res.text
-            return { status: res.status, text }
-          }),
-        ),
-        Effect.timeout(timeoutMs),
-        Effect.exit,
-      )
+    const url = httpUrl(entry)
+    const exit = yield* HttpClientRequest.post(url).pipe(
+      HttpClientRequest.bodyJson(envelope),
+      Effect.flatMap((req) => httpRead.execute(req)),
+      Effect.flatMap((res) =>
+        Effect.gen(function* () {
+          const text = yield* res.text
+          return { status: res.status, text }
+        }),
+      ),
+      Effect.timeout(timeoutMs),
+      Effect.exit,
+    )
 
-      if (exit._tag === "Failure") {
-        log.warn("http hook request failed (non-blocking)", {
-          command: url,
-          error: String(exit.cause),
-        })
-        return { json: undefined, exitBlock: undefined }
-      }
+    if (exit._tag === "Failure") {
+      log.warn("http hook request failed (non-blocking)", {
+        command: url,
+        error: String(exit.cause),
+      })
+      return { json: undefined, exitBlock: undefined }
+    }
 
-      const { status, text } = exit.value
-      if (status < 200 || status >= 300) {
-        return { json: undefined, exitBlock: `http hook returned status ${status}` }
-      }
+    const { status, text } = exit.value
+    if (status < 200 || status >= 300) {
+      return { json: undefined, exitBlock: `http hook returned status ${status}` }
+    }
 
-      return { json: parseStdout(text, url), exitBlock: undefined }
-    }),
-  }
+    return { json: parseStdout(text, url), exitBlock: undefined }
+  }),
 }
 
 /**
@@ -1130,60 +1148,57 @@ function makeHttpHandler(http: HttpClient.HttpClient): HookHandler {
  * non-blocking hook contract. The agent.ts:397 pattern is intentionally NOT copied
  * here for that exact reason.
  */
-function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): HookHandler {
-  return {
-    type: "prompt",
-    run: Effect.fn("SettingsHook.handler.prompt")(function* (entry, envelope, _cwd, _inHook) {
-      // Outer Effect.exit mirrors httpHandler:697-707 — bottom-line guarantee that
-      // any pre-LLM defect (provider.defaultModel/getModel/getLanguage die,
-      // auth.get die via orDie) cannot escape the handler. Hooks must never crash
-      // the host on infra errors. The inner gen body is the original logic verbatim.
-      const exit = yield* Effect.gen(function* () {
-        const prompt = promptText(entry)
-        const m = yield* provider.defaultModel()
-        const resolved = yield* provider.getModel(m.providerID, m.modelID)
-        const language = yield* provider.getLanguage(resolved)
+const promptHandler: HookHandler = {
+  type: "prompt",
+  run: Effect.fn("SettingsHook.handler.prompt")(function* (entry, envelope, _cwd, _inHook) {
+    const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
+    const auth = Option.getOrUndefined(yield* Effect.serviceOption(Auth.Service))
+    if (!provider || !auth) {
+      log.warn("prompt hook skipped: Provider/Auth not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    const exit = yield* Effect.gen(function* () {
+      const prompt = promptText(entry)
+      const m = yield* provider.defaultModel()
+      const resolved = yield* provider.getModel(m.providerID, m.modelID)
+      const language = yield* provider.getLanguage(resolved)
 
-        // OpenAI OAuth: generateObject doesn't have a working code path under OAuth
-        // creds in v1 (would need streamObject + providerOptions hack like agent.ts).
-        // Skip silently rather than half-implement.
-        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
-        if (m.providerID === "openai" && authInfo?.type === "oauth") {
-          log.warn("prompt hook: OpenAI OAuth provider not supported in v1", {
-            command: prompt.slice(0, 80),
-          })
-          return { json: undefined, exitBlock: undefined }
-        }
-
-        const params = {
-          temperature: 0.3,
-          model: language,
-          messages: [
-            { role: "system", content: prompt } as ModelMessage,
-            { role: "user", content: JSON.stringify(envelope) } as ModelMessage,
-          ],
-          schema: HookJSONOutputZodSchema,
-        } satisfies Parameters<typeof generateObject>[0]
-
-        const llmExit = yield* Effect.tryPromise({
-          try: () => generateObject(params).then((r) => r.object),
-          catch: (e) => e,
-        }).pipe(Effect.exit)
-
-        if (llmExit._tag === "Failure") {
-          log.warn("prompt hook failed (non-blocking)", { error: String(llmExit.cause) })
-          return { json: undefined, exitBlock: undefined }
-        }
-        return { json: llmExit.value as HookJSONOutput, exitBlock: undefined }
-      }).pipe(Effect.exit)
-
-      if (exit._tag === "Failure") {
-        log.warn("prompt hook setup failed (non-blocking)", { error: String(exit.cause) })
+      const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+      if (m.providerID === "openai" && authInfo?.type === "oauth") {
+        log.warn("prompt hook: OpenAI OAuth provider not supported in v1", {
+          command: prompt.slice(0, 80),
+        })
         return { json: undefined, exitBlock: undefined }
       }
-      return exit.value
-    }),
-  }
+
+      const params = {
+        temperature: 0.3,
+        model: language,
+        messages: [
+          { role: "system", content: prompt } as ModelMessage,
+          { role: "user", content: JSON.stringify(envelope) } as ModelMessage,
+        ],
+        schema: HookJSONOutputZodSchema,
+      } satisfies Parameters<typeof generateObject>[0]
+
+      const llmExit = yield* Effect.tryPromise({
+        try: () => generateObject(params).then((r) => r.object),
+        catch: (e) => e,
+      }).pipe(Effect.exit)
+
+      if (llmExit._tag === "Failure") {
+        log.warn("prompt hook failed (non-blocking)", { error: String(llmExit.cause) })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return { json: llmExit.value as HookJSONOutput, exitBlock: undefined }
+    }).pipe(Effect.exit)
+
+    if (exit._tag === "Failure") {
+      log.warn("prompt hook setup failed (non-blocking)", { error: String(exit.cause) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    return exit.value
+  }),
 }
 
 /**
@@ -1203,111 +1218,104 @@ function makePromptHandler(provider: Provider.Interface, auth: Auth.Interface): 
  * gen) plus an inner tryPromise+exit on the loop Promise so AbortError and
  * generateText rejects don't escape as defects.
  */
-function makeAgentHandler(
-  provider: Provider.Interface,
-  auth: Auth.Interface,
-  spawner: ChildProcessSpawner["Service"],
-  fs: FSUtil.Interface,
-): HookHandler {
-  return {
-    type: "agent",
-    run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
-      const exit = yield* Effect.gen(function* () {
-        const prompt = promptText(entry)
-        const m = yield* provider.defaultModel()
-        const resolved = yield* provider.getModel(m.providerID, m.modelID)
-        const language = yield* provider.getLanguage(resolved)
-        const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
+const agentHandler: HookHandler = {
+  type: "agent",
+  run: Effect.fn("SettingsHook.handler.agent")(function* (entry, envelope, cwd, _inHook) {
+    const provider = Option.getOrUndefined(yield* Effect.serviceOption(Provider.Service))
+    const auth = Option.getOrUndefined(yield* Effect.serviceOption(Auth.Service))
+    const spawner = Option.getOrUndefined(yield* Effect.serviceOption(ChildProcessSpawner))
+    const fs = Option.getOrUndefined(yield* Effect.serviceOption(FSUtil.Service))
+    if (!provider || !auth || !spawner || !fs) {
+      log.warn("agent hook skipped: Provider/Auth/Spawner/FS not in context", { command: commandText(entry) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    const exit = yield* Effect.gen(function* () {
+      const prompt = promptText(entry)
+      const m = yield* provider.defaultModel()
+      const resolved = yield* provider.getModel(m.providerID, m.modelID)
+      const language = yield* provider.getLanguage(resolved)
+      const authInfo = yield* auth.get(m.providerID).pipe(Effect.orDie)
 
-        if (m.providerID === "openai" && authInfo?.type === "oauth") {
-          log.warn("agent hook: OpenAI OAuth provider not supported in v1", {
-            command: prompt.slice(0, 80),
-          })
-          return { json: undefined, exitBlock: undefined }
-        }
-
-        // Loop runs in an async Promise so the ai SDK's AbortError / network rejects
-        // can be caught with a single tryPromise. AbortController doubles as the
-        // timeout source (entry.timeout in ms; CC's `timeout` field for command/http
-        // is seconds, but agent's spec — m0021 — keeps ms semantics for parity with
-        // the loop-internal setTimeout). Inner finally clears the timer regardless
-        // of how the loop exited so the normal-completion path doesn't leak it.
-        const captured: { value: HookJSONOutput | null } = { value: null }
-        const ac = new AbortController()
-        const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
-        const timer = setTimeout(() => ac.abort(), timeoutMs)
-
-        const loopExit = yield* Effect.tryPromise({
-          try: async () => {
-            try {
-              const tools = buildAgentTools({ spawner, fs, signal: ac.signal, cwd, captured })
-              const messages: ModelMessage[] = [
-                { role: "system", content: prompt },
-                { role: "user", content: JSON.stringify(envelope) },
-              ]
-              for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
-                const result = await generateText({
-                  model: language,
-                  messages,
-                  tools,
-                  toolChoice: "auto",
-                  abortSignal: ac.signal,
-                  maxOutputTokens: 4096,
-                  allowSystemInMessages: true,
-                } as any)
-                if (captured.value) return captured.value
-                messages.push(...result.response.messages)
-                if (
-                  result.finishReason === "stop" ||
-                  result.finishReason === "length" ||
-                  result.finishReason === "content-filter"
-                )
-                  break
-                // Pure text turn with no tool calls — the model is no longer making
-                // progress toward synthetic_output. Bail rather than spin to MAX_TURNS.
-                if (result.toolCalls.length === 0) break
-              }
-              return null
-            } finally {
-              clearTimeout(timer)
-            }
-          },
-          catch: (e) => e,
-        }).pipe(Effect.exit)
-
-        if (loopExit._tag === "Failure") {
-          const cause = String(loopExit.cause)
-          const isAbort = cause.includes("AbortError") || cause.includes("aborted")
-          if (isAbort) {
-            log.warn("agent hook timeout / aborted (non-blocking)", {
-              error: cause,
-              command: prompt.slice(0, 80),
-            })
-          } else {
-            log.warn("agent hook generateText failed (non-blocking)", {
-              error: cause,
-              command: prompt.slice(0, 80),
-            })
-          }
-          return { json: undefined, exitBlock: undefined }
-        }
-
-        if (!loopExit.value) {
-          log.warn("agent hook reached max turns or no synthetic_output (non-blocking)", {
-            command: prompt.slice(0, 80),
-          })
-          return { json: undefined, exitBlock: undefined }
-        }
-        return { json: loopExit.value, exitBlock: undefined }
-      }).pipe(Effect.exit)
-
-      if (exit._tag === "Failure") {
-        log.warn("agent hook setup failed (non-blocking)", { error: String(exit.cause) })
+      if (m.providerID === "openai" && authInfo?.type === "oauth") {
+        log.warn("agent hook: OpenAI OAuth provider not supported in v1", {
+          command: prompt.slice(0, 80),
+        })
         return { json: undefined, exitBlock: undefined }
       }
-      return exit.value
-    }),
-  }
+
+      const captured: { value: HookJSONOutput | null } = { value: null }
+      const ac = new AbortController()
+      const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
+      const timer = setTimeout(() => ac.abort(), timeoutMs)
+
+      const loopExit = yield* Effect.tryPromise({
+        try: async () => {
+          try {
+            const tools = buildAgentTools({ spawner, fs, signal: ac.signal, cwd, captured })
+            const messages: ModelMessage[] = [
+              { role: "system", content: prompt },
+              { role: "user", content: JSON.stringify(envelope) },
+            ]
+            for (let turn = 0; turn < MAX_AGENT_TURNS; turn++) {
+              const result = await generateText({
+                model: language,
+                messages,
+                tools,
+                toolChoice: "auto",
+                abortSignal: ac.signal,
+                maxOutputTokens: 4096,
+                allowSystemInMessages: true,
+              } as any)
+              if (captured.value) return captured.value
+              messages.push(...result.response.messages)
+              if (
+                result.finishReason === "stop" ||
+                result.finishReason === "length" ||
+                result.finishReason === "content-filter"
+              )
+                break
+              if (result.toolCalls.length === 0) break
+            }
+            return null
+          } finally {
+            clearTimeout(timer)
+          }
+        },
+        catch: (e) => e,
+      }).pipe(Effect.exit)
+
+      if (loopExit._tag === "Failure") {
+        const cause = String(loopExit.cause)
+        const isAbort = cause.includes("AbortError") || cause.includes("aborted")
+        if (isAbort) {
+          log.warn("agent hook timeout / aborted (non-blocking)", {
+            error: cause,
+            command: prompt.slice(0, 80),
+          })
+        } else {
+          log.warn("agent hook generateText failed (non-blocking)", {
+            error: cause,
+            command: prompt.slice(0, 80),
+          })
+        }
+        return { json: undefined, exitBlock: undefined }
+      }
+
+      if (!loopExit.value) {
+        log.warn("agent hook reached max turns or no synthetic_output (non-blocking)", {
+          command: prompt.slice(0, 80),
+        })
+        return { json: undefined, exitBlock: undefined }
+      }
+      return { json: loopExit.value, exitBlock: undefined }
+    }).pipe(Effect.exit)
+
+    if (exit._tag === "Failure") {
+      log.warn("agent hook setup failed (non-blocking)", { error: String(exit.cause) })
+      return { json: undefined, exitBlock: undefined }
+    }
+    return exit.value
+  }),
 }
 
 // WP-4D-2 constants. MAX_AGENT_TURNS pinned at 200 by user m0021 — gives the LLM
@@ -1319,12 +1327,8 @@ const DEFAULT_AGENT_TIMEOUT_MS = 60_000
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const mcpSvc = yield* MCP.Service
-    const http = yield* HttpClient.HttpClient
-    const provider = yield* Provider.Service
-    const auth = yield* Auth.Service
-    const spawner = yield* ChildProcessSpawner
-    const fs = yield* FSUtil.Service
+    const events = yield* EventV2Bridge.Service
+    const { db } = yield* Database.Service
     const sessionHooks = yield* SessionHooks.Service
 
     const state = yield* InstanceState.make(
@@ -1334,14 +1338,15 @@ export const layer = Layer.effect(
       }),
     )
 
-    // Registry built once per layer construction. WP-4D-2 wires `agent`; the full
-    // 5-type set (command/mcp/http/prompt/agent) is now implemented end-to-end.
+    // Handlers resolve their deps lazily at trigger time from the ambient context.
+    // This keeps the layer lightweight (only EventV2Bridge + Database + SessionHooks
+    // needed at construction), following the Todo pattern exactly.
     const handlers: Record<string, HookHandler> = {
       command: commandHandler,
-      mcp: makeMcpHandler(mcpSvc),
-      http: makeHttpHandler(http),
-      prompt: makePromptHandler(provider, auth),
-      agent: makeAgentHandler(provider, auth, spawner, fs),
+      mcp: mcpHandler,
+      http: httpHandler,
+      prompt: promptHandler,
+      agent: agentHandler,
     }
 
     // [FORK:hook-ext] Assemble fork middleware — wired from hook/extensions/index.ts
@@ -1466,7 +1471,22 @@ export const layer = Layer.effect(
           // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
           if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
 
-          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false)
+          // "Never crash host" contract: a hook handler can throw an unrecoverable
+          // defect (null deref, OOM, native assert). Effect.catch at the tool-layer
+          // call sites only catches typed Failures, so a defect would propagate and
+          // kill the session. Catch defects here at the single entry-execution point
+          // (covers all handler types: command/mcp/http/prompt/agent) → silent allow,
+          // log, and continue to the next entry.
+          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false).pipe(
+            Effect.catchDefect((defect) => {
+              log.warn("hook entry defect swallowed (host protected)", {
+                event: payload.event,
+                command: commandText(entry),
+                error: String(defect),
+              })
+              return Effect.succeed({ json: undefined, exitBlock: undefined })
+            }),
+          )
 
           // [FORK:hook-ext] Post-dispatch observation — never modifies result
           forkHooks?.afterRunEntry?.(entry, envelope, payload.event, { json, exitBlock })
@@ -1539,18 +1559,13 @@ export const layer = Layer.effect(
 // ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
 // its bash / read_file / list_dir / grep tools. Every module that consumes
 // these spawn/fs services closes them in its own defaultLayer (see
-// git/index.ts:350, format/index.ts:207, ripgrep.ts:479) — the shared memoMap
-// in makeRuntime deduplicates the underlying instances across services.
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(MCP.defaultLayer),
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(Provider.defaultLayer),
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(CrossSpawnSpawner.defaultLayer),
-    Layer.provide(SessionHooks.defaultLayer),
-  ),
+// Only provide deps needed at layer construction (EventV2Bridge + Database + SessionHooks).
+// Handler deps (MCP/Provider/Auth/FSUtil/HttpClient/CrossSpawnSpawner) are resolved
+// lazily at trigger time from whatever ambient context the Effect runs in.
+export const defaultLayer = layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(SessionHooks.defaultLayer),
 )
 
 // ── type:"mcp" hook execution ───────────────────────────────────
@@ -1631,12 +1646,9 @@ function invokeMcpHook(
 }
 
 export const node = LayerNode.make(layer, [
-  MCP.node,
-  Provider.node,
-  Auth.node,
-  FSUtil.node,
+  EventV2Bridge.node,
+  Database.node,
   SessionHooks.node,
-  CrossSpawnSpawner.node,
-] as any)
+])
 
 export * as SettingsHook from "./settings"
