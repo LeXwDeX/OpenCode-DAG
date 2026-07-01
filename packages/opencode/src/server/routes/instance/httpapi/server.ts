@@ -46,6 +46,8 @@ import { Discovery } from "@/skill/discovery"
 import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
 import { Goal } from "@/goal/goal"
+import { SettingsHook } from "@/hook/settings"
+import { SessionHooks } from "@/hook/session-hooks"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
 import { Worktree } from "@/worktree"
@@ -258,6 +260,19 @@ const app = LayerNode.group([
   ProjectCopy.node,
   PtyTicket.node,
   Goal.node,
+  // SettingsHook + SessionHooks: previously defined but never wired into
+  // the server app graph, so every consumer using
+  // `Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))`
+  // (SessionPrompt, tools.ts, Permission, ShareSession, Compaction, TaskTool)
+  // silently degraded to `undefined` — meaning PreToolUse / PostToolUse /
+  // PostToolUseFailure / FileChanged / UserPromptSubmit / Stop /
+  // PermissionRequest / PermissionDenied / PreCompact / PostCompact /
+  // SessionStart / TaskCreated / SubagentStart / TaskCompleted hooks never
+  // fired in production. Listed here at the app-graph level so ALL
+  // consumers see the service (per-consumer node additions would miss
+  // Permission.node / Compaction.node / ShareSession.node etc.).
+  SettingsHook.node,
+  SessionHooks.node,
 ])
 
 export function createRoutes(

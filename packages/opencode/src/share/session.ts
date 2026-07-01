@@ -47,7 +47,10 @@ export const layer = Layer.effect(
     const create = Effect.fn("SessionShare.create")(function* (input?: Session.CreateInput) {
       const result = yield* session.create(input)
       if (result.parentID) return result
-      // Fire SessionStart hook for top-level sessions only
+      // Fire SessionStart hook for top-level sessions only.
+      // SettingsHook.Service is guaranteed available because SettingsHook.node
+      // is now listed in this layer's dependencies; the previous diagnostic
+      // else-branch (log.warn about missing service) is removed as dead code.
       if (settingsHook) {
         log.info("SessionStart hook: firing trigger", { sessionID: result.id })
         const exit = yield* settingsHook
@@ -61,12 +64,6 @@ export const layer = Layer.effect(
             if (ctx) yield* startCtx.append(result.id, ctx)
           }
         }
-      } else {
-        // Diagnostic: SettingsHook.Service is not in this runtime context, so
-        // SessionStart hooks cannot fire here. If you configured hooks in
-        // .claude/settings.json and still see no effect, this entry point did
-        // not wire SettingsHook into its layer tree.
-        log.warn("SessionStart hook skipped: SettingsHook.Service not in context", { sessionID: result.id })
       }
       const conf = yield* cfg.get()
       if (!(flags.autoShare || conf.share === "auto")) return result
@@ -85,6 +82,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(RuntimeFlags.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, HookStartContext.node])
+export const node = LayerNode.make(layer, [Config.node, Session.node, ShareNext.node, RuntimeFlags.node, HookStartContext.node, SettingsHook.node])
 
 export * as SessionShare from "./session"
