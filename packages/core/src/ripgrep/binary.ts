@@ -56,10 +56,19 @@ export namespace RipgrepBinary {
         const dir = yield* fs.makeTempDirectoryScoped({ directory: Global.Path.bin, prefix: "ripgrep-" })
 
         if (config.extension === "zip") {
-          // Windows 10+ ships bsdtar (System32\tar.exe), which extracts .zip and
-          // is far more reliable than PowerShell Expand-Archive — the latter is
-          // signal-killed on some Windows CI runners, breaking ripgrep provisioning.
-          const result = yield* run("tar", ["-xf", archive, "-C", dir])
+          // Windows only (all win32 platforms in the PLATFORM table use zip).
+          // Resolve bsdtar by absolute path instead of relying on PATH: on
+          // GitHub Windows runners, Git for Windows' GNU tar
+          // (C:\Program Files\Git\usr\bin\tar.exe) shadows System32\tar.exe
+          // (bsdtar) in PATH, and GNU tar treats `C:\Users\...` as an SSH-style
+          // `host:path`, producing "Cannot connect to C: resolve failed".
+          // System32 bsdtar natively understands Windows drive paths.
+          // SystemRoot is virtually always set on Windows; fall back to the
+          // literal name only if it is somehow absent (cross-spawn will then
+          // do PATH lookup, which still works on stock Windows without Git).
+          const systemRoot = process.env.SystemRoot
+          const tarExe = systemRoot ? path.join(systemRoot, "System32", "tar.exe") : "tar"
+          const result = yield* run(tarExe, ["-xf", archive, "-C", dir])
           if (result.code !== 0)
             throw new Error(
               result.stderr.trim() || result.stdout.trim() || `ripgrep extraction failed with code ${result.code}`,
