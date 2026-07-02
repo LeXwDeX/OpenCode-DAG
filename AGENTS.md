@@ -5,19 +5,19 @@
 ## Git Workflow (铁律)
 
 ```
-feat/* ──merge──▶ dev ──push──▶ main
+{type}_{name} ──merge──▶ dev ──push──▶ main
 ```
 
 | Branch | CI/TDD | Purpose |
 |--------|--------|---------|
-| `feat/*` | ❌ 不跑 | 功能开发，频繁变更 |
-| `dev` | ✅ **必须全量跑完** | TDD + CI 集成测试门禁 |
+| `{type}_{name}` | ❌ 不跑 | 功能/调试/重构等开发，频繁变更 |
+| `dev` | ✅ **只有 dev 会触发 TDD + CI E2E 的 GitHub Actions** | 集成测试门禁，全绿才能推进 |
 | `main` | ❌ 不跑 | 发布专用，只接受 dev 验证通过的代码 |
 
 **流程**：
-1. 从 `dev` 切出 `feat/xxx` 分支开发
-2. 功能完成后合并到 `dev`
-3. `dev` 的 CI（test + typecheck）必须全绿
+1. 从 `dev` 切出 `{type}_{name}` 分支开发
+2. 完成后合并到 `dev`
+3. `dev` 必须全绿（TDD + CI E2E，由 GitHub Actions 配置触发）
 4. 验证通过后才能 push 到 `main`
 5. `main` 只用于发版（`fork-release` 手动触发）
 
@@ -25,9 +25,9 @@ CI 配置：`test.yml` 和 `typecheck.yml` 仅在 push 到 `dev` 时触发，`ca
 
 ## Branch Names
 
-Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
+Format: `{type}_{short-name}` where `type` is one of: `feat`, `debug`, `refactor`, `test`, `chore`. The short name uses hyphens, at most three words.
 
-Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
+Examples: `feat_session-recovery`, `debug_goal-loop`, `refactor_dag-spawn`, `chore_regenerate-sdk`.
 
 ## Commits and PR Titles
 
