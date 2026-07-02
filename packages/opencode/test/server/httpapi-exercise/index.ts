@@ -1689,6 +1689,31 @@ const scenarios: Scenario[] = [
     .probe({ path: "/global/upgrade", body: { target: 1 } })
     .at(() => ({ path: "/global/upgrade", body: { target: 1 } }))
     .status(400),
+
+  // ── DAG workflow routes ──────────────────────────────────────────────
+  http.protected.get("/dag", "dag.list").json(200, array, "status"),
+  http.protected
+    .get("/dag/session/{sessionID}", "dag.bySession")
+    .seeded((ctx) => ctx.session({ title: "DAG session" }))
+    .at((ctx) => ({ path: route("/dag/session/{sessionID}", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(200, array, "status"),
+  http.protected
+    .get("/dag/{dagID}", "dag.detail")
+    .at(() => ({ path: route("/dag/{dagID}", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .get("/dag/{dagID}/nodes", "dag.nodes")
+    .at(() => ({ path: route("/dag/{dagID}/nodes", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .get("/dag/{dagID}/nodes/{nodeID}", "dag.nodeDetail")
+    .at(() => ({ path: route("/dag/{dagID}/nodes/{nodeID}", { dagID: "dag_nonexistent", nodeID: "n1" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .post("/dag/{dagID}/control", "dag.control")
+    .mutating()
+    .at(() => ({ path: route("/dag/{dagID}/control", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string>, body: { operation: "pause" } }))
+    .status(404),
 ]
 
 const llmScenarios = new Set([

@@ -393,6 +393,7 @@ export type TuiState = {
     status: (sessionID: string) => SessionStatus | undefined
     permission: (sessionID: string) => ReadonlyArray<PermissionRequest>
     question: (sessionID: string) => ReadonlyArray<QuestionRequest>
+    dag: (sessionID: string) => ReadonlyArray<TuiSidebarDagItem>
   }
   part: (messageID: string) => ReadonlyArray<Part>
   lsp: () => ReadonlyArray<TuiSidebarLspItem>
@@ -458,6 +459,16 @@ export type TuiSidebarFileItem = {
   file: string
   additions: number
   deletions: number
+}
+
+export type TuiSidebarDagItem = {
+  id: string
+  title: string
+  status: string
+  nodeCount: number
+  completedNodes: number
+  runningNodes: number
+  failedNodes: number
 }
 
 export type TuiHostSlotMap = {

@@ -21,6 +21,17 @@ import type {
   ConsoleState,
   Goal,
 } from "@opencode-ai/sdk/v2"
+
+/** DAG workflow summary for TUI display. */
+export interface DagWorkflowSummary {
+  id: string
+  title: string
+  status: string
+  nodeCount: number
+  completedNodes: number
+  runningNodes: number
+  failedNodes: number
+}
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -107,6 +118,9 @@ export const {
       }
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
+      dag: {
+        [sessionID: string]: DagWorkflowSummary[]
+      }
     }>({
       provider_next: {
         all: [],
@@ -138,6 +152,7 @@ export const {
       mcp_resource: {},
       formatter: [],
       vcs: undefined,
+      dag: {},
     })
 
     const event = useEvent()
@@ -261,6 +276,14 @@ export const {
         case "goal.cleared":
           setStore("goal", event.properties.sessionID, undefined)
           break
+
+        // ── DAG events ──────────────────────────────────────────────
+        // The TUI doesn't receive individual dag.* events from EventV2
+        // (those flow through the server). Instead, DAG state is fetched
+        // on-demand via the HTTP route (dag.bySession). The store slice
+        // is populated by the plugin component's createMemo calling
+        // api.client.v2.dag.bySession(), not by an event reducer case.
+        // This keeps the store shape available for the plugin to write to.
 
         case "session.diff":
           setStore("session_diff", event.properties.sessionID, event.properties.diff)

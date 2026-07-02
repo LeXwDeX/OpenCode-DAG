@@ -24,6 +24,18 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DagBySessionErrors,
+  DagBySessionResponses,
+  DagControlErrors,
+  DagControlResponses,
+  DagDetailErrors,
+  DagDetailResponses,
+  DagListErrors,
+  DagListResponses,
+  DagNodeDetailErrors,
+  DagNodeDetailResponses,
+  DagNodesErrors,
+  DagNodesResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -5046,6 +5058,183 @@ export class Tui extends HeyApiClient {
   }
 }
 
+export class Dag extends HeyApiClient {
+  /**
+   * List all DAG workflows
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagListResponses, DagListErrors, ThrowOnError>({
+      url: "/dag",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List workflows by session
+   */
+  public bySession<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagBySessionResponses, DagBySessionErrors, ThrowOnError>({
+      url: "/dag/session/{sessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow by ID
+   */
+  public detail<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDetailResponses, DagDetailErrors, ThrowOnError>({
+      url: "/dag/{dagID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List nodes for a workflow
+   */
+  public nodes<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagNodesResponses, DagNodesErrors, ThrowOnError>({
+      url: "/dag/{dagID}/nodes",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get node by ID
+   */
+  public nodeDetail<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagNodeDetailResponses, DagNodeDetailErrors, ThrowOnError>({
+      url: "/dag/{dagID}/nodes/{nodeID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Control a workflow (pause/resume/cancel/replan/step/complete)
+   */
+  public control<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      operation?: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "operation" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagControlResponses, DagControlErrors, ThrowOnError>({
+      url: "/dag/{dagID}/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class Health extends HeyApiClient {
   /**
    * Check server health
@@ -7033,6 +7222,11 @@ export class OpencodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
+  }
+
+  private _dag?: Dag
+  get dag(): Dag {
+    return (this._dag ??= new Dag({ client: this.client }))
   }
 
   private _v2?: V2
