@@ -4,10 +4,14 @@
  * A ready node spawns a real child Session through the same contract as task.ts:
  * Agent.Service.get → Session.Service.create(parentID) → deriveSubagentSessionPermission → promptOps.prompt.
  *
- * Key differences from the old dag-iron-laws spawnReadyNode:
- * - NO `node_complete` instruction (D3): completion is inferred from child session lifecycle
- * - Self-held Effect.Semaphore for max_concurrency (D9/2.12): SessionRunCoordinator has no global ceiling
- * - Three-layer model resolution: node.model > agent.model > parent session model
+ * Completion model (mirrors task.ts:210-221): a node completes when its child
+ * session's prompt() resolves; it fails when prompt() fails. The completion
+ * signal (NodeCompleted / NodeFailed) is published from inside the forked
+ * execution fiber, preserving concurrency.
+ *
+ * Output (Level 1): the final text part of the prompt result, same extraction
+ * as task.ts. Structured field-level output for input_mapping/condition
+ * (Level 2) is a documented boundary — see eval.ts.
  */
 
 import { Effect, Semaphore } from "effect"
@@ -40,9 +44,9 @@ export interface NodeSpawnResult {
 /**
  * Spawn a DAG node as a real child session, under the concurrency semaphore.
  *
- * The caller (scheduling.ts) subscribes to the child session's lifecycle events
- * to infer completion (D3) — this function returns after publishing NodeStarted
- * and does NOT wait for the prompt to finish.
+ * Returns after publishing NodeStarted and forking the prompt. Completion
+ * (NodeCompleted or NodeFailed) is published from inside the forked fiber
+ * when the prompt resolves or fails — the caller does not wait for it.
  */
 export function spawnNode(
   semaphore: Semaphore.Semaphore,
@@ -93,25 +97,31 @@ export function spawnNode(
       ?? (agent.model ? { modelID: agent.model.modelID, providerID: agent.model.providerID } : undefined)
       ?? { modelID: input.parentModelID as never, providerID: input.parentProviderID as never }
 
-    // 6. Run prompt under concurrency semaphore — NO node_complete instruction.
-    //    Fork-detached: scheduling.ts infers completion from child session lifecycle.
+    // 6. Run prompt under concurrency semaphore. Completion is published from
+    //    inside the forked fiber: success → NodeCompleted (output = final text
+    //    part, same extraction as task.ts:221), failure → NodeFailed.
+    //    Level 1 boundary: output is plain text. input_mapping field references
+    //    (nodeID.output.field) resolve to undefined until Level 2 structured
+    //    output is defined — see eval.ts.
     yield* Effect.forkDetach(
       semaphore.withPermits(1)(
-        input.promptOps
-          .prompt({
+        Effect.gen(function* () {
+          const result = yield* input.promptOps.prompt({
             messageID: MessageID.ascending(),
             sessionID: childSession.id,
             model,
             agent: agent.name,
             parts: input.promptParts,
           })
-          .pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* dag.nodeFailed(input.dagID, input.nodeID, String(cause), "exec_failed")
-              }),
-            ),
+          const output = result.parts.findLast((p) => p.type === "text")?.text ?? ""
+          yield* dag.nodeCompleted(input.dagID, input.nodeID, output)
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* dag.nodeFailed(input.dagID, input.nodeID, String(cause), "exec_failed")
+            }),
           ),
+        ),
       ),
     )
 
