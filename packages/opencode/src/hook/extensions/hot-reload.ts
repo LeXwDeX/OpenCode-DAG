@@ -132,16 +132,15 @@ export function watchSettings(
 
   const check = () => {
     if (closed) return
-    // Detect both modification (mtime increased) and deletion (mtime went from
-    // non-zero to 0). Either triggers a reload since deleting hooks.json should
-    // unload those hooks. Update mtime snapshots and schedule a single reload
-    // — reload() re-reads the whole chain (loadChain handles missing files).
+    // Detect any mtime change (increase, decrease, or deletion → 0) and trigger
+    // a reload. reload() re-reads the whole chain (loadChain handles missing
+    // files) and is idempotent, so treating any change uniformly is safe —
+    // including cp -p / touch -t restoring an older timestamp.
     let changedFile: string | undefined
     for (const f of files) {
       const m = mtimeOrZero(f)
       const prev = mtimes.get(f) ?? 0
-      // Detect: file modified (mtime increased) OR file deleted (mtime went from >0 to 0)
-      if (m > prev || (prev > 0 && m === 0)) {
+      if (m !== prev) {
         mtimes.set(f, m)
         changedFile = f
       }

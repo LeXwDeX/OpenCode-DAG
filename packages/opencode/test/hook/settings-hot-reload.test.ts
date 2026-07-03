@@ -140,4 +140,37 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
 
     await fs.rm(dir, { recursive: true, force: true })
   }, 15000)
+
+  test("watchSettings reloads when mtime decreases (cp -p / touch -t)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "hot-reload-mtime-dec-"))
+    const file = settingsPath(dir)
+    await fs.mkdir(opencodeDir(dir), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({}))
+
+    let marker: string | undefined
+    const handle = watchSettings(
+      dir,
+      undefined,
+      () => Effect.sync(() => ({ hooks: {} })),
+      () => {
+        marker = "reloaded"
+      },
+    )
+
+    // Wait for the construction-time mtime snapshot to be captured.
+    await sleep(50)
+
+    // Overwrite the file, then rewind its mtime to 60s ago — simulates
+    // `cp -p` from a backup or `touch -t`. The mtime is now LOWER than the
+    // snapshot the watcher took at construction.
+    await fs.writeFile(file, JSON.stringify({ Stop: [] }))
+    const oldTime = new Date(Date.now() - 60_000)
+    await fs.utimes(file, oldTime, oldTime)
+
+    await sleep(3000)
+    expect(marker).toBe("reloaded")
+
+    handle.close()
+    await fs.rm(dir, { recursive: true, force: true })
+  }, 15000)
 })
