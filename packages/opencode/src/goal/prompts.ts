@@ -3,7 +3,9 @@ import { GoalState } from "./state"
 export * as GoalPrompts from "./prompts"
 
 export const DEFAULT_MAX_TURNS = 20
-export const DEFAULT_JUDGE_TIMEOUT = 30_000
+// Seconds — used as `Effect.timeout(`${timeout} seconds`)` in loop.ts.
+// Was 30_000 (ms) which produced "30000 seconds" = 8.3h (effectively no timeout).
+export const DEFAULT_JUDGE_TIMEOUT_SECONDS = 30
 export const MAX_CONSECUTIVE_PARSE_FAILURES = 3
 export const JUDGE_RESPONSE_SNIPPET_CHARS = 4000
 // Zombie-goal freshness guard threshold (D6). A goal that is still active with

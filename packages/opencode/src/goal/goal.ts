@@ -388,7 +388,7 @@ export const layer = Layer.effect(
 
       if (newParseFailures >= GoalPrompts.MAX_CONSECUTIVE_PARSE_FAILURES) {
         const pauseReason =
-          "judge 模型未返回有效 JSON 判定。请配置 auxiliary.goalJudge 指向更可靠的模型，然后 /goal resume。"
+          "judge 模型未返回有效 JSON 判定。请检查模型配置或换用更可靠的模型，然后 /goal resume。"
         const updated = new GoalState.Info({
           ...state,
           status: "paused",

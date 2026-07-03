@@ -53,7 +53,7 @@ export const run = Effect.fn("Goal.Judge.run")(function* (
     user: userPrompt,
     temperature: 0,
     maxTokens: 200,
-    timeout: GoalPrompts.DEFAULT_JUDGE_TIMEOUT,
+    timeout: GoalPrompts.DEFAULT_JUDGE_TIMEOUT_SECONDS,
   }).pipe(
     Effect.map((text) => parseJudgeResponse(text)),
     // Transport errors (timeout, network, non-JSON transport-level failure)

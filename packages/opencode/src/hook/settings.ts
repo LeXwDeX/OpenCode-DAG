@@ -1050,11 +1050,7 @@ const commandHandler: HookHandler = {
 
 const mcpHandler: HookHandler = {
   type: "mcp",
-  run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
-    if (inHook) {
-      log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
-      return { json: undefined, exitBlock: undefined }
-    }
+  run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, _inHook) {
     const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
     if (!mcpSvc) {
       log.warn("mcp hook skipped: MCP service not in context", { command: commandText(entry) })
@@ -1245,7 +1241,7 @@ const agentHandler: HookHandler = {
 
       const captured: { value: HookJSONOutput | null } = { value: null }
       const ac = new AbortController()
-      const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
+      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_AGENT_TIMEOUT_MS
       const timer = setTimeout(() => ac.abort(), timeoutMs)
 
       const loopExit = yield* Effect.tryPromise({
@@ -1526,9 +1522,19 @@ export const layer = Layer.effect(
             }
           }
           if (hso && "permissionDecision" in hso && hso.permissionDecision) {
-            result.permissionDecision = hso.permissionDecision
-            result.permissionDecisionReason =
-              "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
+            const incoming = hso.permissionDecision
+            const current = result.permissionDecision
+            // Most-restrictive-wins: deny > ask > allow. A later hook cannot
+            // relax an earlier hook's deny (Claude Code permission semantics).
+            const moreRestrictive =
+              current === undefined ||
+              incoming === "deny" ||
+              (incoming === "ask" && current === "allow")
+            if (moreRestrictive) {
+              result.permissionDecision = incoming
+              result.permissionDecisionReason =
+                "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
+            }
           }
           if (hso && "updatedInput" in hso && hso.updatedInput) {
             result.updatedInput = hso.updatedInput
