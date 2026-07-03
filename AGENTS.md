@@ -5,19 +5,27 @@
 ## Git Workflow (铁律)
 
 ```
-{type}_{name} ──merge──▶ dev ──push──▶ main
+feat/* ──┐
+fix/* ───┤
+debug/* ─┼──merge──▶ dev ──[ TDD 覆盖率 + CI + E2E 全绿 ]──▶ dev 版本 ──push──▶ main
+docs/* ──┤
+refactor/*┤
+test/* ──┤
+chore/* ─┘
 ```
+
+**各类 `{type}/*` 分支汇总到 `dev`。`dev` 是唯一的质量门禁**：只有 TDD 覆盖率 + CI + E2E 全部通过，才产出可发布的 `dev` 版本；通过后才能 push 到 `main`。
 
 | Branch | CI/TDD | Purpose |
 |--------|--------|---------|
-| `{type}_{name}` | ❌ 不跑 | 功能/调试/重构等开发，频繁变更 |
-| `dev` | ✅ **只有 dev 会触发 TDD + CI E2E 的 GitHub Actions** | 集成测试门禁，全绿才能推进 |
+| `{type}/{name}` | ❌ 不跑 | 功能/修复/调试/文档/重构/测试/杂务等开发，频繁变更 |
+| `dev` | ✅ **只有 dev 会触发 TDD 覆盖率 + CI + E2E 的 GitHub Actions** | 质量门禁，全绿才产出 dev 版本 |
 | `main` | ❌ 不跑 | 发布专用，只接受 dev 验证通过的代码 |
 
 **流程**：
-1. 从 `dev` 切出 `{type}_{name}` 分支开发
+1. 从 `dev` 切出 `{type}/{name}` 分支开发
 2. 完成后合并到 `dev`
-3. `dev` 必须全绿（TDD + CI E2E，由 GitHub Actions 配置触发）
+3. `dev` 必须全绿（TDD 覆盖率 + CI + E2E，由 GitHub Actions 配置触发）→ 产出 dev 版本
 4. 验证通过后才能 push 到 `main`
 5. `main` 只用于发版（`fork-release` 手动触发）
 
@@ -25,9 +33,9 @@ CI 配置：`test.yml` 和 `typecheck.yml` 仅在 push 到 `dev` 时触发，`ca
 
 ## Branch Names
 
-Format: `{type}_{short-name}` where `type` is one of: `feat`, `debug`, `refactor`, `test`, `chore`. The short name uses hyphens, at most three words.
+Format: `{type}/{short-name}` where `type` is one of: `feat`, `fix`, `debug`, `docs`, `refactor`, `test`, `chore`. The short name uses hyphens, at most three words.
 
-Examples: `feat_session-recovery`, `debug_goal-loop`, `refactor_dag-spawn`, `chore_regenerate-sdk`.
+Examples: `feat/session-recovery`, `fix/scroll-state`, `debug/goal-loop`, `docs/branch-naming`, `refactor/dag-spawn`, `test/auth-flow`, `chore/regenerate-sdk`.
 
 ## Commits and PR Titles
 
