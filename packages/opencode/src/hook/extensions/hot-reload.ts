@@ -1,20 +1,27 @@
 /**
- * [FORK:hook-ext] Settings file hot reload — not in upstream
+ * [FORK:hook-ext] Hooks config hot reload — not in upstream
  *
- * Watches all settings files in the 6-layer chain for changes and
- * triggers a reload when modifications are detected.
+ * Polls the project (and worktree) `.opencode/hooks.json` files for mtime
+ * changes and triggers a reload when a modification is detected.
  *
- * Uses Node.js fs.watch (not @parcel/watcher) because:
- * 1. Settings files are few and stable — no need for recursive watching
- * 2. fs.watch is simpler and has lower overhead for individual files
- * 3. Avoids coupling to the FileWatcher service lifecycle
+ * Scope: project + worktree ONLY. The global `~/.config/opencode/hooks.json` is
+ * loaded once at startup and NOT polled — global hooks change rarely; changing
+ * them requires a restart. `.claude/` directories are never read.
  *
- * Debounce: 500ms. Settings edits are human-driven; no need for
- * sub-second responsiveness. Prevents double-fire from save-as-you-type
- * editors.
+ * Strategy: interval polling (mtime check every POLL_INTERVAL_MS), not fs.watch.
+ * Rationale: inotify events are unreliable on WSL2 DrvFs mounts (`/mnt/*`) and
+ * network filesystems; polling one small file per interval is cheap and
+ * deterministic (D5).
+ *
+ * Debounce: 500ms + min 1s between reloads (kept from the prior fs.watch
+ * implementation — prevents reload storms on rapid saves).
+ *
+ * The watchSettings signature + HotReloadHandle return type are unchanged from
+ * the prior fs.watch version; only the internal detection mechanism switched to
+ * polling.
  */
 
-import { watch, type FSWatcher, existsSync } from "fs"
+import { statSync } from "fs"
 import path from "path"
 import { Effect } from "effect"
 import * as Log from "@/util/log"
@@ -22,34 +29,23 @@ import type { Settings } from "../settings"
 
 const log = Log.create({ service: "hook.extensions.hot-reload" })
 
+/** Polling interval (mtime check). Hardcoded constant for now (D5/Q1). */
+const POLL_INTERVAL_MS = 2000
+
 /**
- * Directories whose `settings.json` / `settings.local.json` participate in the
- * hook chain. We watch the parent directories (not the individual files) so a
- * settings file that does not exist yet is still detected the moment it is
- * created — watching the file directly would miss it entirely. Mirrors the
- * 6-layer chain in settings.ts loadChain().
+ * hooks.json files polled for changes: project + worktree only. Global and
+ * `.claude/` are excluded — global is startup-only, `.claude/` is never read.
  */
-function settingsDirs(
-  projectDir: string,
-  worktree: string | undefined,
-  opencodeGlobalConfig?: string,
-): string[] {
-  const home = process.env.HOME ?? process.env.USERPROFILE ?? ""
-  const dirs = [
-    path.join(home, ".claude"),
-    path.join(projectDir, ".claude"),
-    path.join(projectDir, ".opencode"),
-  ]
-  if (opencodeGlobalConfig) dirs.push(opencodeGlobalConfig)
+function watchedFiles(projectDir: string, worktree: string | undefined): string[] {
+  const files = [path.join(projectDir, ".opencode", "hooks.json")]
   if (worktree && worktree !== projectDir) {
-    dirs.push(path.join(worktree, ".claude"), path.join(worktree, ".opencode"))
+    files.push(path.join(worktree, ".opencode", "hooks.json"))
   }
-  // Dedupe (worktree may collapse onto project) and keep only existing dirs.
-  return [...new Set(dirs)].filter((d) => existsSync(d))
+  return files
 }
 
 export interface HotReloadHandle {
-  /** Stop watching all files */
+  /** Stop polling all files */
   close(): void
 }
 
@@ -68,80 +64,103 @@ function countHooks(settings: Settings): number {
   return count
 }
 
+/** Current mtimeMs of a file, or 0 when it does not exist (treated as unchanged). */
+function mtimeOrZero(file: string): number {
+  try {
+    return statSync(file).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
 /**
- * Watch settings source directories for changes. On a `settings.json` /
- * `settings.local.json` change, call the reload callback which should re-run
- * loadChain() and update the state.
+ * Poll `.opencode/hooks.json` (project + worktree) for mtime changes. On a
+ * change, call the reload callback which should re-run loadChain() and update
+ * the state. `onReload` mutates the cached state object in place (same contract
+ * as the prior fs.watch implementation).
  *
  * @param projectDir - Project root directory
- * @param worktree - Optional git worktree root; its .claude/.opencode dirs are watched too
+ * @param worktree - Optional git worktree root; its .opencode/hooks.json is polled too
  * @param reload - Effect that re-runs loadChain() and returns new Settings
  * @param onReload - Callback invoked with new settings and changed file path
- * @param opencodeGlobalConfig - Optional path to opencode global config dir
+ * @param _opencodeGlobalConfig - Retained for signature compatibility; the global
+ *   hooks.json is loaded once at startup and intentionally NOT polled.
  */
 export function watchSettings(
   projectDir: string,
   worktree: string | undefined,
   reload: () => Effect.Effect<Settings>,
   onReload: (newSettings: Settings, changedFile: string) => void,
-  opencodeGlobalConfig?: string,
+  _opencodeGlobalConfig?: string,
 ): HotReloadHandle {
-  const watchers: FSWatcher[] = []
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let lastReload = 0
+  let closed = false
 
-  // Watch parent dirs and filter by settings filename inside the callback, so
-  // a settings file created at runtime is detected even though it did not
-  // exist when watching started.
-  const watchedNames = new Set(["settings.json", "settings.local.json"])
-  const dirs = settingsDirs(projectDir, worktree, opencodeGlobalConfig)
-  log.info("watching settings dirs", { count: dirs.length, dirs })
+  const files = watchedFiles(projectDir, worktree)
+  // Seed mtime snapshots so a pre-existing file does not fire on the first poll.
+  const mtimes = new Map<string, number>(files.map((f) => [f, mtimeOrZero(f)]))
+  log.info("polling hooks.json files", { files })
 
-  for (const dir of dirs) {
-    try {
-      const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
-        if (!filename || !watchedNames.has(filename)) return
+  const fireReload = (changedFile: string) => {
+    log.info("hooks.json changed, reloading", { file: changedFile })
+    // Fire-and-forget: reload errors are logged but never crash
+    Effect.runPromise(reload()).then(
+      (settings) => {
+        log.info("hooks hot-reloaded", { file: changedFile, hookCount: countHooks(settings) })
+        onReload(settings, changedFile)
+      },
+      (err) => log.warn("hooks reload failed", { file: changedFile, error: String(err) }),
+    )
+  }
 
-        // Debounce: 500ms. Min 1s between reloads.
-        // On min-interval block, reschedule (not drop) so rapid successive
-        // saves are not permanently lost.
-        if (debounceTimer) clearTimeout(debounceTimer)
-        const file = path.join(dir, filename)
-        const tryReload = () => {
-          const now = Date.now()
-          if (now - lastReload < 1000) {
-            debounceTimer = setTimeout(tryReload, 1000 - (now - lastReload))
-            return
-          }
-          lastReload = now
-          log.info("settings file changed, reloading", { file })
-          // Fire-and-forget: reload errors are logged but never crash
-          Effect.runPromise(reload()).then(
-            (settings) => {
-              log.info("settings hot-reloaded", {
-                file,
-                hookCount: countHooks(settings),
-              })
-              onReload(settings, file)
-            },
-            (err) => log.warn("settings reload failed", { file, error: String(err) }),
-          )
-        }
-        debounceTimer = setTimeout(tryReload, 500)
-      })
-      watchers.push(watcher)
-    } catch {
-      // Dir removed between settingsDirs() and watch() — harmless.
-      log.debug("skipping non-existent settings dir", { dir })
+  // Debounce: 500ms. Min 1s between reloads. On min-interval block, reschedule
+  // (not drop) so rapid successive saves are not permanently lost.
+  const scheduleReload = (changedFile: string) => {
+    if (debounceTimer) clearTimeout(debounceTimer)
+    const tryReload = () => {
+      const now = Date.now()
+      if (now - lastReload < 1000) {
+        debounceTimer = setTimeout(tryReload, 1000 - (now - lastReload))
+        return
+      }
+      lastReload = now
+      fireReload(changedFile)
     }
+    debounceTimer = setTimeout(tryReload, 500)
+  }
+
+  const check = () => {
+    if (closed) return
+    // Detect both modification (mtime increased) and deletion (mtime went from
+    // non-zero to 0). Either triggers a reload since deleting hooks.json should
+    // unload those hooks. Update mtime snapshots and schedule a single reload
+    // — reload() re-reads the whole chain (loadChain handles missing files).
+    let changedFile: string | undefined
+    for (const f of files) {
+      const m = mtimeOrZero(f)
+      const prev = mtimes.get(f) ?? 0
+      // Detect: file modified (mtime increased) OR file deleted (mtime went from >0 to 0)
+      if (m > prev || (prev > 0 && m === 0)) {
+        mtimes.set(f, m)
+        changedFile = f
+      }
+    }
+    if (changedFile) scheduleReload(changedFile)
+  }
+
+  const interval = setInterval(check, POLL_INTERVAL_MS)
+  // Don't keep the process alive just for polling (mirrors fs.watch persistent:false).
+  if (typeof interval === "object" && "unref" in interval && typeof interval.unref === "function") {
+    interval.unref()
   }
 
   return {
     close() {
+      closed = true
       if (debounceTimer) clearTimeout(debounceTimer)
-      for (const w of watchers) w.close()
-      watchers.length = 0
-      log.info("stopped watching settings files")
+      clearInterval(interval)
+      log.info("stopped polling hooks.json files")
     },
   }
 }

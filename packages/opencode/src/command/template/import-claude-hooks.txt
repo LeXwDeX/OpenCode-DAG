@@ -1,0 +1,168 @@
+---
+description: Import hooks from Claude Code config to OpenCode hooks.json
+---
+
+# Import Claude Hooks
+
+This command migrates hook configurations from Claude Code's `.claude/settings.json` files to OpenCode's dedicated `hooks.json` format. OpenCode no longer reads `.claude/` directories — this provides a one-time migration path.
+
+## Process
+
+### 1. Scan for Claude hooks
+
+Read these files and detect any `hooks` field:
+
+- `~/.claude/settings.json` (global Claude config)
+- `.claude/settings.json` (project-level)
+- `.claude/settings.local.json` (project-local, if exists)
+
+Also scan OpenCode's legacy locations for deprecation warnings:
+
+- `.opencode/settings.json`
+- `~/.config/opencode/settings.json`
+
+If a `hooks` field is found in OpenCode's settings.json files, log a warning:
+```
+⚠️  hooks field found in <path> — hooks are now loaded from hooks.json. Run /import-claude-hooks to migrate.
+```
+These are NOT imported (only .claude/ sources are imported).
+
+### 2. Parse and present hooks
+
+For each detected hook entry, present it to the user for review:
+
+```markdown
+### PreToolUse hook (from .claude/settings.json)
+
+**Type**: command
+**Matcher**: (empty = all tools)
+**Command**: `bash -c "echo pre-tool"`
+**Timeout**: 30s
+
+Import this hook? [y/n/edit]
+```
+
+Ask the user for each hook:
+- **y** = import as-is
+- **n** = skip
+- **edit** = allow user to modify before importing
+
+### 3. Handle path migration
+
+When importing, fix any hardcoded `.claude/` paths:
+
+- Replace `${CLAUDE_PLUGIN_ROOT}` references that assume `.claude/` with `.opencode/`
+- Replace absolute paths like `~/.claude/plugins/...` with `~/.config/opencode/plugins/...`
+- Update `__sourceDir` stamps from `.claude/` to `.opencode/`
+
+Example migration:
+```json
+// Original (.claude/settings.json)
+{
+  "hooks": {
+    "PreToolUse": [{
+      "type": "command",
+      "command": "bash ${CLAUDE_PLUGIN_ROOT}/validate.sh"
+    }]
+  }
+}
+
+// Migrated (hooks.json)
+{
+  "PreToolUse": [{
+    "type": "command",
+    "command": "bash ${CLAUDE_PLUGIN_ROOT}/validate.sh"
+  }]
+}
+```
+Note: `${CLAUDE_PLUGIN_ROOT}` is a runtime placeholder that OpenCode will expand based on the hook's location. Since we're moving to `.opencode/`, the expansion will now point there.
+
+### 4. Write to hooks.json
+
+Approved hooks go to:
+
+- **Global scope** (from `~/.claude/settings.json`): `~/.config/opencode/hooks.json`
+- **Project scope** (from `.claude/settings.json` or `.claude/settings.local.json`): `.opencode/hooks.json`
+
+Format: top-level event keys (NOT wrapped in `{"hooks": {...}}`). Example:
+```json
+{
+  "PreToolUse": [
+    {
+      "type": "command",
+      "command": "bash -c \"echo pre-tool\""
+    }
+  ],
+  "PostToolUse": [
+    {
+      "type": "http",
+      "url": "https://api.example.com/hook"
+    }
+  ]
+}
+```
+
+If the target file already exists, merge (append) the imported hooks rather than overwriting.
+
+### 5. Update AGENTS.md
+
+Scan the project's `AGENTS.md` for the managed section:
+
+```markdown
+<!-- Hooks_START -->
+## Configured Hooks
+
+### Global Hooks
+- **PreToolUse**: `bash -c "echo pre-tool"` (command)
+
+### Project Hooks
+- **PostToolUse**: `https://api.example.com/hook` (http)
+<!-- Hooks_END -->
+```
+
+If the markers don't exist, add them at the end of AGENTS.md with a summary of imported hooks. If they exist, replace the content between them while preserving everything outside.
+
+The summary should be brief (event + type + one-line description per hook).
+
+### 6. Report
+
+After migration, report:
+
+- Number of hooks imported (by scope: global/project)
+- Number of hooks skipped
+- Any hooks that were edited during migration
+- Deprecation warnings (if hooks were found in .opencode/settings.json)
+- Reminder: "You can now safely delete .claude/ directories if you no longer use Claude Code with this project."
+
+## Hooks.json Format Reference
+
+OpenCode's `hooks.json` uses top-level event keys. Supported events:
+
+- `PreToolUse`, `PostToolUse`
+- `SessionStart`, `SessionEnd`
+- `UserPromptSubmit`
+- `Stop`, `StopFailure`
+- `SubagentStart`, `SubagentStop`
+- `TaskCreated`, `TaskCompleted`
+- `PermissionRequest`, `PermissionDenied`
+- `FileChanged`
+- `PreCompact`, `PostCompact`
+- `WorktreeCreate`, `WorktreeRemove`
+- `ConfigChange`
+- `TeammateIdle`
+- `InstructionsLoaded`
+
+Each event maps to an array of hook matchers. Each matcher can have:
+- `type`: "command" | "http" | "prompt" | "agent"
+- `command`/`url`/`prompt`: the hook action
+- `timeout`: optional seconds
+- `matcher`: optional regex pattern (tool name matching)
+
+Merge semantics: concat-append (hooks accumulate, not replace).
+
+## Important Notes
+
+- `.claude/` directories are **never** read by OpenCode. This command is the only way to migrate.
+- The `hooks` field in `.opencode/settings.json` is deprecated and ignored (deprecation warning logged).
+- Hot-reload only watches `.opencode/hooks.json` (project + worktree). Global `~/.config/opencode/hooks.json` requires restart to apply changes.
+- Hooks are merge-append, not override. Importing duplicate events will add to the list.
