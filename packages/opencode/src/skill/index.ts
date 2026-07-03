@@ -34,6 +34,16 @@ const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
   "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
 
+// Built-in skill. Agents have no innate knowledge of opencode's hooks system
+// (events, hooks.json format, handler types) — without this skill they either
+// guess wrong or never discover hooks exist. Description alone is enough to
+// know hooks are possible and when to reach for them; the body (loaded lazily
+// on skill invocation) has the event list, file format, and handler protocol.
+const CONFIGURE_HOOKS_SKILL_NAME = "configure-hooks"
+const CONFIGURE_HOOKS_SKILL_DESCRIPTION =
+  "Use when the user wants to automatically run something on an opencode event — before/after a tool call, on session start/end, on compaction, etc. — or asks about opencode's hooks / hooks.json / event hooks. Covers hooks.json file locations and format, the 27 supported events, and the 5 hook types (command, mcp, http, prompt, agent). Also use to migrate hooks from Claude Code's .claude/settings.json via /import-claude-hooks."
+const CONFIGURE_HOOKS_SKILL_BODY = SkillPlugin.ConfigureHooksContent
+
 export const Info = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
@@ -280,6 +290,12 @@ export const layer = Layer.effect(
           description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
           location: "<built-in>",
           content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+        }
+        s.skills[CONFIGURE_HOOKS_SKILL_NAME] = {
+          name: CONFIGURE_HOOKS_SKILL_NAME,
+          description: CONFIGURE_HOOKS_SKILL_DESCRIPTION,
+          location: "<built-in>",
+          content: CONFIGURE_HOOKS_SKILL_BODY,
         }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s
