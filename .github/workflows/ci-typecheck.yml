@@ -2,10 +2,10 @@
 # 🔍 CI · Typecheck
 # ----------------------------------------------------------------------------
 # Purpose : TypeScript type checking across all packages (bun typecheck)
-# Trigger : Push to `dev` (CI gate before main) + manual workflow_dispatch
+# Trigger : Push to `main` + manual workflow_dispatch
 # Jobs    : typecheck — single Linux runner, `bun typecheck`
-# Gate    : MUST pass before merging dev → main (per AGENTS.md Git Workflow 铁律)
-# Notes   : No trigger on feat/* (frequent changes) or main (release-only).
+# Gate    : MUST pass — main is the sole integration branch (per AGENTS.md)
+# Notes   : No trigger on feat/* or fix/* (frequent changes).
 # ============================================================================
 
 name: 🔍 CI · Typecheck
@@ -13,7 +13,7 @@ name: 🔍 CI · Typecheck
 on:
   push:
     branches:
-      - dev
+      - main
   workflow_dispatch:
 
 jobs:

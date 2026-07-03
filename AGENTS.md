@@ -1,35 +1,32 @@
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+- The default branch in this repo is `main`.
 
 ## Git Workflow (铁律)
 
 ```
 feat/* ──┐
 fix/* ───┤
-debug/* ─┼──merge──▶ dev ──[ TDD 覆盖率 + CI + E2E 全绿 ]──▶ dev 版本 ──push──▶ main
+debug/* ─┼──merge──▶ main ──[ TDD 覆盖率 + CI + E2E 全绿 ]──▶ main 版本
 docs/* ──┤
 refactor/*┤
 test/* ──┤
 chore/* ─┘
 ```
 
-**各类 `{type}/*` 分支汇总到 `dev`。`dev` 是唯一的质量门禁**：只有 TDD 覆盖率 + CI + E2E 全部通过，才产出可发布的 `dev` 版本；通过后才能 push 到 `main`。
+**各类 `{type}/*` 分支汇总到 `main`。`main` 是唯一的质量门禁**：只有 TDD 覆盖率 + CI + E2E 全部通过，才产出可发布的版本。
 
 | Branch | CI/TDD | Purpose |
 |--------|--------|---------|
 | `{type}/{name}` | ❌ 不跑 | 功能/修复/调试/文档/重构/测试/杂务等开发，频繁变更 |
-| `dev` | ✅ **只有 dev 会触发 TDD 覆盖率 + CI + E2E 的 GitHub Actions** | 质量门禁，全绿才产出 dev 版本 |
-| `main` | ❌ 不跑 | 发布专用，只接受 dev 验证通过的代码 |
+| `main` | ✅ **只有 main 会触发 TDD 覆盖率 + CI + E2E 的 GitHub Actions** | 质量门禁 + 发版，全绿才产出新版本 |
 
 **流程**：
-1. 从 `dev` 切出 `{type}/{name}` 分支开发
-2. 完成后合并到 `dev`
-3. `dev` 必须全绿（TDD 覆盖率 + CI + E2E，由 GitHub Actions 配置触发）→ 产出 dev 版本
-4. 验证通过后才能 push 到 `main`
-5. `main` 只用于发版（`fork-release` 手动触发）
+1. 从 `main` 切出 `{type}/{name}` 分支开发
+2. 完成后合并到 `main`
+3. `main` 必须全绿（TDD 覆盖率 + CI + E2E，由 GitHub Actions 配置触发）→ 产出新版本
+4. `main` 同时用于发版（`fork-release` 手动触发）
 
-CI 配置：`test.yml` 和 `typecheck.yml` 仅在 push 到 `dev` 时触发，`cancel-in-progress: false` 保证每次都跑完。
+CI 配置：`ci-test.yml` 和 `ci-typecheck.yml` 仅在 push 到 `main` 时触发，`cancel-in-progress: false` 保证每次都跑完。
 
 ## Branch Names
 
