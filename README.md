@@ -55,11 +55,11 @@ Built on top of the MIT-licensed [opencode](https://github.com/anomalyco/opencod
 
 ### 📌 Stable on `main`
 
-#### Hooks API (22 events × 5 execution types)
+#### Hooks API (27 events × 5 execution types)
 
-Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 17 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more.
+Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 27 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more.
 
-See [hooks reference](./packages/opencode/src/session/prompt/hooks-reference.md).
+See [hooks reference](./packages/core/src/plugin/skill/configure-hooks.md).
 
 #### Goal Auto-Loop
 

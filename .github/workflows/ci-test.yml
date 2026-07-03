@@ -70,6 +70,11 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          # ci-typecheck.yml's Linux job is the designated Linux cache
+          # saver (runs on every push, fast, low collision risk) — this job
+          # only restores, to avoid racing on the same {OS}-bun-{hash} key.
+          save-cache: false
 
       - name: Configure Git Identity
         run: |

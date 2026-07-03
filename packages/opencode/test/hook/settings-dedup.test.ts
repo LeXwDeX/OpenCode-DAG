@@ -14,7 +14,7 @@ import { testEffect } from "../lib/effect"
 // assert the SessionEnd dynamic-hook-store cleanup. The body of each
 // it.instance test runs inside a fresh temp instance dir (via withTmpdirInstance),
 // so SettingsHook's InstanceState-built state (loadChain + the seen Map) is
-// fresh per test and loadChain reads the .opencode/settings.json we write.
+// fresh per test and loadChain reads the .opencode/hooks.json we write.
 const testLayer = SettingsHook.layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(Database.defaultLayer),
@@ -30,18 +30,18 @@ const it = testEffect(testLayer)
 // /bin/sh -c handles it on the test host.
 const CONTEXT = "ctx-F2-dedup-marker"
 const HOOK_JSON = JSON.stringify({ hookSpecificOutput: { additionalContext: CONTEXT } })
-const settingsJson = {
-  hooks: {
-    SessionStart: [{ hooks: [{ type: "command", command: `printf '%s' '${HOOK_JSON}'` }] }],
-  },
+// hooks.json uses top-level event keys (D1 canonical format); loadChain reads
+// .opencode/hooks.json (no longer .opencode/settings.json).
+const hooksJson = {
+  SessionStart: [{ hooks: [{ type: "command", command: `printf '%s' '${HOOK_JSON}'` }] }],
 }
 
-// Writes <dir>/.opencode/settings.json (loadChain reads this path), so the
+// Writes <dir>/.opencode/hooks.json (loadChain reads this path), so the
 // SessionStart matcher participates in the trigger pipeline.
 const writeSettings = (dir: string) =>
   Effect.promise(() =>
     fs.mkdir(path.join(dir, ".opencode"), { recursive: true }).then(() =>
-      fs.writeFile(path.join(dir, ".opencode", "settings.json"), JSON.stringify(settingsJson)),
+      fs.writeFile(path.join(dir, ".opencode", "hooks.json"), JSON.stringify(hooksJson)),
     ),
   )
 

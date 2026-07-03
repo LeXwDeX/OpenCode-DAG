@@ -1,15 +1,17 @@
 /**
  * Settings-based hook system — Claude Code protocol-level 1:1 compatible.
  *
- * Reads hooks from a six-layer settings chain (later layers concat on top of
- * earlier ones, mirroring Claude Code's merge behavior):
+ * Reads hooks from a dedicated hooks.json chain (later layers concat-append on
+ * top of earlier ones, mirroring Claude Code's merge semantics — hooks
+ * accumulate, they do not replace):
  *
- *   1. ~/.claude/settings.json                       (CC global, shared)
- *   2. <opencode-global-config>/settings.json        (OpenCode global, optional)
- *   3. <project>/.claude/settings.json
- *   4. <project>/.opencode/settings.json             (OpenCode project, optional)
- *   5. <project>/.claude/settings.local.json         (CC project local)
- *   6. <project>/.opencode/settings.local.json       (OpenCode project local)
+ *   1. ~/.config/opencode/hooks.json            (global, loaded once at startup)
+ *   2. <project>/.opencode/hooks.json           (project, hot-reloaded)
+ *   3. <worktree>/.opencode/hooks.json          (worktree, hot-reloaded, when ≠ project)
+ *
+ * `.claude/` directories are NOT read for hooks (complete cut); a leftover
+ * `hooks` field in OpenCode-owned settings.json files triggers a one-time
+ * deprecation warning pointing at /import-claude-hooks (hooks there are ignored).
  *
  * Supports the Claude Code hook event surface at the protocol/schema layer.
  *
@@ -96,6 +98,37 @@ export type HookEvent =
   | "CwdChanged"
   | "FileChanged"
 
+// Runtime set of valid hook event names (for filtering non-event keys in hooks.json)
+const VALID_HOOK_EVENTS = new Set<string>([
+  "PreToolUse",
+  "PostToolUse",
+  "PostToolUseFailure",
+  "Notification",
+  "UserPromptSubmit",
+  "PermissionRequest",
+  "PermissionDenied",
+  "Setup",
+  "Stop",
+  "StopFailure",
+  "SubagentStart",
+  "SubagentStop",
+  "PreCompact",
+  "PostCompact",
+  "SessionStart",
+  "SessionEnd",
+  "TeammateIdle",
+  "TaskCreated",
+  "TaskCompleted",
+  "Elicitation",
+  "ElicitationResult",
+  "ConfigChange",
+  "WorktreeCreate",
+  "WorktreeRemove",
+  "InstructionsLoaded",
+  "CwdChanged",
+  "FileChanged",
+])
+
 export interface HookCommand {
   /**
    * Hook execution kind. All 5 types fully implemented:
@@ -165,6 +198,20 @@ export interface Settings {
    * is true. Schema-only for now; see TODO(WP-6B) below in the trigger reducer.
    */
   allowUntrusted?: boolean
+}
+
+/**
+ * Read-only render DTO for the dynamic Active Hooks system-prompt block.
+ * One entry per individual hook command across the merged chain, tagged with
+ * the layer it came from. Produced by `summarizeChain` and surfaced via
+ * `SettingsHook.list()` — never re-reads files (reads from hot-reloaded state).
+ */
+export interface HookSummary {
+  event: HookEvent
+  scope: "global" | "project" | "worktree"
+  type: HookCommand["type"]
+  descriptor: string
+  matcher?: string
 }
 
 export interface HookJSONOutput {
@@ -506,6 +553,27 @@ function promptText(entry: HookCommand): string {
   return entry.prompt ?? entry.command ?? ""
 }
 
+/**
+ * Short human-readable description of a hook entry for the Active Hooks block.
+ * All types are uniformly truncated to 60 chars: command → command text,
+ * http → URL, mcp → tool name, prompt/agent → first line of the prompt/goal.
+ */
+function descriptorFor(entry: HookCommand): string {
+  switch (entry.type) {
+    case "command":
+      return commandText(entry).slice(0, 60)
+    case "http":
+      return httpUrl(entry).slice(0, 60)
+    case "mcp":
+      return commandText(entry).slice(0, 60)
+    case "prompt":
+    case "agent":
+      return promptText(entry).split("\n")[0].slice(0, 60)
+    default:
+      return commandText(entry).slice(0, 60)
+  }
+}
+
 // ── Matcher ─────────────────────────────────────────────────────
 
 /**
@@ -537,17 +605,41 @@ function matches(matcher: string | undefined, target: string): boolean {
   }
 }
 
-// ── Settings loader (six-layer chain) ───────────────────────────
+// ── Settings loader (hooks.json chain) ──────────────────────────
 
-function readJSON(filepath: string): Settings | null {
+// Exported for unit testing only; not part of the public surface.
+export function readJSON(filepath: string): Settings | null {
   if (!existsSync(filepath)) return null
   try {
-    const data = JSON.parse(readFileSync(filepath, "utf8")) as Settings
-    // Stamp every HookCommand with the directory of the settings file that declared it.
-    // execShell uses this to populate CLAUDE_PLUGIN_ROOT / CLAUDE_PLUGIN_DATA.
-    if (data.hooks) {
-      const sourceDir = path.dirname(filepath)
-      for (const matchers of Object.values(data.hooks)) {
+    const parsed = JSON.parse(readFileSync(filepath, "utf8"))
+    // hooks.json uses top-level event keys; a legacy {"hooks": {...}} wrapper is
+    // tolerated (D1 graceful degradation). The wrapper wins when present.
+    const obj =
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : undefined
+    const rawHooks = obj && obj.hooks && typeof obj.hooks === "object" && !Array.isArray(obj.hooks)
+      ? obj.hooks as Record<string, unknown>
+      : obj
+    
+    // Filter to only valid HookEvent keys with array values (defends against
+    // non-event keys like "$schema" being treated as matchers)
+    const hooks: Settings["hooks"] = {}
+    if (rawHooks && typeof rawHooks === "object") {
+      for (const [key, value] of Object.entries(rawHooks)) {
+        if (VALID_HOOK_EVENTS.has(key) && Array.isArray(value)) {
+          hooks[key as HookEvent] = value
+        }
+      }
+    }
+    
+    // Stamp every HookCommand with the directory of the hooks.json file that
+    // declared it. execShell uses this to populate CLAUDE_PLUGIN_ROOT /
+    // CLAUDE_PLUGIN_DATA — now resolves to .opencode/ or ~/.config/opencode/
+    // rather than .claude/.
+    const sourceDir = path.dirname(filepath)
+    if (hooks) {
+      for (const matchers of Object.values(hooks)) {
         if (!matchers) continue
         for (const m of matchers) {
           for (const h of m.hooks ?? []) h.__sourceDir = sourceDir
@@ -556,11 +648,11 @@ function readJSON(filepath: string): Settings | null {
     }
     log.info("loaded hook settings", {
       path: filepath,
-      events: Object.keys(data.hooks ?? {}),
+      events: Object.keys(hooks),
     })
-    return data
+    return { hooks }
   } catch (err) {
-    log.error("failed to parse settings.json", { path: filepath, error: String(err) })
+    log.error("failed to parse hooks.json", { path: filepath, error: String(err) })
     return null
   }
 }
@@ -569,7 +661,8 @@ function readJSON(filepath: string): Settings | null {
  * Concat-merge hook matchers across layers. Later layers append after earlier
  * ones (matches CC's merge semantics — does NOT replace by matcher key).
  */
-function mergeSettings(layers: Settings[]): Settings {
+// Exported for unit testing only; not part of the public surface.
+export function mergeSettings(layers: Settings[]): Settings {
   const out: Settings = { hooks: {} }
   for (const layer of layers) {
     if (!layer.hooks) continue
@@ -582,44 +675,173 @@ function mergeSettings(layers: Settings[]): Settings {
   return out
 }
 
-function loadChain(directory: string, worktree: string): Settings {
-  const home = os.homedir()
-  // Best-effort OpenCode global path; falls back to ~/.config/opencode
-  const opencodeGlobal = (() => {
-    try {
-      return Global.Path.config
-    } catch {
-      return path.join(home, ".config", "opencode")
-    }
-  })()
-
-  const candidates = [
-    path.join(home, ".claude", "settings.json"),
-    path.join(opencodeGlobal, "settings.json"),
-    path.join(directory, ".claude", "settings.json"),
-    path.join(directory, ".opencode", "settings.json"),
-    path.join(directory, ".claude", "settings.local.json"),
-    path.join(directory, ".opencode", "settings.local.json"),
-  ]
-
-  // If worktree differs from directory (e.g. git worktree), also check it
-  if (worktree && worktree !== directory) {
-    candidates.push(
-      path.join(worktree, ".claude", "settings.json"),
-      path.join(worktree, ".opencode", "settings.json"),
-      path.join(worktree, ".claude", "settings.local.json"),
-      path.join(worktree, ".opencode", "settings.local.json"),
-    )
+/**
+ * Resolve the OpenCode global config directory. Uses the explicit override
+ * when provided (tests), otherwise falls back to `Global.Path.config` with a
+ * `~/.config/opencode` default. Shared by chainCandidates and loadChain so
+ * the fallback logic exists in exactly one place.
+ */
+function resolveGlobalConfig(globalConfig?: string): string {
+  if (globalConfig) return globalConfig
+  try {
+    return Global.Path.config
+  } catch {
+    return path.join(os.homedir(), ".config", "opencode")
   }
+}
 
-  const layers = candidates
-    .map((fp) => {
-      const data = readJSON(fp)
-      if (data) warnUnsupportedFields(data.hooks, path.dirname(fp))
+/**
+ * Build the hooks.json candidate file list with scope tags. Shared by
+ * loadChain (merge) and summarizeChain (scope-tagged summaries) so adding or
+ * removing a path layer updates both consumers without a second edit.
+ */
+function chainCandidates(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): Array<{ scope: "global" | "project" | "worktree"; file: string }> {
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
+  const candidates: Array<{ scope: "global" | "project" | "worktree"; file: string }> = [
+    { scope: "global", file: path.join(opencodeGlobal, "hooks.json") },
+    { scope: "project", file: path.join(directory, ".opencode", "hooks.json") },
+  ]
+  if (worktree && worktree !== directory) {
+    candidates.push({ scope: "worktree", file: path.join(worktree, ".opencode", "hooks.json") })
+  }
+  return candidates
+}
+
+/**
+ * Produce scope-tagged summaries of the merged hooks chain — one entry per
+ * individual hook command, tagged with the layer (global/project/worktree) it
+ * came from. Ordering matches loadChain: global first, then project, then
+ * worktree. Used by `SettingsHook.list()` so the Active Hooks block reflects
+ * live, hot-reloaded state without re-reading files on every call.
+ *
+ * Exported for unit testing only; not part of the public surface.
+ */
+export function summarizeChain(directory: string, worktree: string, globalConfig?: string): HookSummary[] {
+  return chainCandidates(directory, worktree, globalConfig).flatMap(({ scope, file }) => {
+    const data = readJSON(file)
+    if (!data?.hooks) return []
+    return Object.entries(data.hooks).flatMap(([event, matchers]) =>
+      (matchers ?? []).flatMap((m) =>
+        (m.hooks ?? []).map((h) => ({
+          event: event as HookEvent,
+          scope,
+          type: h.type,
+          descriptor: descriptorFor(h),
+          ...(m.matcher && m.matcher !== "*" ? { matcher: m.matcher } : {}),
+        })),
+      ),
+    )
+  })
+}
+
+// Exported for unit testing only; not part of the public surface.
+// `globalConfig` overrides the resolved OpenCode global config dir so tests can
+// point it at an isolated temp dir instead of the real ~/.config/opencode.
+export function loadChain(directory: string, worktree: string, globalConfig?: string): Settings {
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
+
+  const layers = chainCandidates(directory, worktree, globalConfig)
+    .map(({ file }) => {
+      const data = readJSON(file)
+      if (data) warnUnsupportedFields(data.hooks, path.dirname(file))
       return data
     })
     .filter((s): s is Settings => s !== null)
+
+  // Deprecation scan: warn once per OpenCode-owned settings.json that still
+  // carries a `hooks` field (D4). Hooks there are NOT loaded — the warning is
+  // the only signal. `.claude/` files are never scanned (silent ignore per spec).
+  for (const fp of deprecatedSettingsPaths(opencodeGlobal, directory, worktree)) {
+    warnDeprecatedHooksField(fp)
+  }
+
   return mergeSettings(layers)
+}
+
+/**
+ * Tracks OpenCode-owned `settings.json` files whose deprecated `hooks` field has
+ * already been flagged. loadChain's deprecation scan warns once per file so a
+ * hot-reload (which re-runs loadChain) does not re-warn the same file. The fork's
+ * logger is a noop shim, so Set membership is the only observable signal — used
+ * by __hasWarnedDeprecated for tests. `.claude/` files are never scanned (silent
+ * ignore per spec); only OpenCode-owned settings.json paths are.
+ */
+const warnedDeprecatedHooks = new Set<string>()
+
+/**
+ * OpenCode-owned settings.json paths that previously carried a `hooks` field.
+ * `.claude/` is deliberately excluded (silent ignore). Used by the deprecation
+ * scan so users who had hooks in settings.json learn they moved to hooks.json.
+ */
+function deprecatedSettingsPaths(opencodeGlobal: string, directory: string, worktree: string): string[] {
+  const paths = [
+    path.join(opencodeGlobal, "settings.json"),
+    path.join(directory, ".opencode", "settings.json"),
+    path.join(directory, ".opencode", "settings.local.json"),
+  ]
+  if (worktree && worktree !== directory) {
+    paths.push(
+      path.join(worktree, ".opencode", "settings.json"),
+      path.join(worktree, ".opencode", "settings.local.json"),
+    )
+  }
+  return paths
+}
+
+/**
+ * True when the JSON object at filepath has a non-empty `hooks` field. Parse or
+ * missing-file errors return false silently (unreadable deprecated files are not
+ * worth warning about). The value is checked for truthiness so an explicit
+ * `"hooks": {}` / `"hooks": null` does not trigger a noisy false alarm.
+ */
+function hasHooksField(filepath: string): boolean {
+  try {
+    const parsed = JSON.parse(readFileSync(filepath, "utf8"))
+    return (
+      parsed !== null &&
+      typeof parsed === "object" &&
+      !Array.isArray(parsed) &&
+      "hooks" in parsed &&
+      Boolean((parsed as { hooks?: unknown }).hooks)
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * One-time-per-file deprecation warning for a `hooks` field left in an old
+ * settings.json. Tracked via warnedDeprecatedHooks so hot-reload (which re-runs
+ * loadChain) does not re-warn. The logger is a noop shim in this fork, so Set
+ * membership is the observable signal consumed by __hasWarnedDeprecated.
+ */
+function warnDeprecatedHooksField(filepath: string): void {
+  if (warnedDeprecatedHooks.has(filepath) || !existsSync(filepath)) return
+  if (!hasHooksField(filepath)) return
+  log.warn(
+    `hooks field found in ${filepath} — hooks are now loaded from hooks.json. Run /import-claude-hooks to migrate.`,
+  )
+  warnedDeprecatedHooks.add(filepath)
+}
+
+/**
+ * @internal Test-only: whether a settings.json path was flagged as carrying a
+ * deprecated `hooks` field during loadChain's deprecation scan.
+ */
+export function __hasWarnedDeprecated(filepath: string): boolean {
+  return warnedDeprecatedHooks.has(filepath)
+}
+
+/**
+ * @internal Test-only: reset the deprecation tracking so each test starts from a
+ * clean warning state.
+ */
+export function __resetDeprecatedWarnings(): void {
+  warnedDeprecatedHooks.clear()
 }
 
 /**
@@ -981,6 +1203,12 @@ interface State {
    * the "" bucket, preserving the prior global-dedup behavior for those.
    */
   seen: Map<string, Set<string>>
+  /**
+   * Scope-tagged summaries of the currently-effective hooks, computed by
+   * `summarizeChain` alongside `settings` (same closure, same hot-reload
+   * watcher). `list()` reads this without touching files.
+   */
+  hooksList: HookSummary[]
 }
 
 export interface Interface {
@@ -988,6 +1216,13 @@ export interface Interface {
     payload: HookPayload,
     ctx: TriggerContext,
   ) => Effect.Effect<TriggerResult>
+  /**
+   * Read-only view of the currently-effective hooks (merged global + project +
+   * worktree chain), one entry per hook command tagged with its source layer.
+   * Backed by the same hot-reloaded state `trigger` consults — never re-reads
+   * files. Empty when no hooks.json layer defines any hook.
+   */
+  readonly list: () => Effect.Effect<ReadonlyArray<HookSummary>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SettingsHook") {}
@@ -1339,6 +1574,7 @@ export const layer = Layer.effect(
         const settings = loadChain(instCtx.directory, instCtx.worktree)
         const stateObj = {
           settings,
+          hooksList: summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config),
           cwd: instCtx.directory,
           seen: new Map<string, Set<string>>(),
         } satisfies State
@@ -1350,12 +1586,22 @@ export const layer = Layer.effect(
         // state object, so the mutation is visible without invalidating the
         // cache. The finalizer closes the watcher when the instance scope is
         // disposed (same scope-based cleanup discipline as GoalLoop.state).
+        //
+        // The reload Effect computes both merged settings and scope-tagged
+        // summaries in one pass; lastSummaries carries the summaries into the
+        // onReload callback (watchSettings only threads Settings through).
+        let lastSummaries: HookSummary[] = stateObj.hooksList
         const handle = watchSettings(
           instCtx.directory,
           instCtx.worktree,
-          () => Effect.sync(() => loadChain(instCtx.directory, instCtx.worktree)),
+          () => Effect.sync(() => {
+            const newSettings = loadChain(instCtx.directory, instCtx.worktree)
+            lastSummaries = summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config)
+            return newSettings
+          }),
           (newSettings) => {
             stateObj.settings = newSettings
+            stateObj.hooksList = lastSummaries
           },
           Global.Path.config,
         )
@@ -1624,7 +1870,12 @@ export const layer = Layer.effect(
       return result
     })
 
-    return Service.of({ trigger })
+    const list = Effect.fn("SettingsHook.list")(function* () {
+      const s = yield* InstanceState.get(state)
+      return s.hooksList
+    })
+
+    return Service.of({ trigger, list })
   }),
 )
 

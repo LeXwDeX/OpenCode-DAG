@@ -23,16 +23,21 @@ type Metadata = {
   } | null
 }
 
-// Goal.Service is resolved lazily (serviceOption) rather than declared as
-// a hard dependency of the tool layer. This keeps ToolRegistry's requirement
-// set small and lets the tool degrade gracefully if Goal isn't provided by
-// the entry point — matching how src/session/prompt.ts and
-// src/session/session.ts access Goal.Service.
+// Goal.Service MUST be resolved inside `execute` (request phase), NOT in this
+// build-phase `init` gen. `init` runs once during ToolRegistry construction,
+// which lives in one Layer.mergeAll group of AppLayer while Goal.defaultLayer
+// lives in a sibling group; mergeAll siblings cannot see each other's outputs,
+// so a build-phase serviceOption(Goal.Service) is guaranteed None and would be
+// captured in this closure, permanently no-op-ing the tool (verified by the
+// runtime "autonomous goal service is not available" symptom). At execute time
+// the session request context carries the full AppLayer, so Goal.Service is
+// reachable. This corrects the misleading reference in goal-loop-correctness
+// task 6.1, which cited the old build-phase probe as the pattern to follow.
+// serviceOption contributes R = never, so Tool.define<…, never> is unchanged
+// and headless runtimes that omit Goal still degrade gracefully below.
 export const GoalTool = Tool.define<typeof Parameters, Metadata, never>(
   "goal",
   Effect.gen(function* () {
-    const goal = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
-
     return {
       description: DESCRIPTION,
       parameters: Parameters,
@@ -41,6 +46,7 @@ export const GoalTool = Tool.define<typeof Parameters, Metadata, never>(
           // Goal state belongs to the session itself; it is not an external
           // resource boundary (no filesystem, no network, no cross-session
           // write), so it does not need a permission gate.
+          const goal = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
 
           if (!goal) {
             // Goal service not wired into this entry point (some headless

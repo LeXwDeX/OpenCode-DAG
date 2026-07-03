@@ -90,6 +90,10 @@ export const TaskTool = Tool.define(
     const scope = yield* Scope.Scope
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
+    // Build-phase serviceOption is SAFE here, unlike tool/goal.ts: SettingsHook
+    // arrives via Layer.provideMerge (app-runtime.ts), whose output is visible to
+    // the ToolRegistry mergeAll group during construction, so this resolves Some.
+    // Goal.Service, by contrast, is a mergeAll sibling and invisible at build.
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const run = Effect.fn("TaskTool.execute")(function* (

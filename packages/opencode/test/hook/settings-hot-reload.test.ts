@@ -33,13 +33,12 @@ const hookJson = (ctx: string) =>
   JSON.stringify({ hookSpecificOutput: { additionalContext: ctx } })
 
 const settingsFor = (ctx: string) => ({
-  hooks: {
-    SessionStart: [{ hooks: [{ type: "command", command: `printf '%s' '${hookJson(ctx)}'` }] }],
-  },
+  // hooks.json uses top-level event keys (D1 canonical format).
+  SessionStart: [{ hooks: [{ type: "command", command: `printf '%s' '${hookJson(ctx)}'` }] }],
 })
 
 const opencodeDir = (dir: string) => path.join(dir, ".opencode")
-const settingsPath = (dir: string) => path.join(opencodeDir(dir), "settings.json")
+const settingsPath = (dir: string) => path.join(opencodeDir(dir), "hooks.json")
 
 const writeSettings = (dir: string, ctx: string) =>
   Effect.promise(async () => {
@@ -50,12 +49,12 @@ const writeSettings = (dir: string, ctx: string) =>
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
-  // F3.1 integration: changing settings.json at runtime is picked up by the
-  // next trigger after the watcher debounce. The first trigger runs
+  // F3.1 integration: changing hooks.json at runtime is picked up by the
+  // next trigger after the polling debounce. The first trigger runs
   // InstanceState.get → loadChain (reads v1) AND wires watchSettings; the
-  // on-disk edit fires the .opencode dir watcher, reload() re-runs loadChain
-  // (reads v2), and onReload mutates the cached state object's .settings in
-  // place — visible to trigger without invalidating the cache.
+  // on-disk edit is detected by the hooks.json mtime poll, reload() re-runs
+  // loadChain (reads v2), and onReload mutates the cached state object's
+  // .settings in place — visible to trigger without invalidating the cache.
   it.instance(
     "runtime settings.json change is surfaced by the next trigger after debounce",
     () =>
@@ -75,9 +74,8 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
 
         // Poll until the hot-reload has mutated the cached settings to v2.
         // Each poll uses a fresh session so per-session dedup never masks the
-        // new marker. The reload is driven by the watcher's 500ms setTimeout
-        // debounce + fs.watch delivery, so we wait on the observable effect
-        // rather than a fixed sleep.
+        // new marker. The reload is driven by the 2s mtime poll + 500ms debounce,
+        // so we wait on the observable effect rather than a fixed sleep.
         let n = 0
         yield* pollWithTimeout(
           Effect.gen(function* () {
@@ -89,7 +87,7 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
             return r.additionalContexts.includes(CONTEXT_V2) ? true : undefined
           }),
           "settings hot-reload did not surface v2 within timeout",
-          "6 seconds",
+          "8 seconds",
         )
 
         // Final confirmation with a clean session.
@@ -102,16 +100,16 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
     { init: (dir) => writeSettings(dir, CONTEXT_V1) },
   )
 
-  // F3.2 + cleanup: watchSettings watches parent dirs (so it fires on a
-  // settings.json change) and handle.close() stops all reloads. Direct unit
-  // test of the watcher mechanism, independent of the SettingsHook layer.
-  // Fixed sleeps are justified here — this test exercises debounce/throttle
-  // timing and proves absence of reload after close().
-  test("watchSettings reloads on settings.json change and stops after close", async () => {
+  // F3.2 + cleanup: watchSettings polls .opencode/hooks.json (project + worktree
+  // only) and handle.close() stops all reloads. Direct unit test of the watcher
+  // mechanism, independent of the SettingsHook layer. Fixed sleeps are justified
+  // here — this test exercises the polling/debounce/throttle timing and proves
+  // absence of reload after close().
+  test("watchSettings reloads on hooks.json change and stops after close", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "hot-reload-"))
     const file = settingsPath(dir)
     await fs.mkdir(opencodeDir(dir), { recursive: true })
-    await fs.writeFile(file, JSON.stringify({ hooks: {} }))
+    await fs.writeFile(file, JSON.stringify({}))
 
     let marker: string | undefined
     const handle = watchSettings(
@@ -126,19 +124,53 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
       },
     )
 
-    // Trigger a change. fs.watch fires "change" for settings.json on overwrite.
-    await fs.writeFile(file, JSON.stringify({ hooks: { Stop: [] } }))
-    // Wait past the 500ms debounce for the reload to land.
-    await sleep(1000)
+    // Trigger a change. The poll checks mtime every 2s; ensure a distinct mtime
+    // from the construction snapshot, then wait past the 2s poll + 500ms debounce.
+    await sleep(50)
+    await fs.writeFile(file, JSON.stringify({ Stop: [] }))
+    await sleep(3000)
     expect(marker).toBe("reloaded")
 
     // After close(), further changes must NOT reload.
     handle.close()
     marker = undefined
-    await fs.writeFile(file, JSON.stringify({ hooks: { Notification: [] } }))
-    await sleep(1000)
+    await fs.writeFile(file, JSON.stringify({ Notification: [] }))
+    await sleep(3000)
     expect(marker).toBeUndefined()
 
     await fs.rm(dir, { recursive: true, force: true })
-  })
+  }, 15000)
+
+  test("watchSettings reloads when mtime decreases (cp -p / touch -t)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "hot-reload-mtime-dec-"))
+    const file = settingsPath(dir)
+    await fs.mkdir(opencodeDir(dir), { recursive: true })
+    await fs.writeFile(file, JSON.stringify({}))
+
+    let marker: string | undefined
+    const handle = watchSettings(
+      dir,
+      undefined,
+      () => Effect.sync(() => ({ hooks: {} })),
+      () => {
+        marker = "reloaded"
+      },
+    )
+
+    // Wait for the construction-time mtime snapshot to be captured.
+    await sleep(50)
+
+    // Overwrite the file, then rewind its mtime to 60s ago — simulates
+    // `cp -p` from a backup or `touch -t`. The mtime is now LOWER than the
+    // snapshot the watcher took at construction.
+    await fs.writeFile(file, JSON.stringify({ Stop: [] }))
+    const oldTime = new Date(Date.now() - 60_000)
+    await fs.utimes(file, oldTime, oldTime)
+
+    await sleep(3000)
+    expect(marker).toBe("reloaded")
+
+    handle.close()
+    await fs.rm(dir, { recursive: true, force: true })
+  }, 15000)
 })

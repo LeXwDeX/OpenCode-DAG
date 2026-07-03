@@ -30,9 +30,17 @@ const SKILL_PATTERN = "**/SKILL.md"
 // when the model is asked to touch opencode's own config files gives it the
 // actual schemas instead of guesses.
 const CUSTOMIZE_OPENCODE_SKILL_NAME = "customize-opencode"
-const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION =
-  "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
+const CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION = SkillPlugin.CustomizeOpencodeDescription
 const CUSTOMIZE_OPENCODE_SKILL_BODY = SkillPlugin.CustomizeOpencodeContent
+
+// Built-in skill. Agents have no innate knowledge of opencode's hooks system
+// (events, hooks.json format, handler types) — without this skill they either
+// guess wrong or never discover hooks exist. Description alone is enough to
+// know hooks are possible and when to reach for them; the body (loaded lazily
+// on skill invocation) has the event list, file format, and handler protocol.
+const CONFIGURE_HOOKS_SKILL_NAME = "configure-hooks"
+const CONFIGURE_HOOKS_SKILL_DESCRIPTION = SkillPlugin.ConfigureHooksDescription
+const CONFIGURE_HOOKS_SKILL_BODY = SkillPlugin.ConfigureHooksContent
 
 export const Info = Schema.Struct({
   name: Schema.String,
@@ -280,6 +288,12 @@ export const layer = Layer.effect(
           description: CUSTOMIZE_OPENCODE_SKILL_DESCRIPTION,
           location: "<built-in>",
           content: CUSTOMIZE_OPENCODE_SKILL_BODY,
+        }
+        s.skills[CONFIGURE_HOOKS_SKILL_NAME] = {
+          name: CONFIGURE_HOOKS_SKILL_NAME,
+          description: CONFIGURE_HOOKS_SKILL_DESCRIPTION,
+          location: "<built-in>",
+          content: CONFIGURE_HOOKS_SKILL_BODY,
         }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s

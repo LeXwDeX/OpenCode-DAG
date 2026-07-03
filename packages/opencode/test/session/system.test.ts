@@ -1,11 +1,17 @@
 import { describe, expect } from "bun:test"
 import { Effect, Layer } from "effect"
+import * as fs from "fs/promises"
+import path from "path"
 import type { Agent } from "../../src/agent/agent"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
+import { SettingsHook, type HookSummary } from "../../src/hook/settings"
+import { SessionHooks } from "../../src/hook/session-hooks"
+import { EventV2Bridge } from "../../src/event-v2-bridge"
+import { Database } from "@opencode-ai/core/database/database"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { testEffect } from "../lib/effect"
 
@@ -137,5 +143,131 @@ describe("session.system", () => {
         ].join("\n"),
       )
     }),
+  )
+
+  it.effect("hooks block renders Active Hooks when SettingsHook provides entries", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const entries: HookSummary[] = [
+        { event: "PreToolUse", scope: "project", type: "command", descriptor: "echo hi", matcher: "Bash" },
+        { event: "Stop", scope: "global", type: "http", descriptor: "https://example.com/stop" },
+      ]
+      const output = yield* prompt.hooks().pipe(
+          Effect.provide(
+            Layer.mock(SettingsHook.Service, { list: () => Effect.succeed(entries) }),
+          ),
+        )
+
+      expect(output).toEqual([
+        [
+          "## Active Hooks",
+          "- PreToolUse [project/command] echo hi",
+          "- Stop [global/http] https://example.com/stop",
+        ].join("\n"),
+      ])
+    }),
+  )
+
+  it.effect("hooks block is empty when SettingsHook list is empty", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = yield* prompt.hooks().pipe(
+        Effect.provide(
+          Layer.mock(SettingsHook.Service, { list: () => Effect.succeed([]) }),
+        ),
+      )
+
+      expect(output).toEqual([])
+    }),
+  )
+
+  it.effect("hooks block is empty when SettingsHook service is absent (degrades cleanly)", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      // No SettingsHook layer provided — serviceOption returns None.
+      const output = yield* prompt.hooks()
+
+      expect(output).toEqual([])
+    }),
+  )
+
+  it.effect("hooks block caps at 20 entries and reports the remainder", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const entries: HookSummary[] = Array.from({ length: 25 }, (_, i) => ({
+        event: "PreToolUse" as const,
+        scope: "project" as const,
+        type: "command" as const,
+        descriptor: `cmd-${i}`,
+      }))
+      const output = yield* prompt.hooks().pipe(
+        Effect.provide(
+          Layer.mock(SettingsHook.Service, { list: () => Effect.succeed(entries) }),
+        ),
+      )
+
+      const block = output[0]
+      expect(block).toContain("## Active Hooks")
+      expect(block).toContain("cmd-0")
+      expect(block).not.toContain("cmd-24")
+      expect(block).toContain("… and 5 more (see hooks.json)")
+    }),
+  )
+})
+
+// Integration layer: real SettingsHook (not mocked) + real SystemPrompt.
+// Proves the full chain: InstanceState → loadChain → summarizeChain → list()
+// → serviceOption resolution in sys.hooks() — the "silent no-op" failure mode
+// AGENTS.md warns about when a .node dep is missing.
+const integrationLayer = Layer.mergeAll(
+  SystemPrompt.layer.pipe(
+    Layer.provide(LocationServiceMap.layer),
+    Layer.provide(Layer.mock(MCP.Service, { instructions: () => Effect.succeed([]) })),
+    Layer.provide(
+      Layer.succeed(
+        Skill.Service,
+        Skill.Service.of({
+          get: () => Effect.succeed(undefined),
+          require: (name) => Effect.fail(new Skill.NotFoundError({ name, available: [] })),
+          all: () => Effect.succeed(skills),
+          dirs: () => Effect.succeed([]),
+          available: () => Effect.succeed(skills),
+        }),
+      ),
+    ),
+  ),
+  SettingsHook.layer.pipe(
+    Layer.provide(EventV2Bridge.defaultLayer),
+    Layer.provide(Database.defaultLayer),
+    Layer.provideMerge(SessionHooks.defaultLayer),
+  ),
+)
+
+const itIntegration = testEffect(integrationLayer)
+
+describe("session.system integration (real SettingsHook)", () => {
+  itIntegration.instance(
+    "hooks block renders with real SettingsHook layer via serviceOption",
+    () =>
+      Effect.gen(function* () {
+        const prompt = yield* SystemPrompt.Service
+        const output = yield* prompt.hooks()
+        expect(output.length).toBe(1)
+        expect(output[0]).toContain("## Active Hooks")
+        expect(output[0]).toContain("echo integration-test")
+      }),
+    {
+      init: (dir) =>
+        Effect.promise(async () => {
+          const opencode = path.join(dir, ".opencode")
+          await fs.mkdir(opencode, { recursive: true })
+          await fs.writeFile(
+            path.join(opencode, "hooks.json"),
+            JSON.stringify({
+              Stop: [{ hooks: [{ type: "command", command: "echo integration-test" }] }],
+            }),
+          )
+        }),
+    },
   )
 })
