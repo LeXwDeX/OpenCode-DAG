@@ -23,30 +23,29 @@ import type { Settings } from "../settings"
 const log = Log.create({ service: "hook.extensions.hot-reload" })
 
 /**
- * All settings file paths that participate in the hook chain.
- * Mirrors the 6-layer chain in settings.ts loadChain().
+ * Directories whose `settings.json` / `settings.local.json` participate in the
+ * hook chain. We watch the parent directories (not the individual files) so a
+ * settings file that does not exist yet is still detected the moment it is
+ * created — watching the file directly would miss it entirely. Mirrors the
+ * 6-layer chain in settings.ts loadChain().
  */
-function settingsFiles(projectDir: string, opencodeGlobalConfig?: string): string[] {
+function settingsDirs(
+  projectDir: string,
+  worktree: string | undefined,
+  opencodeGlobalConfig?: string,
+): string[] {
   const home = process.env.HOME ?? process.env.USERPROFILE ?? ""
-  const candidates = [
-    path.join(home, ".claude", "settings.json"),
+  const dirs = [
+    path.join(home, ".claude"),
+    path.join(projectDir, ".claude"),
+    path.join(projectDir, ".opencode"),
   ]
-
-  // Layer 2: opencode global config (if provided)
-  if (opencodeGlobalConfig) {
-    candidates.push(path.join(opencodeGlobalConfig, "settings.json"))
+  if (opencodeGlobalConfig) dirs.push(opencodeGlobalConfig)
+  if (worktree && worktree !== projectDir) {
+    dirs.push(path.join(worktree, ".claude"), path.join(worktree, ".opencode"))
   }
-
-  // Project-level files
-  candidates.push(
-    path.join(projectDir, ".claude", "settings.json"),
-    path.join(projectDir, ".opencode", "settings.json"),
-    path.join(projectDir, ".claude", "settings.local.json"),
-    path.join(projectDir, ".opencode", "settings.local.json"),
-  )
-
-  // Only watch files whose parent directory exists
-  return candidates.filter((f) => existsSync(path.dirname(f)))
+  // Dedupe (worktree may collapse onto project) and keep only existing dirs.
+  return [...new Set(dirs)].filter((d) => existsSync(d))
 }
 
 export interface HotReloadHandle {
@@ -70,16 +69,19 @@ function countHooks(settings: Settings): number {
 }
 
 /**
- * Watch all settings files for changes. On change, call the reload
- * callback which should re-run loadChain() and update the state.
+ * Watch settings source directories for changes. On a `settings.json` /
+ * `settings.local.json` change, call the reload callback which should re-run
+ * loadChain() and update the state.
  *
  * @param projectDir - Project root directory
+ * @param worktree - Optional git worktree root; its .claude/.opencode dirs are watched too
  * @param reload - Effect that re-runs loadChain() and returns new Settings
  * @param onReload - Callback invoked with new settings and changed file path
  * @param opencodeGlobalConfig - Optional path to opencode global config dir
  */
 export function watchSettings(
   projectDir: string,
+  worktree: string | undefined,
   reload: () => Effect.Effect<Settings>,
   onReload: (newSettings: Settings, changedFile: string) => void,
   opencodeGlobalConfig?: string,
@@ -88,21 +90,30 @@ export function watchSettings(
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let lastReload = 0
 
-  const files = settingsFiles(projectDir, opencodeGlobalConfig)
-  log.info("watching settings files", { count: files.length, files })
+  // Watch parent dirs and filter by settings filename inside the callback, so
+  // a settings file created at runtime is detected even though it did not
+  // exist when watching started.
+  const watchedNames = new Set(["settings.json", "settings.local.json"])
+  const dirs = settingsDirs(projectDir, worktree, opencodeGlobalConfig)
+  log.info("watching settings dirs", { count: dirs.length, dirs })
 
-  for (const file of files) {
+  for (const dir of dirs) {
     try {
-      const watcher = watch(file, { persistent: false }, (eventType) => {
-        if (eventType !== "change") return
+      const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
+        if (!filename || !watchedNames.has(filename)) return
 
-        // Debounce: 500ms
+        // Debounce: 500ms. Min 1s between reloads.
+        // On min-interval block, reschedule (not drop) so rapid successive
+        // saves are not permanently lost.
         if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
+        const file = path.join(dir, filename)
+        const tryReload = () => {
           const now = Date.now()
-          if (now - lastReload < 1000) return // Min 1s between reloads
+          if (now - lastReload < 1000) {
+            debounceTimer = setTimeout(tryReload, 1000 - (now - lastReload))
+            return
+          }
           lastReload = now
-
           log.info("settings file changed, reloading", { file })
           // Fire-and-forget: reload errors are logged but never crash
           Effect.runPromise(reload()).then(
@@ -115,12 +126,13 @@ export function watchSettings(
             },
             (err) => log.warn("settings reload failed", { file, error: String(err) }),
           )
-        }, 500)
+        }
+        debounceTimer = setTimeout(tryReload, 500)
       })
       watchers.push(watcher)
     } catch {
-      // File doesn't exist yet — that's fine, it might be created later
-      log.debug("skipping non-existent settings file", { file })
+      // Dir removed between settingsDirs() and watch() — harmless.
+      log.debug("skipping non-existent settings dir", { dir })
     }
   }
 

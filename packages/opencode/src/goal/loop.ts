@@ -47,6 +47,33 @@ export function shouldPreempt(
   return lastUserAt > lastAsstAt
 }
 
+/**
+ * Pure predicate for the zombie-goal freshness guard (D6). Returns true when a
+ * goal is "orphaned": active, has run zero continuations (turns_used === 0),
+ * was created more than FRESHNESS_THRESHOLD ago, and the initial kick never
+ * produced an assistant message (provider error, model refusal, empty response).
+ *
+ * Used by GoalLoop.afterIdle to convert the silent orphan state into a visible,
+ * recoverable pause. Without it, every subsequent afterIdle would abort at the
+ * `if (!lastAssistant) return` line and the goal would sit permanently "active"
+ * with no progress.
+ *
+ * `now` defaults to Date.now() for production; tests pass an explicit value for
+ * determinism.
+ */
+export function isStaleZombie(
+  state: { status: string; turns_used: number; created_at: number },
+  hasAssistant: boolean,
+  now: number = Date.now(),
+): boolean {
+  return (
+    state.status === "active" &&
+    Number(state.turns_used) === 0 &&
+    !hasAssistant &&
+    now - state.created_at > GoalPrompts.FRESHNESS_THRESHOLD
+  )
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -80,6 +107,37 @@ export const layer = Layer.effect(
     const afterIdle = Effect.fn("GoalLoop.afterIdle")(function* (sessionID: SessionID) {
       const goalState = yield* goal.load(sessionID)
       if (!goalState || goalState.status !== "active") return
+
+      // Zombie-goal freshness guard (D6). If the goal is active but has run
+      // zero continuations and is older than FRESHNESS_THRESHOLD, the initial
+      // kick may have failed silently (provider error, model refusal, empty
+      // response). Without this guard every subsequent afterIdle aborts at the
+      // `if (!lastAssistant) return` line below, leaving the goal permanently
+      // "active" with no progress — a silent orphan. Convert that into a
+      // visible, recoverable pause so the user can /goal resume.
+      //
+      // The probe loads only 1 message (not the full 20) so we don't pay for
+      // the whole message window just to discover staleness; the stale path
+      // returns early so the limit:20 load below never runs when the guard
+      // fires. Uses pauseAndPublish (fiber-safe) — NOT goal.pause — because
+      // we ARE the loop fiber tracked in the fibers map (same self-interrupt
+      // hazard discipline as the done / shouldPreempt branches below).
+      if (
+        Number(goalState.turns_used) === 0 &&
+        Date.now() - goalState.created_at > GoalPrompts.FRESHNESS_THRESHOLD
+      ) {
+        const probeMsgs = yield* sessions.messages({ sessionID, limit: 1 })
+        const hasAssistant = probeMsgs.some((m) => m.info.role === "assistant")
+        if (isStaleZombie(goalState, hasAssistant)) {
+          yield* goal
+            .pauseAndPublish(
+              sessionID,
+              `initial kick produced no assistant response within ${GoalPrompts.FRESHNESS_THRESHOLD / 1000}s — likely provider error or model refusal. Use /goal resume to retry.`,
+            )
+            .pipe(Effect.ignore)
+          return
+        }
+      }
 
       const msgs = yield* sessions.messages({ sessionID, limit: 20 })
       const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
@@ -131,19 +189,23 @@ export const layer = Layer.effect(
         // how /goal clear behaves). This is what makes goal completion
         // not require a manual /goal clear afterwards.
         if (verdict.verdict === "done") {
+          // Run the terminal event sequence FIRST (F1): publish(done) →
+          // delete → publish(cleared) is the contract SSE/TUI consumers
+          // rely on, so it must complete before any other effect that could
+          // race the loop fiber. deleteAndPublishDone is uninterruptible and
+          // fiber-safe (no clearFiber), so this ordering is pure
+          // defense-in-depth — the completion message text is computed from
+          // updateResult.message (pre-deletion state) and is unaffected by
+          // running after the delete. The noReply path returns before any
+          // status transition today, but completing the terminal sequence
+          // first makes the contract structurally enforced rather than
+          // dependent on that noReply implementation detail.
+          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
           yield* promptSvc.prompt({
             sessionID,
             noReply: true,
             parts: [{ type: "text", text: updateResult.message }],
           }).pipe(Effect.ignore)
-          // Use deleteAndPublishDone (NOT goal.clear) because we ARE the
-          // loop fiber: goal.clear() internally calls clearFiber which
-          // would interrupt ourselves before events.publish(GoalEvent.Cleared)
-          // runs — the .pipe(Effect.ignore) would silently swallow the
-          // self-interrupt and goal.cleared would never reach SSE/TUI.
-          // deleteAndPublishDone only touches DB + event bus, never the
-          // fiber map, so it is safe to call from inside the loop fiber.
-          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
         } else {
           // Auto-pause branch: updateAfterJudge paused the goal due to
           // judge-parse-failure or budget exhaustion (verdict.verdict is
@@ -185,22 +247,30 @@ export const layer = Layer.effect(
 
       const reloadedState = yield* goal.load(sessionID)
       if (!reloadedState || reloadedState.status !== "active") return
-      const continuationText = GoalPrompts.renderContinuation(reloadedState.goal, reloadedState.subgoals ?? [])
 
-      // Surface the per-turn progress indicator visibly (e.g.
-      // "↻ 继续推进目标（2/10）：…"). updateAfterJudge computed this message;
-      // emit it as a noReply non-synthetic part so it renders in the transcript
-      // without spawning another agent turn. The continuation prompt below
-      // (ignored) is what actually drives the next loop iteration.
+      // Single merged continuation injection (D4.2). This replaces the former
+      // two-call sequence (a `noReply` progress line + an `ignored:true`
+      // continuation). The merged prompt carries goal text, subgoals, the
+      // turns/budget line, and the last judge reason, plus the autonomous-mode
+      // frame — and it is BOTH the user-visible per-turn progress line AND the
+      // prompt that drives the next agent turn.
+      //
+      // It is deliberately a plain text part: no `noReply` (so it spawns the
+      // next agent turn) and no `ignored` (so it renders in the transcript AND
+      // reaches the model — `ignored:true` text parts are filtered out of model
+      // messages in MessageV2.toModelMessagesEffect). Driving + visibility +
+      // model-reachability are all required by D4.2.
+      const continuationText = GoalPrompts.renderContinuation({
+        goal: reloadedState.goal,
+        subgoals: reloadedState.subgoals ?? [],
+        turnsUsed: Number(reloadedState.turns_used),
+        maxTurns: Number(reloadedState.max_turns),
+        lastJudgeReason: reloadedState.last_reason,
+      })
+
       yield* promptSvc.prompt({
         sessionID,
-        noReply: true,
-        parts: [{ type: "text", text: updateResult.message }],
-      }).pipe(Effect.ignore)
-
-      yield* promptSvc.prompt({
-        sessionID,
-        parts: [{ type: "text", text: continuationText, ignored: true }],
+        parts: [{ type: "text", text: continuationText }],
       })
 
       // NOTE: We deliberately DO NOT call goal.clearLoopFiber here. The
