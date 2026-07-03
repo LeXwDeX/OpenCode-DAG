@@ -1431,7 +1431,9 @@ export const layer = Layer.effect(
       // session, which is harmless.
       if (payload.event === "SessionEnd" && ctx.sessionID) {
         s.seen.delete(ctx.sessionID)
-        yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        // NOTE: sessionHooks.clear is deferred to after hook execution
+        // (before each return point below) — clearing here would remove
+        // session-registered SessionEnd hooks before the matcher can see them.
       }
 
       // ── WP-6A: O(1) short-circuit ─────────────────────────────
@@ -1449,6 +1451,9 @@ export const layer = Layer.effect(
         : false
       if (!hasFile && !hasSession) {
         log.info("trigger short-circuit", { event: payload.event, reason: "no_matchers", hasFile, hasSession })
+        if (payload.event === "SessionEnd" && ctx.sessionID) {
+          yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        }
         return result
       }
 
@@ -1493,6 +1498,9 @@ export const layer = Layer.effect(
       ]
       if (!matchers.length) {
         log.info("trigger short-circuit", { event: payload.event, reason: "empty_matchers" })
+        if (payload.event === "SessionEnd" && ctx.sessionID) {
+          yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        }
         return result
       }
 
@@ -1610,6 +1618,9 @@ export const layer = Layer.effect(
         if (result.preventContinuation) break
       }
 
+      if (payload.event === "SessionEnd" && ctx.sessionID) {
+        yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+      }
       return result
     })
 
