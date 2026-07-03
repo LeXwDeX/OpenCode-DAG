@@ -10,6 +10,8 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionV2 } from "@opencode-ai/core/session"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { SessionID } from "@opencode-ai/schema/session-id"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { SessionMessage } from "@opencode-ai/core/session/message"
@@ -19,7 +21,7 @@ import { SessionProjector } from "@opencode-ai/core/session/projector"
 import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { SessionInput } from "@opencode-ai/core/session/input"
 import { SessionStore } from "@opencode-ai/core/session/store"
-import { SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { PartTable, SessionInputTable, SessionMessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { testEffect } from "./lib/effect"
 import { Snapshot } from "@opencode-ai/core/snapshot"
 
@@ -43,6 +45,44 @@ const assistantRow = (
 }
 
 describe("SessionProjector", () => {
+  it.effect("skips part updates whose parent message no longer exists", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      yield* db
+        .insert(ProjectTable)
+        .values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] })
+        .run()
+        .pipe(Effect.orDie)
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: Project.ID.global,
+          slug: "test",
+          directory: "/project",
+          title: "test",
+          version: "test",
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const events = yield* EventV2.Service
+      // A revert cleanup can delete a message while an interrupted stream still
+      // flushes a part update for it — projection must ignore the orphan part
+      // instead of dying on the foreign key constraint.
+      yield* events.publish(SessionV1.Event.PartUpdated, {
+        sessionID: SessionID.make(sessionID),
+        time: 1,
+        part: {
+          type: "step-start",
+          id: SessionV1.PartID.make("prt_orphan"),
+          messageID: SessionV1.MessageID.make("msg_missing"),
+          sessionID: SessionID.make(sessionID),
+        },
+      })
+      expect(yield* db.select().from(PartTable).all().pipe(Effect.orDie)).toEqual([])
+    }),
+  )
+
   it.effect("projects staged, cleared, and committed reverts", () =>
     Effect.gen(function* () {
       const db = (yield* Database.Service).db

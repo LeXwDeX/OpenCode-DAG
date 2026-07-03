@@ -12,6 +12,12 @@ import configureHooksContent from "./skill/configure-hooks.md" with { type: "tex
 export const CustomizeOpencodeContent = customizeOpencodeContent
 export const ConfigureHooksContent = configureHooksContent
 
+export const CustomizeOpencodeDescription =
+  "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, commands, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself."
+
+export const ConfigureHooksDescription =
+  "Use when the user wants to automatically run something on an opencode event — before/after a tool call, on session start/end, on compaction, etc. — or asks about opencode's hooks / hooks.json / event hooks. Covers hooks.json file locations and format, the 27 supported events, and the 5 hook types (command, mcp, http, prompt, agent). Also use to migrate hooks from Claude Code's .claude/settings.json via /import-claude-hooks."
+
 export const Plugin = define({
   id: "skill",
   effect: Effect.fn(function* (ctx) {
@@ -21,8 +27,7 @@ export const Plugin = define({
           type: "embedded",
           skill: SkillV2.Info.make({
             name: "customize-opencode",
-            description:
-              "Use ONLY when the user is editing or creating opencode's own configuration: opencode.json, opencode.jsonc, files under .opencode/, or files under ~/.config/opencode/. Also use when creating or fixing opencode agents, subagents, commands, skills, plugins, MCP servers, or permission rules. Do not use for the user's own application code, or for any project that is not configuring opencode itself.",
+            description: CustomizeOpencodeDescription,
             location: AbsolutePath.make("/builtin/customize-opencode.md"),
             content: CustomizeOpencodeContent,
           }),
@@ -33,8 +38,7 @@ export const Plugin = define({
           type: "embedded",
           skill: SkillV2.Info.make({
             name: "configure-hooks",
-            description:
-              "Use when the user wants to automatically run something on an opencode event — before/after a tool call, on session start/end, on compaction, etc. — or asks about opencode's hooks / hooks.json / event hooks. Covers hooks.json file locations and format, the 27 supported events, and the 5 hook types (command, mcp, http, prompt, agent). Also use to migrate hooks from Claude Code's .claude/settings.json via /import-claude-hooks.",
+            description: ConfigureHooksDescription,
             location: AbsolutePath.make("/builtin/configure-hooks.md"),
             content: ConfigureHooksContent,
           }),

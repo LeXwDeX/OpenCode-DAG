@@ -200,6 +200,20 @@ export interface Settings {
   allowUntrusted?: boolean
 }
 
+/**
+ * Read-only render DTO for the dynamic Active Hooks system-prompt block.
+ * One entry per individual hook command across the merged chain, tagged with
+ * the layer it came from. Produced by `summarizeChain` and surfaced via
+ * `SettingsHook.list()` — never re-reads files (reads from hot-reloaded state).
+ */
+export interface HookSummary {
+  event: HookEvent
+  scope: "global" | "project" | "worktree"
+  type: HookCommand["type"]
+  descriptor: string
+  matcher?: string
+}
+
 export interface HookJSONOutput {
   continue?: boolean
   stopReason?: string
@@ -539,6 +553,27 @@ function promptText(entry: HookCommand): string {
   return entry.prompt ?? entry.command ?? ""
 }
 
+/**
+ * Short human-readable description of a hook entry for the Active Hooks block.
+ * All types are uniformly truncated to 60 chars: command → command text,
+ * http → URL, mcp → tool name, prompt/agent → first line of the prompt/goal.
+ */
+function descriptorFor(entry: HookCommand): string {
+  switch (entry.type) {
+    case "command":
+      return commandText(entry).slice(0, 60)
+    case "http":
+      return httpUrl(entry).slice(0, 60)
+    case "mcp":
+      return commandText(entry).slice(0, 60)
+    case "prompt":
+    case "agent":
+      return promptText(entry).split("\n")[0].slice(0, 60)
+    default:
+      return commandText(entry).slice(0, 60)
+  }
+}
+
 // ── Matcher ─────────────────────────────────────────────────────
 
 /**
@@ -640,38 +675,79 @@ export function mergeSettings(layers: Settings[]): Settings {
   return out
 }
 
+/**
+ * Resolve the OpenCode global config directory. Uses the explicit override
+ * when provided (tests), otherwise falls back to `Global.Path.config` with a
+ * `~/.config/opencode` default. Shared by chainCandidates and loadChain so
+ * the fallback logic exists in exactly one place.
+ */
+function resolveGlobalConfig(globalConfig?: string): string {
+  if (globalConfig) return globalConfig
+  try {
+    return Global.Path.config
+  } catch {
+    return path.join(os.homedir(), ".config", "opencode")
+  }
+}
+
+/**
+ * Build the hooks.json candidate file list with scope tags. Shared by
+ * loadChain (merge) and summarizeChain (scope-tagged summaries) so adding or
+ * removing a path layer updates both consumers without a second edit.
+ */
+function chainCandidates(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): Array<{ scope: "global" | "project" | "worktree"; file: string }> {
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
+  const candidates: Array<{ scope: "global" | "project" | "worktree"; file: string }> = [
+    { scope: "global", file: path.join(opencodeGlobal, "hooks.json") },
+    { scope: "project", file: path.join(directory, ".opencode", "hooks.json") },
+  ]
+  if (worktree && worktree !== directory) {
+    candidates.push({ scope: "worktree", file: path.join(worktree, ".opencode", "hooks.json") })
+  }
+  return candidates
+}
+
+/**
+ * Produce scope-tagged summaries of the merged hooks chain — one entry per
+ * individual hook command, tagged with the layer (global/project/worktree) it
+ * came from. Ordering matches loadChain: global first, then project, then
+ * worktree. Used by `SettingsHook.list()` so the Active Hooks block reflects
+ * live, hot-reloaded state without re-reading files on every call.
+ *
+ * Exported for unit testing only; not part of the public surface.
+ */
+export function summarizeChain(directory: string, worktree: string, globalConfig?: string): HookSummary[] {
+  return chainCandidates(directory, worktree, globalConfig).flatMap(({ scope, file }) => {
+    const data = readJSON(file)
+    if (!data?.hooks) return []
+    return Object.entries(data.hooks).flatMap(([event, matchers]) =>
+      (matchers ?? []).flatMap((m) =>
+        (m.hooks ?? []).map((h) => ({
+          event: event as HookEvent,
+          scope,
+          type: h.type,
+          descriptor: descriptorFor(h),
+          ...(m.matcher && m.matcher !== "*" ? { matcher: m.matcher } : {}),
+        })),
+      ),
+    )
+  })
+}
+
 // Exported for unit testing only; not part of the public surface.
 // `globalConfig` overrides the resolved OpenCode global config dir so tests can
 // point it at an isolated temp dir instead of the real ~/.config/opencode.
 export function loadChain(directory: string, worktree: string, globalConfig?: string): Settings {
-  const home = os.homedir()
-  // Best-effort OpenCode global path; falls back to ~/.config/opencode.
-  // Optional globalConfig override is used by tests for deterministic isolation.
-  const opencodeGlobal = globalConfig ?? (() => {
-    try {
-      return Global.Path.config
-    } catch {
-      return path.join(home, ".config", "opencode")
-    }
-  })()
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
 
-  // Hooks live in dedicated hooks.json files in OpenCode-owned directories only.
-  // `.claude/` is not read for hooks (complete cut); `.local` variants are dropped
-  // (one file per scope). Merge is concat-append (global → project → worktree).
-  const candidates = [
-    path.join(opencodeGlobal, "hooks.json"),
-    path.join(directory, ".opencode", "hooks.json"),
-  ]
-
-  // If worktree differs from directory (e.g. git worktree), also check it.
-  if (worktree && worktree !== directory) {
-    candidates.push(path.join(worktree, ".opencode", "hooks.json"))
-  }
-
-  const layers = candidates
-    .map((fp) => {
-      const data = readJSON(fp)
-      if (data) warnUnsupportedFields(data.hooks, path.dirname(fp))
+  const layers = chainCandidates(directory, worktree, globalConfig)
+    .map(({ file }) => {
+      const data = readJSON(file)
+      if (data) warnUnsupportedFields(data.hooks, path.dirname(file))
       return data
     })
     .filter((s): s is Settings => s !== null)
@@ -1127,6 +1203,12 @@ interface State {
    * the "" bucket, preserving the prior global-dedup behavior for those.
    */
   seen: Map<string, Set<string>>
+  /**
+   * Scope-tagged summaries of the currently-effective hooks, computed by
+   * `summarizeChain` alongside `settings` (same closure, same hot-reload
+   * watcher). `list()` reads this without touching files.
+   */
+  hooksList: HookSummary[]
 }
 
 export interface Interface {
@@ -1134,6 +1216,13 @@ export interface Interface {
     payload: HookPayload,
     ctx: TriggerContext,
   ) => Effect.Effect<TriggerResult>
+  /**
+   * Read-only view of the currently-effective hooks (merged global + project +
+   * worktree chain), one entry per hook command tagged with its source layer.
+   * Backed by the same hot-reloaded state `trigger` consults — never re-reads
+   * files. Empty when no hooks.json layer defines any hook.
+   */
+  readonly list: () => Effect.Effect<ReadonlyArray<HookSummary>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SettingsHook") {}
@@ -1485,6 +1574,7 @@ export const layer = Layer.effect(
         const settings = loadChain(instCtx.directory, instCtx.worktree)
         const stateObj = {
           settings,
+          hooksList: summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config),
           cwd: instCtx.directory,
           seen: new Map<string, Set<string>>(),
         } satisfies State
@@ -1496,12 +1586,22 @@ export const layer = Layer.effect(
         // state object, so the mutation is visible without invalidating the
         // cache. The finalizer closes the watcher when the instance scope is
         // disposed (same scope-based cleanup discipline as GoalLoop.state).
+        //
+        // The reload Effect computes both merged settings and scope-tagged
+        // summaries in one pass; lastSummaries carries the summaries into the
+        // onReload callback (watchSettings only threads Settings through).
+        let lastSummaries: HookSummary[] = stateObj.hooksList
         const handle = watchSettings(
           instCtx.directory,
           instCtx.worktree,
-          () => Effect.sync(() => loadChain(instCtx.directory, instCtx.worktree)),
+          () => Effect.sync(() => {
+            const newSettings = loadChain(instCtx.directory, instCtx.worktree)
+            lastSummaries = summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config)
+            return newSettings
+          }),
           (newSettings) => {
             stateObj.settings = newSettings
+            stateObj.hooksList = lastSummaries
           },
           Global.Path.config,
         )
@@ -1770,7 +1870,12 @@ export const layer = Layer.effect(
       return result
     })
 
-    return Service.of({ trigger })
+    const list = Effect.fn("SettingsHook.list")(function* () {
+      const s = yield* InstanceState.get(state)
+      return s.hooksList
+    })
+
+    return Service.of({ trigger, list })
   }),
 )
 

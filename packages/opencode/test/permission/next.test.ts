@@ -20,6 +20,7 @@ const noopSettingsHook = Layer.succeed(
   SettingsHook.Service,
   SettingsHook.Service.of({
     trigger: () => Effect.succeed({ blocked: undefined, permissionDecision: undefined, permissionDecisionReason: undefined, additionalContexts: [], systemMessages: [], hookSpecificOutput: undefined }),
+    list: () => Effect.succeed([]),
   }),
 )
 
