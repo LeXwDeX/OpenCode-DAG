@@ -11,7 +11,9 @@
 # Inputs  : version        — release version string (e.g. "1.14.30-fork.2")
 #                            Leave blank for auto timestamped version.
 #           create_release — when true, create a GitHub Release with the
-#                            built binaries + SHA256SUMS attached.
+#                            built binaries + SHA256SUMS attached. Builds
+#                            from any branch other than `main` are marked
+#                            prerelease (test build); `main` = formal release.
 #           platforms      — comma-separated subset of linux,macos,windows
 #                            to build. Leave blank to build all three.
 # Jobs    : build-cli — 3-OS matrix, bundles ripgrep + single-file binary
@@ -162,11 +164,19 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        # Releases built from any branch other than `main` (e.g. `dev`) are
+        # test builds and get marked --prerelease; only `main` produces a
+        # formal release.
         run: |
+          EXTRA_FLAGS=()
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            EXTRA_FLAGS+=(--prerelease)
+          fi
           gh release create "${{ steps.tag.outputs.tag }}" \
             --title "opencode ${{ steps.tag.outputs.version }}" \
             --notes "Fork release from branch ${{ github.ref_name }}" \
             --target "${{ github.sha }}" \
+            "${EXTRA_FLAGS[@]}" \
             release-assets/*
 
   # No-op job for push-triggered runs — just registers the workflow in Actions UI
