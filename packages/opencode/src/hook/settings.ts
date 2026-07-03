@@ -61,7 +61,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
-import { buildForkHooks } from "./extensions" // [FORK:hook-ext]
+import { buildForkHooks, watchSettings } from "./extensions" // [FORK:hook-ext]
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -1337,7 +1337,31 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
         const settings = loadChain(instCtx.directory, instCtx.worktree)
-        return { settings, cwd: instCtx.directory, seen: new Map<string, Set<string>>() } satisfies State
+        const stateObj = {
+          settings,
+          cwd: instCtx.directory,
+          seen: new Map<string, Set<string>>(),
+        } satisfies State
+
+        // [FORK:hook-ext] Hot-reload settings files at runtime. The watcher
+        // re-runs loadChain on a settings.json change and mutates
+        // stateObj.settings in place. trigger reads s.settings via
+        // InstanceState.get on every call, and the cache returns the SAME
+        // state object, so the mutation is visible without invalidating the
+        // cache. The finalizer closes the watcher when the instance scope is
+        // disposed (same scope-based cleanup discipline as GoalLoop.state).
+        const handle = watchSettings(
+          instCtx.directory,
+          instCtx.worktree,
+          () => Effect.sync(() => loadChain(instCtx.directory, instCtx.worktree)),
+          (newSettings) => {
+            stateObj.settings = newSettings
+          },
+          Global.Path.config,
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(() => handle.close()))
+
+        return stateObj
       }),
     )
 
