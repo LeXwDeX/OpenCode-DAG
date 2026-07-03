@@ -1,5 +1,5 @@
 import { describe, expect } from "bun:test"
-import { Deferred, Effect, Layer } from "effect"
+import { Deferred, Effect, Fiber, Layer } from "effect"
 import { Goal } from "@/goal/goal"
 import { GoalEvent } from "@/goal/events"
 import { GoalPrompts } from "@/goal/prompts"
@@ -7,7 +7,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionStatus } from "@/session/status"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionID } from "@/session/schema"
-import { testEffect } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
 
 // Build the layer so EventV2Bridge.Service is SHARED between Goal's internals
 // (which publish via it) and this test (which subscribes via it).
@@ -622,6 +622,103 @@ describe("Goal.pauseAndPublish — freshness-guard pause (D6)", () => {
       expect(Number(state?.turns_used)).toBe(0)
       // created_at is recent (within the last second), well inside the threshold
       expect(Date.now() - Number(state?.created_at)).toBeLessThan(GoalPrompts.FRESHNESS_THRESHOLD)
+    }),
+  )
+})
+
+// ---------------------------------------------------------------------------
+// §F1 — Terminal / pause sequences are uninterruptible (defense-in-depth).
+// deleteAndPublishDone and pauseAndPublish are wrapped in Effect.uninterruptible
+// so an interrupt landing mid-region can never split the load → publish →
+// delete → publish contract. These tests fork each effect, prove the fiber has
+// ENTERED the uninterruptible region via an observable entry signal, then
+// interrupt and assert the remaining events still fired.
+// ---------------------------------------------------------------------------
+
+describe("Goal.deleteAndPublishDone — terminal sequence is uninterruptible (F1)", () => {
+  // The rigorous interrupt-during-region proof. goal.updated(done) can only
+  // fire once the region has started (loadState + publishGoal both ran), so
+  // waiting for it guarantees the interrupt below lands INSIDE the region. If
+  // the Effect.uninterruptible wrapper were removed, the interrupt could kill
+  // the fiber between publish(done) and publish(cleared), and the cleared
+  // assertion would fail.
+  it.live("publishes goal.updated(done) and goal.cleared when the calling fiber is interrupted mid-region", () =>
+    Effect.gen(function* () {
+      const goal = yield* Goal.Service
+      const events = yield* EventV2Bridge.Service
+      const seen = yield* captureEvents(events)
+      const sessionID = SessionID.descending()
+
+      yield* goal.set(sessionID, "ship feature X", 10)
+      // Persist a done row WITHOUT publishing — mirrors what loop.ts does
+      // (updateAfterJudge) before invoking deleteAndPublishDone.
+      yield* goal.updateAfterJudge(sessionID, "done", "delivered", false)
+      seen.length = 0
+
+      const fiber = yield* goal.deleteAndPublishDone(sessionID, "delivered").pipe(Effect.forkScoped)
+
+      // Entry proof: goal.updated(done) published → region entered.
+      yield* pollWithTimeout(
+        Effect.sync(() =>
+          seen.some((e) => e.type === GoalEvent.Updated.type && e.status === "done") ? true : undefined,
+        ),
+        "deleteAndPublishDone never published goal.updated(done)",
+      )
+
+      // Interrupt mid-region. The region is uninterruptible, so deleteState +
+      // publish(cleared) complete before the deferred interrupt terminates
+      // the fiber.
+      yield* Fiber.interrupt(fiber)
+
+      const done = seen.filter((e) => e.type === GoalEvent.Updated.type && e.status === "done")
+      expect(done.length).toBe(1)
+      const cleared = seen.filter((e) => e.type === GoalEvent.Cleared.type)
+      expect(cleared.length).toBe(1)
+
+      // deleteState ran — row is gone.
+      const loaded = yield* goal.load(sessionID)
+      expect(loaded).toBeUndefined()
+    }),
+  )
+})
+
+describe("Goal.pauseAndPublish — pause transition is uninterruptible (F1)", () => {
+  // Complementary to the deleteAndPublishDone test. pauseAndPublish publishes
+  // only one event (goal.updated(paused)), so the entry signal is the DB row
+  // flipping to paused (saveState completed = region entered). After that we
+  // interrupt and assert publishGoal(paused) still fired. Combined with the
+  // deleteAndPublishDone test (same Effect.uninterruptible pattern), this
+  // locks the F1 uninterruptible wrapping on both fiber-safe paths.
+  it.live("publishes goal.updated(paused) when the calling fiber is interrupted after the region starts", () =>
+    Effect.gen(function* () {
+      const goal = yield* Goal.Service
+      const events = yield* EventV2Bridge.Service
+      const seen = yield* captureEvents(events)
+      const sessionID = SessionID.descending()
+
+      yield* goal.set(sessionID, "build feature X", 10)
+      seen.length = 0
+
+      const fiber = yield* goal.pauseAndPublish(sessionID, "interrupted mid-pause").pipe(Effect.forkScoped)
+
+      // Entry proof: saveState completed → row flipped to paused.
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const st = yield* goal.load(sessionID)
+          return st?.status === "paused" ? true : undefined
+        }),
+        "pauseAndPublish never persisted the paused row",
+      )
+
+      // Interrupt after the region started. The region is uninterruptible, so
+      // publishGoal(paused) still runs before the fiber terminates.
+      yield* Fiber.interrupt(fiber)
+
+      const loaded = yield* goal.load(sessionID)
+      expect(loaded?.status).toBe("paused")
+      expect(loaded?.paused_reason).toBe("interrupted mid-pause")
+      const paused = seen.filter((e) => e.type === GoalEvent.Updated.type && e.status === "paused")
+      expect(paused.length).toBe(1)
     }),
   )
 })

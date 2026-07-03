@@ -189,19 +189,23 @@ export const layer = Layer.effect(
         // how /goal clear behaves). This is what makes goal completion
         // not require a manual /goal clear afterwards.
         if (verdict.verdict === "done") {
+          // Run the terminal event sequence FIRST (F1): publish(done) →
+          // delete → publish(cleared) is the contract SSE/TUI consumers
+          // rely on, so it must complete before any other effect that could
+          // race the loop fiber. deleteAndPublishDone is uninterruptible and
+          // fiber-safe (no clearFiber), so this ordering is pure
+          // defense-in-depth — the completion message text is computed from
+          // updateResult.message (pre-deletion state) and is unaffected by
+          // running after the delete. The noReply path returns before any
+          // status transition today, but completing the terminal sequence
+          // first makes the contract structurally enforced rather than
+          // dependent on that noReply implementation detail.
+          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
           yield* promptSvc.prompt({
             sessionID,
             noReply: true,
             parts: [{ type: "text", text: updateResult.message }],
           }).pipe(Effect.ignore)
-          // Use deleteAndPublishDone (NOT goal.clear) because we ARE the
-          // loop fiber: goal.clear() internally calls clearFiber which
-          // would interrupt ourselves before events.publish(GoalEvent.Cleared)
-          // runs — the .pipe(Effect.ignore) would silently swallow the
-          // self-interrupt and goal.cleared would never reach SSE/TUI.
-          // deleteAndPublishDone only touches DB + event bus, never the
-          // fiber map, so it is safe to call from inside the loop fiber.
-          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
         } else {
           // Auto-pause branch: updateAfterJudge paused the goal due to
           // judge-parse-failure or budget exhaustion (verdict.verdict is
