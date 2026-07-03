@@ -5,6 +5,10 @@ inputs:
     description: "Additional flags to pass to 'bun install'"
     required: false
     default: ""
+  save-cache:
+    description: "Whether to save the bun cache after install (set false for jobs that share an OS with another saver)"
+    required: false
+    default: "true"
 runs:
   using: "composite"
   steps:
@@ -59,7 +63,7 @@ runs:
       shell: bash
 
     - name: Save Bun dependencies
-      if: steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+      if: inputs.save-cache == 'true' && steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ steps.cache.outputs.dir }}
