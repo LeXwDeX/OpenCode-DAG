@@ -6,6 +6,7 @@ import { Skill } from "../../src/skill"
 import { Permission } from "../../src/permission"
 import { SystemPrompt } from "../../src/session/system"
 import { MCP } from "../../src/mcp"
+import { SettingsHook, type HookSummary } from "../../src/hook/settings"
 import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { testEffect } from "../lib/effect"
 
@@ -136,6 +137,75 @@ describe("session.system", () => {
           "</mcp_instructions>",
         ].join("\n"),
       )
+    }),
+  )
+
+  it.effect("hooks block renders Active Hooks when SettingsHook provides entries", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const entries: HookSummary[] = [
+        { event: "PreToolUse", scope: "project", type: "command", descriptor: "echo hi", matcher: "Bash" },
+        { event: "Stop", scope: "global", type: "http", descriptor: "https://example.com/stop" },
+      ]
+      const output = yield* prompt.hooks().pipe(
+          Effect.provide(
+            Layer.mock(SettingsHook.Service, { list: () => Effect.succeed(entries) }),
+          ),
+        )
+
+      expect(output).toEqual([
+        [
+          "## Active Hooks",
+          "- PreToolUse [project/command] echo hi",
+          "- Stop [global/http] https://example.com/stop",
+        ].join("\n"),
+      ])
+    }),
+  )
+
+  it.effect("hooks block is empty when SettingsHook list is empty", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const output = yield* prompt.hooks().pipe(
+        Effect.provide(
+          Layer.mock(SettingsHook.Service, { list: () => Effect.succeed([]) }),
+        ),
+      )
+
+      expect(output).toEqual([])
+    }),
+  )
+
+  it.effect("hooks block is empty when SettingsHook service is absent (degrades cleanly)", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      // No SettingsHook layer provided — serviceOption returns None.
+      const output = yield* prompt.hooks()
+
+      expect(output).toEqual([])
+    }),
+  )
+
+  it.effect("hooks block caps at 20 entries and reports the remainder", () =>
+    Effect.gen(function* () {
+      const prompt = yield* SystemPrompt.Service
+      const entries: HookSummary[] = Array.from({ length: 25 }, (_, i) => ({
+        event: "PreToolUse" as const,
+        scope: "project" as const,
+        type: "command" as const,
+        descriptor: `cmd-${i}`,
+      }))
+      const output = yield* prompt.hooks().pipe(
+        Effect.provide(
+          Layer.mock(SettingsHook.Service, { list: () => Effect.succeed(entries) }),
+        ),
+      )
+
+      const block = output[0]
+      expect(block).toContain("## Active Hooks")
+      expect(block).toContain("cmd-0")
+      expect(block).not.toContain("cmd-24")
+      expect(block).toContain("… and 5 more (see hooks.json)")
     }),
   )
 })

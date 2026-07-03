@@ -25,6 +25,7 @@ import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { Goal } from "@/goal/goal"
 import { GoalPrompts } from "@/goal/prompts"
+import { SettingsHook } from "@/hook/settings"
 import type { SessionID } from "@/session/schema"
 
 export function provider(model: Provider.Model) {
@@ -48,6 +49,7 @@ export interface Interface {
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
   readonly goal: (sessionID: SessionID) => Effect.Effect<string[]>
+  readonly hooks: () => Effect.Effect<string[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -149,6 +151,25 @@ export const layer = Layer.effect(
         // The mechanism is intentionally NOT injected when no goal is active, to
         // avoid prompt bloat (spec: no-active-goal-injected-as-terse-note).
         return [PROMPT_GOAL, GoalPrompts.renderGoalSystemBlock(state)]
+      }),
+
+      // Active Hooks block — dynamic, mirrors goal's economy: no hooks → empty
+      // array (no header, no placeholder). SettingsHook is resolved at request
+      // time via serviceOption (per tool-service-resolution spec) so headless /
+      // test entry points that omit the heavyweight service degrade cleanly.
+      hooks: Effect.fn("SystemPrompt.hooks")(function* () {
+        const hookSvc = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+        if (!hookSvc) return []
+        const hooks = yield* hookSvc.list()
+        if (hooks.length === 0) return []
+        const MAX = 20
+        const shown = hooks.slice(0, MAX)
+        const lines = [
+          "## Active Hooks",
+          ...shown.map((h) => `- ${h.event} [${h.scope}/${h.type}] ${h.descriptor}`),
+        ]
+        if (hooks.length > MAX) lines.push(`… and ${hooks.length - MAX} more (see hooks.json)`)
+        return [lines.join("\n")]
       }),
     })
   }),

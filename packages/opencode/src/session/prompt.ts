@@ -1456,12 +1456,13 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, goalDocs, modelMsgs] = yield* Effect.all([
+            const [skills, env, instructions, mcpInstructions, goalDocs, hooksDocs, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
               sys.goal(sessionID),
+              sys.hooks(),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [
@@ -1470,6 +1471,7 @@ export const layer = Layer.effect(
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
               ...goalDocs,
+              ...hooksDocs,
             ]
             const format = lastUser.format ?? { type: "text" as const }
             if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)

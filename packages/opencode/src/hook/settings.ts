@@ -200,6 +200,20 @@ export interface Settings {
   allowUntrusted?: boolean
 }
 
+/**
+ * Read-only render DTO for the dynamic Active Hooks system-prompt block.
+ * One entry per individual hook command across the merged chain, tagged with
+ * the layer it came from. Produced by `summarizeChain` and surfaced via
+ * `SettingsHook.list()` — never re-reads files (reads from hot-reloaded state).
+ */
+export interface HookSummary {
+  event: HookEvent
+  scope: "global" | "project" | "worktree"
+  type: HookCommand["type"]
+  descriptor: string
+  matcher?: string
+}
+
 export interface HookJSONOutput {
   continue?: boolean
   stopReason?: string
@@ -539,6 +553,27 @@ function promptText(entry: HookCommand): string {
   return entry.prompt ?? entry.command ?? ""
 }
 
+/**
+ * Short human-readable description of a hook entry for the Active Hooks block.
+ * command → first ~60 chars of the command; http → the URL; mcp → the tool
+ * name; prompt/agent → the first line of the prompt/goal text.
+ */
+function descriptorFor(entry: HookCommand): string {
+  switch (entry.type) {
+    case "command":
+      return commandText(entry).slice(0, 60)
+    case "http":
+      return httpUrl(entry)
+    case "mcp":
+      return commandText(entry)
+    case "prompt":
+    case "agent":
+      return promptText(entry).split("\n")[0]
+    default:
+      return commandText(entry).slice(0, 60)
+  }
+}
+
 // ── Matcher ─────────────────────────────────────────────────────
 
 /**
@@ -638,6 +673,48 @@ export function mergeSettings(layers: Settings[]): Settings {
     }
   }
   return out
+}
+
+/**
+ * Produce scope-tagged summaries of the merged hooks chain — one entry per
+ * individual hook command, tagged with the layer (global/project/worktree) it
+ * came from. Ordering matches loadChain: global first, then project, then
+ * worktree. Used by `SettingsHook.list()` so the Active Hooks block reflects
+ * live, hot-reloaded state without re-reading files on every call.
+ *
+ * Exported for unit testing only; not part of the public surface.
+ */
+export function summarizeChain(directory: string, worktree: string, globalConfig?: string): HookSummary[] {
+  const home = os.homedir()
+  const opencodeGlobal = globalConfig ?? (() => {
+    try {
+      return Global.Path.config
+    } catch {
+      return path.join(home, ".config", "opencode")
+    }
+  })()
+  const candidates: Array<{ scope: "global" | "project" | "worktree"; file: string }> = [
+    { scope: "global", file: path.join(opencodeGlobal, "hooks.json") },
+    { scope: "project", file: path.join(directory, ".opencode", "hooks.json") },
+  ]
+  if (worktree && worktree !== directory) {
+    candidates.push({ scope: "worktree", file: path.join(worktree, ".opencode", "hooks.json") })
+  }
+  return candidates.flatMap(({ scope, file }) => {
+    const data = readJSON(file)
+    if (!data?.hooks) return []
+    return Object.entries(data.hooks).flatMap(([event, matchers]) =>
+      (matchers ?? []).flatMap((m) =>
+        (m.hooks ?? []).map((h) => ({
+          event: event as HookEvent,
+          scope,
+          type: h.type,
+          descriptor: descriptorFor(h),
+          ...(m.matcher && m.matcher !== "*" ? { matcher: m.matcher } : {}),
+        })),
+      ),
+    )
+  })
 }
 
 // Exported for unit testing only; not part of the public surface.
@@ -1127,6 +1204,12 @@ interface State {
    * the "" bucket, preserving the prior global-dedup behavior for those.
    */
   seen: Map<string, Set<string>>
+  /**
+   * Scope-tagged summaries of the currently-effective hooks, computed by
+   * `summarizeChain` alongside `settings` (same closure, same hot-reload
+   * watcher). `list()` reads this without touching files.
+   */
+  hooksList: HookSummary[]
 }
 
 export interface Interface {
@@ -1134,6 +1217,13 @@ export interface Interface {
     payload: HookPayload,
     ctx: TriggerContext,
   ) => Effect.Effect<TriggerResult>
+  /**
+   * Read-only view of the currently-effective hooks (merged global + project +
+   * worktree chain), one entry per hook command tagged with its source layer.
+   * Backed by the same hot-reloaded state `trigger` consults — never re-reads
+   * files. Empty when no hooks.json layer defines any hook.
+   */
+  readonly list: () => Effect.Effect<ReadonlyArray<HookSummary>>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SettingsHook") {}
@@ -1485,6 +1575,7 @@ export const layer = Layer.effect(
         const settings = loadChain(instCtx.directory, instCtx.worktree)
         const stateObj = {
           settings,
+          hooksList: summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config),
           cwd: instCtx.directory,
           seen: new Map<string, Set<string>>(),
         } satisfies State
@@ -1496,12 +1587,22 @@ export const layer = Layer.effect(
         // state object, so the mutation is visible without invalidating the
         // cache. The finalizer closes the watcher when the instance scope is
         // disposed (same scope-based cleanup discipline as GoalLoop.state).
+        //
+        // The reload Effect computes both merged settings and scope-tagged
+        // summaries in one pass; lastSummaries carries the summaries into the
+        // onReload callback (watchSettings only threads Settings through).
+        let lastSummaries: HookSummary[] = stateObj.hooksList
         const handle = watchSettings(
           instCtx.directory,
           instCtx.worktree,
-          () => Effect.sync(() => loadChain(instCtx.directory, instCtx.worktree)),
+          () => Effect.sync(() => {
+            const newSettings = loadChain(instCtx.directory, instCtx.worktree)
+            lastSummaries = summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config)
+            return newSettings
+          }),
           (newSettings) => {
             stateObj.settings = newSettings
+            stateObj.hooksList = lastSummaries
           },
           Global.Path.config,
         )
@@ -1770,7 +1871,12 @@ export const layer = Layer.effect(
       return result
     })
 
-    return Service.of({ trigger })
+    const list = Effect.fn("SettingsHook.list")(function* () {
+      const s = yield* InstanceState.get(state)
+      return s.hooksList
+    })
+
+    return Service.of({ trigger, list })
   }),
 )
 

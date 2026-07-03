@@ -69,10 +69,14 @@ Example migration:
 
 // Migrated (hooks.json)
 {
-  "PreToolUse": [{
-    "type": "command",
-    "command": "bash ${CLAUDE_PLUGIN_ROOT}/validate.sh"
-  }]
+  "PreToolUse": [
+    {
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "bash ${CLAUDE_PLUGIN_ROOT}/validate.sh" }
+      ]
+    }
+  ]
 }
 ```
 Note: `${CLAUDE_PLUGIN_ROOT}` is a runtime placeholder that OpenCode will expand based on the hook's location. Since we're moving to `.opencode/`, the expansion will now point there.
@@ -84,19 +88,23 @@ Approved hooks go to:
 - **Global scope** (from `~/.claude/settings.json`): `~/.config/opencode/hooks.json`
 - **Project scope** (from `.claude/settings.json` or `.claude/settings.local.json`): `.opencode/hooks.json`
 
-Format: top-level event keys (NOT wrapped in `{"hooks": {...}}`). Example:
+Format: top-level event keys (NOT wrapped in `{"hooks": {...}}`). Each event maps to an array of matcher blocks; each block wraps an optional `matcher` and a `hooks` array:
+
 ```json
 {
   "PreToolUse": [
     {
-      "type": "command",
-      "command": "bash -c \"echo pre-tool\""
+      "matcher": "*",
+      "hooks": [
+        { "type": "command", "command": "bash -c \"echo pre-tool\"" }
+      ]
     }
   ],
   "PostToolUse": [
     {
-      "type": "http",
-      "url": "https://api.example.com/hook"
+      "hooks": [
+        { "type": "http", "url": "https://api.example.com/hook" }
+      ]
     }
   ]
 }
@@ -104,27 +112,7 @@ Format: top-level event keys (NOT wrapped in `{"hooks": {...}}`). Example:
 
 If the target file already exists, merge (append) the imported hooks rather than overwriting.
 
-### 5. Update AGENTS.md
-
-Scan the project's `AGENTS.md` for the managed section:
-
-```markdown
-<!-- Hooks_START -->
-## Configured Hooks
-
-### Global Hooks
-- **PreToolUse**: `bash -c "echo pre-tool"` (command)
-
-### Project Hooks
-- **PostToolUse**: `https://api.example.com/hook` (http)
-<!-- Hooks_END -->
-```
-
-If the markers don't exist, add them at the end of AGENTS.md with a summary of imported hooks. If they exist, replace the content between them while preserving everything outside.
-
-The summary should be brief (event + type + one-line description per hook).
-
-### 6. Report
+### 5. Report
 
 After migration, report:
 
@@ -133,32 +121,34 @@ After migration, report:
 - Any hooks that were edited during migration
 - Deprecation warnings (if hooks were found in .opencode/settings.json)
 - Reminder: "You can now safely delete .claude/ directories if you no longer use Claude Code with this project."
+- The imported hooks are now visible in the **Active Hooks** block of the system prompt (rendered dynamically each turn from the live `hooks.json` state) — no manual AGENTS.md update is needed.
 
 ## Hooks.json Format Reference
 
-OpenCode's `hooks.json` uses top-level event keys. Supported events:
+OpenCode's `hooks.json` uses top-level event keys (27 events total). For the canonical list with per-event input/output shapes, see the `configure-hooks` skill.
 
-- `PreToolUse`, `PostToolUse`
-- `SessionStart`, `SessionEnd`
-- `UserPromptSubmit`
-- `Stop`, `StopFailure`
-- `SubagentStart`, `SubagentStop`
-- `TaskCreated`, `TaskCompleted`
-- `PermissionRequest`, `PermissionDenied`
-- `FileChanged`
-- `PreCompact`, `PostCompact`
-- `WorktreeCreate`, `WorktreeRemove`
-- `ConfigChange`
-- `TeammateIdle`
-- `InstructionsLoaded`
+Supported events:
 
-Each event maps to an array of hook matchers. Each matcher can have:
-- `type`: "command" | "http" | "prompt" | "agent"
-- `command`/`url`/`prompt`: the hook action
-- `timeout`: optional seconds
-- `matcher`: optional regex pattern (tool name matching)
+- Tool lifecycle: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`
+- Permission: `PermissionRequest`, `PermissionDenied`
+- Session lifecycle: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`
+- Subagents: `SubagentStart`, `SubagentStop`
+- Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`
+- Tasks/goals: `TaskCreated`, `TaskCompleted`, `TeammateIdle`
+- Other: `Notification`, `Elicitation`, `ElicitationResult`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`
 
-Merge semantics: concat-append (hooks accumulate, not replace).
+Each event maps to an array of **matcher blocks**. Each matcher block has:
+
+- `matcher`: optional — `"*"` (default, all tools), exact name (`"Bash"`), pipe list (`"Bash|Edit"`), or regex
+- `hooks`: array of hook entries
+
+Each hook entry has:
+
+- `type`: `"command"` | `"mcp"` | `"http"` | `"prompt"` | `"agent"`
+- `command` / `url` / `prompt`: the hook action (field depends on type — `command` for command/mcp, `url` for http, `prompt` for prompt/agent)
+- `timeout`: optional seconds (default 60)
+
+Merge semantics: concat-append (hooks accumulate across layers and within a file, not replace).
 
 ## Important Notes
 
