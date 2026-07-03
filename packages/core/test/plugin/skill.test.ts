@@ -30,4 +30,18 @@ describe("SkillPlugin.Plugin", () => {
       )
     }),
   )
+
+  it.effect("registers the built-in configure-hooks skill", () =>
+    Effect.gen(function* () {
+      const skill = yield* SkillV2.Service
+      yield* SkillPlugin.Plugin.effect(host({ skill: { ...skill, reload: skill.reload } }))
+
+      expect(yield* skill.list()).toContainEqual(
+        expect.objectContaining({
+          name: "configure-hooks",
+          description: expect.stringContaining("hooks"),
+        }),
+      )
+    }),
+  )
 })

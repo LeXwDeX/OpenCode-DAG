@@ -34,3 +34,6 @@ logs/
 tsconfig.tsbuildinfo
 # opencode runtime-generated local project config (created when running the built binary in a package dir)
 **/.opencode/settings.json
+
+# OpenSpec artifacts (local-only, not tracked)
+/openspec/
