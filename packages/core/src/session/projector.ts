@@ -319,14 +319,21 @@ export const layer = Layer.effectDiscard(
         // A part update can race with revert cleanup deleting its parent message
         // (e.g. an interrupted stream flushing a step-start after resend). The
         // message is gone, so the part is moot — skip instead of dying on the
-        // foreign key constraint.
+        // foreign key constraint. Warn so genuine ordering bugs remain observable.
         const message = yield* db
           .select({ id: MessageTable.id })
           .from(MessageTable)
           .where(eq(MessageTable.id, messageID))
           .get()
           .pipe(Effect.orDie)
-        if (!message) return
+        if (!message) {
+          yield* Effect.logWarning("part update skipped: parent message no longer exists", {
+            messageID,
+            partType: event.data.part.type,
+            sessionID,
+          })
+          return
+        }
         const row = yield* db.select().from(PartTable).where(eq(PartTable.id, id)).get().pipe(Effect.orDie)
         yield* db
           .insert(PartTable)

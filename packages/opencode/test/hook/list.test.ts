@@ -115,6 +115,20 @@ describe("summarizeChain — descriptor derivation by type", () => {
     }
   })
 
+  test("http descriptor truncates long urls to 60 chars", async () => {
+    const longUrl = `https://example.com/${"x".repeat(80)}`
+    const projectDir = await mktmp("desc-http-long")
+    try {
+      await writeHooksJson(projectDir, {
+        PostToolUse: [{ hooks: [{ type: "http", url: longUrl }] }],
+      })
+      const [summary] = summarizeChain(projectDir, "", projectDir)
+      expect(summary.descriptor.length).toBe(60)
+    } finally {
+      await fs.rm(projectDir, { recursive: true, force: true })
+    }
+  })
+
   test("mcp descriptor is the tool name (command field)", async () => {
     const projectDir = await mktmp("desc-mcp")
     try {
@@ -136,6 +150,20 @@ describe("summarizeChain — descriptor derivation by type", () => {
       })
       const [summary] = summarizeChain(projectDir, "", projectDir)
       expect(summary.descriptor).toBe("Summarize the work done.")
+    } finally {
+      await fs.rm(projectDir, { recursive: true, force: true })
+    }
+  })
+
+  test("prompt descriptor truncates long first lines to 60 chars", async () => {
+    const longPrompt = `${"a".repeat(80)}\nsecond line`
+    const projectDir = await mktmp("desc-prompt-long")
+    try {
+      await writeHooksJson(projectDir, {
+        Stop: [{ hooks: [{ type: "prompt", prompt: longPrompt }] }],
+      })
+      const [summary] = summarizeChain(projectDir, "", projectDir)
+      expect(summary.descriptor.length).toBe(60)
     } finally {
       await fs.rm(projectDir, { recursive: true, force: true })
     }

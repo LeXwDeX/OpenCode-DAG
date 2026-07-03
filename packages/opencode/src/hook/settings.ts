@@ -555,20 +555,20 @@ function promptText(entry: HookCommand): string {
 
 /**
  * Short human-readable description of a hook entry for the Active Hooks block.
- * command → first ~60 chars of the command; http → the URL; mcp → the tool
- * name; prompt/agent → the first line of the prompt/goal text.
+ * All types are uniformly truncated to 60 chars: command → command text,
+ * http → URL, mcp → tool name, prompt/agent → first line of the prompt/goal.
  */
 function descriptorFor(entry: HookCommand): string {
   switch (entry.type) {
     case "command":
       return commandText(entry).slice(0, 60)
     case "http":
-      return httpUrl(entry)
+      return httpUrl(entry).slice(0, 60)
     case "mcp":
-      return commandText(entry)
+      return commandText(entry).slice(0, 60)
     case "prompt":
     case "agent":
-      return promptText(entry).split("\n")[0]
+      return promptText(entry).split("\n")[0].slice(0, 60)
     default:
       return commandText(entry).slice(0, 60)
   }
@@ -676,6 +676,42 @@ export function mergeSettings(layers: Settings[]): Settings {
 }
 
 /**
+ * Resolve the OpenCode global config directory. Uses the explicit override
+ * when provided (tests), otherwise falls back to `Global.Path.config` with a
+ * `~/.config/opencode` default. Shared by chainCandidates and loadChain so
+ * the fallback logic exists in exactly one place.
+ */
+function resolveGlobalConfig(globalConfig?: string): string {
+  if (globalConfig) return globalConfig
+  try {
+    return Global.Path.config
+  } catch {
+    return path.join(os.homedir(), ".config", "opencode")
+  }
+}
+
+/**
+ * Build the hooks.json candidate file list with scope tags. Shared by
+ * loadChain (merge) and summarizeChain (scope-tagged summaries) so adding or
+ * removing a path layer updates both consumers without a second edit.
+ */
+function chainCandidates(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): Array<{ scope: "global" | "project" | "worktree"; file: string }> {
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
+  const candidates: Array<{ scope: "global" | "project" | "worktree"; file: string }> = [
+    { scope: "global", file: path.join(opencodeGlobal, "hooks.json") },
+    { scope: "project", file: path.join(directory, ".opencode", "hooks.json") },
+  ]
+  if (worktree && worktree !== directory) {
+    candidates.push({ scope: "worktree", file: path.join(worktree, ".opencode", "hooks.json") })
+  }
+  return candidates
+}
+
+/**
  * Produce scope-tagged summaries of the merged hooks chain — one entry per
  * individual hook command, tagged with the layer (global/project/worktree) it
  * came from. Ordering matches loadChain: global first, then project, then
@@ -685,22 +721,7 @@ export function mergeSettings(layers: Settings[]): Settings {
  * Exported for unit testing only; not part of the public surface.
  */
 export function summarizeChain(directory: string, worktree: string, globalConfig?: string): HookSummary[] {
-  const home = os.homedir()
-  const opencodeGlobal = globalConfig ?? (() => {
-    try {
-      return Global.Path.config
-    } catch {
-      return path.join(home, ".config", "opencode")
-    }
-  })()
-  const candidates: Array<{ scope: "global" | "project" | "worktree"; file: string }> = [
-    { scope: "global", file: path.join(opencodeGlobal, "hooks.json") },
-    { scope: "project", file: path.join(directory, ".opencode", "hooks.json") },
-  ]
-  if (worktree && worktree !== directory) {
-    candidates.push({ scope: "worktree", file: path.join(worktree, ".opencode", "hooks.json") })
-  }
-  return candidates.flatMap(({ scope, file }) => {
+  return chainCandidates(directory, worktree, globalConfig).flatMap(({ scope, file }) => {
     const data = readJSON(file)
     if (!data?.hooks) return []
     return Object.entries(data.hooks).flatMap(([event, matchers]) =>
@@ -721,34 +742,12 @@ export function summarizeChain(directory: string, worktree: string, globalConfig
 // `globalConfig` overrides the resolved OpenCode global config dir so tests can
 // point it at an isolated temp dir instead of the real ~/.config/opencode.
 export function loadChain(directory: string, worktree: string, globalConfig?: string): Settings {
-  const home = os.homedir()
-  // Best-effort OpenCode global path; falls back to ~/.config/opencode.
-  // Optional globalConfig override is used by tests for deterministic isolation.
-  const opencodeGlobal = globalConfig ?? (() => {
-    try {
-      return Global.Path.config
-    } catch {
-      return path.join(home, ".config", "opencode")
-    }
-  })()
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
 
-  // Hooks live in dedicated hooks.json files in OpenCode-owned directories only.
-  // `.claude/` is not read for hooks (complete cut); `.local` variants are dropped
-  // (one file per scope). Merge is concat-append (global → project → worktree).
-  const candidates = [
-    path.join(opencodeGlobal, "hooks.json"),
-    path.join(directory, ".opencode", "hooks.json"),
-  ]
-
-  // If worktree differs from directory (e.g. git worktree), also check it.
-  if (worktree && worktree !== directory) {
-    candidates.push(path.join(worktree, ".opencode", "hooks.json"))
-  }
-
-  const layers = candidates
-    .map((fp) => {
-      const data = readJSON(fp)
-      if (data) warnUnsupportedFields(data.hooks, path.dirname(fp))
+  const layers = chainCandidates(directory, worktree, globalConfig)
+    .map(({ file }) => {
+      const data = readJSON(file)
+      if (data) warnUnsupportedFields(data.hooks, path.dirname(file))
       return data
     })
     .filter((s): s is Settings => s !== null)
