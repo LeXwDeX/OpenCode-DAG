@@ -140,20 +140,32 @@ export const layer = Layer.effect(
     // would interrupt ourselves before goal.cleared was published (the
     // event bus would miss the terminal event, and TUI/SSE consumers
     // polling state would never see the transition).
+    //
+    // The whole terminal sequence (load → publish(done) → delete →
+    // publish(cleared)) runs inside Effect.uninterruptible. This is
+    // defense-in-depth (F1): even if a future caller arranges for the loop
+    // fiber to be interrupted mid-call, the terminal event contract still
+    // completes atomically — goal.cleared cannot be skipped by an interrupt
+    // landing between publish(done) and publish(cleared). The operations are
+    // short synchronous DB + event publishes, so there is no deadlock risk.
     const deleteAndPublishDone = Effect.fnUntraced(function* (sessionID: SessionID, reason: string) {
-      const state = yield* loadState(sessionID)
-      if (state) {
-        const doneState = new GoalState.Info({
-          ...state,
-          status: "done",
-          last_verdict: "done",
-          last_reason: reason,
-        })
-        yield* publishGoal(sessionID, doneState)
-      }
-      yield* deleteState(sessionID)
-      yield* events.publish(GoalEvent.Cleared, { sessionID })
-      return state
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const state = yield* loadState(sessionID)
+          if (state) {
+            const doneState = new GoalState.Info({
+              ...state,
+              status: "done",
+              last_verdict: "done",
+              last_reason: reason,
+            })
+            yield* publishGoal(sessionID, doneState)
+          }
+          yield* deleteState(sessionID)
+          yield* events.publish(GoalEvent.Cleared, { sessionID })
+          return state
+        }),
+      )
     })
 
     function loadState(sessionID: SessionID) {
@@ -232,18 +244,27 @@ export const layer = Layer.effect(
     // clearFiber so it can be called from inside the loop fiber itself
     // (loop.ts shouldPreempt branch). The fiber naturally terminates when
     // afterIdle returns; no explicit interrupt needed.
+    //
+    // Wrapped in Effect.uninterruptible (F1): the save → publish sequence
+    // is atomic, so an interrupt landing between persisting the paused row
+    // and publishing goal.updated(paused) can never leave a paused DB row
+    // with no corresponding event on the bus.
     const pauseAndPublish = Effect.fnUntraced(function* (sessionID: SessionID, reason: string) {
-      const state = yield* loadState(sessionID)
-      if (!state || state.status !== "active") return undefined
-      const updated = new GoalState.Info({
-        ...state,
-        status: "paused",
-        paused_reason: reason,
-        last_turn_at: Date.now(),
-      })
-      yield* saveState(sessionID, updated)
-      yield* publishGoal(sessionID, updated)
-      return updated
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const state = yield* loadState(sessionID)
+          if (!state || state.status !== "active") return undefined
+          const updated = new GoalState.Info({
+            ...state,
+            status: "paused",
+            paused_reason: reason,
+            last_turn_at: Date.now(),
+          })
+          yield* saveState(sessionID, updated)
+          yield* publishGoal(sessionID, updated)
+          return updated
+        }),
+      )
     })
 
     const resume = Effect.fn("Goal.resume")(function* (sessionID: SessionID) {
