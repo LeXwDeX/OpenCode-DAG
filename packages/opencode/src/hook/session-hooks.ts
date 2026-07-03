@@ -31,7 +31,9 @@ export interface SessionHookCommand {
   timeout?: number
   shell?: "bash" | "powershell"
   if?: string
+  /** Background execution — see HookCommand.async in settings.ts. */
   async?: boolean
+  /** Deliver async result to agent — see HookCommand.asyncRewake in settings.ts. */
   asyncRewake?: boolean
   options?: Record<string, unknown>
   __sourceDir?: string

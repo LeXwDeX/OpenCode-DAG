@@ -47,6 +47,7 @@ import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
 import { Goal } from "@/goal/goal"
 import { SettingsHook } from "@/hook/settings"
+import { HookRewakeLive } from "@/hook/rewake-live"
 import { SessionHooks } from "@/hook/session-hooks"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
@@ -273,6 +274,12 @@ const app = LayerNode.group([
   // Permission.node / Compaction.node / ShareSession.node etc.).
   SettingsHook.node,
   SessionHooks.node,
+  // HookRewake live node: async hook rewake delivery (hook-async-rewake).
+  // Same app-graph-level placement rationale as SettingsHook above — settings.ts
+  // resolves HookRewake.Service via serviceOption from the ambient request
+  // context, so it must be present in this graph or server-driven sessions
+  // would silently skip rewake.
+  HookRewakeLive.node,
 ])
 
 export function createRoutes(

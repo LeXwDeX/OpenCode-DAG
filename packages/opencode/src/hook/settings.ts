@@ -42,7 +42,7 @@ import os from "os"
 import { existsSync, readFileSync } from "fs"
 import { spawn } from "child_process"
 import { createHash } from "crypto"
-import { Effect, Layer, Context, Option } from "effect"
+import { Effect, Layer, Context, Option, Scope, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -63,6 +63,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
+import { HookRewake } from "./rewake"
 import { buildForkHooks, watchSettings } from "./extensions" // [FORK:hook-ext]
 
 const log = Log.create({ service: "hook.settings" })
@@ -161,13 +162,21 @@ export interface HookCommand {
    */
   if?: string
   /**
-   * Async execution flag. CC's AsyncHookRegistry routes async hooks via attachments / task-notification.
-   * Fork currently runs everything sync; this is a P2 schema placeholder.
+   * Async execution flag. When true, the hook is forked into a background fiber
+   * scoped to the SettingsHook service; its output never participates in the
+   * current trigger's TriggerResult (no permissionDecision, blocked, etc. — the
+   * decision point has already passed by the time it completes). Background
+   * fibers die with the process; there is no durable persistence across crashes.
+   * Pair with `asyncRewake` to deliver the result back to the agent.
    */
   async?: boolean
   /**
-   * Companion to `async`: when an async hook exits with code 2, CC re-wakes the agent via
-   * `wrapInSystemReminder` + `task-notification`. Schema placeholder for the same P2 work.
+   * Companion to `async`: when an async hook completes with rewake-worthy output
+   * (exit code 2 stderr, `systemMessage`, `decision:"block"` reason, or
+   * `additionalContext`), a synthetic steer prompt wrapping the output in a
+   * `<system-reminder>` is admitted to the originating session, re-waking the agent.
+   * Without `async`, this field is inert (the hook runs synchronously as usual).
+   * Rewake is suppressed for `SessionEnd` and when no `sessionID` is available.
    */
   asyncRewake?: boolean
   /**
@@ -258,6 +267,17 @@ const HookJSONOutputZodSchema = z.object({
   reason: z.string().optional(),
   hookSpecificOutput: HookSpecificOutputZodSchema.optional(),
 })
+
+// ── Async rewake (hook-async-rewake) ───────────────────────────
+// Sentinel prefix for rewake prompts. UserPromptSubmit hook processing skips
+// prompts whose text starts with this prefix, preventing hook → rewake → hook
+// loops. The prefix must match the opening of buildRewakePrompt exactly.
+export const HOOK_REWAKE_SENTINEL = "<system-reminder>\nAsync hook completed"
+
+function buildRewakePrompt(entry: HookCommand, event: HookEvent, content: string): string {
+  const cmd = descriptorFor(entry)
+  return `${HOOK_REWAKE_SENTINEL} (command: ${cmd}, event: ${event}):\n${content}\n</system-reminder>`
+}
 
 /**
  * hookSpecificOutput discriminated union — Claude Code 1:1.
@@ -1653,6 +1673,60 @@ export const layer = Layer.effect(
       return yield* handler.run(entry as never, envelope, cwd, inHook)
     })
 
+    // Background scope for async hooks. Lives as long as the SettingsHook service
+    // instance; closed via finalizer when the instance is disposed.
+    const bgScope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(bgScope, Exit.void))
+
+    /**
+     * Async hook completion handler. Computes rewake-worthiness from the result
+     * and, when `asyncRewake` is set, admits a steer prompt to the originating
+     * session via the opencode Session.Service (ambient in the session runtime).
+     * Best-effort — all errors swallowed to honor the "never crash host" contract.
+     */
+    const onAsyncComplete = Effect.fnUntraced(function* (
+      entry: HookCommand,
+      event: HookEvent,
+      sessionID: string | undefined,
+      hookRewake: HookRewake.Interface | undefined,
+      result: { json?: HookJSONOutput | undefined; exitBlock?: string | undefined },
+    ) {
+      if (!entry.asyncRewake) {
+        log.debug("async hook completed (no rewake)", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+      if (event === "SessionEnd") return
+      if (!sessionID) {
+        log.warn("async hook rewake skipped: no sessionID", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+      if (!hookRewake) {
+        log.warn("async hook rewake skipped: HookRewake.Service unavailable", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+
+      const parts: string[] = []
+      if (result.exitBlock) parts.push(result.exitBlock)
+      if (result.json?.systemMessage) parts.push(result.json.systemMessage)
+      if (result.json?.decision === "block" && result.json.reason) parts.push(result.json.reason)
+      const hso = result.json?.hookSpecificOutput
+      if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
+        parts.push(hso.additionalContext)
+      }
+      if (parts.length === 0) {
+        log.debug("async hook completed: nothing rewake-worthy", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+
+      const text = buildRewakePrompt(entry, event, parts.join("\n"))
+      yield* hookRewake.rewake({ sessionID: SessionID.make(sessionID), text }).pipe(
+        Effect.catchDefect((defect) => {
+          log.warn("async hook rewake defect swallowed", { command: commandText(entry).slice(0, 80), error: String(defect) })
+          return Effect.void
+        }),
+      )
+    })
+
     const trigger = Effect.fn("SettingsHook.trigger")(function* (
       payload: HookPayload,
       ctx: TriggerContext,
@@ -1770,6 +1844,43 @@ export const layer = Layer.effect(
 
           // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
           if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
+
+          // ── Async fork (hook-async-rewake) ──────────────────────
+          // async:true entries are forked into the background and do NOT
+          // participate in the current TriggerResult aggregation. Their output
+          // (when asyncRewake:true) is delivered back via onAsyncComplete →
+          // Session.rewake once the background fiber settles.
+          if (entry.async) {
+            if (group._sessionEntry?.once && ctx.sessionID) {
+              yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+            }
+            const hookRewake = Option.getOrUndefined(yield* Effect.serviceOption(HookRewake.Service))
+            const capturedEvent = payload.event
+            const capturedSessionID = ctx.sessionID
+            yield* runEntry(entry, envelope, s.cwd, false).pipe(
+              Effect.catchDefect((defect) => {
+                log.warn("async hook entry defect swallowed (host protected)", {
+                  event: capturedEvent,
+                  command: commandText(entry),
+                  error: String(defect),
+                })
+                return Effect.succeed({
+                  json: undefined as HookJSONOutput | undefined,
+                  exitBlock: undefined as string | undefined,
+                })
+              }),
+              Effect.flatMap((r) => onAsyncComplete(entry, capturedEvent, capturedSessionID, hookRewake, r)),
+              Effect.catchDefect((defect) => {
+                log.warn("async hook completion defect swallowed", {
+                  command: commandText(entry),
+                  error: String(defect),
+                })
+                return Effect.void
+              }),
+              Effect.forkIn(bgScope),
+            )
+            continue
+          }
 
           // "Never crash host" contract: a hook handler can throw an unrecoverable
           // defect (null deref, OOM, native assert). Effect.catch at the tool-layer

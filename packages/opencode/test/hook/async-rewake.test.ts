@@ -1,0 +1,368 @@
+import { describe, expect } from "bun:test"
+import { Effect, Layer } from "effect"
+import * as fs from "fs/promises"
+import os from "os"
+import path from "path"
+import { SettingsHook, HOOK_REWAKE_SENTINEL } from "@/hook/settings"
+import { HookRewake } from "@/hook/rewake"
+import { SessionHooks } from "@/hook/session-hooks"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionID } from "@/session/schema"
+import { testEffect, pollWithTimeout } from "../lib/effect"
+
+// ── Test layer ──────────────────────────────────────────────────
+const rewakeCalls: { sessionID: string; text: string }[] = []
+const mockHookRewakeLayer = Layer.succeed(
+  HookRewake.Service,
+  HookRewake.Service.of({
+    rewake: (input) =>
+      Effect.sync(() => {
+        rewakeCalls.push(input)
+      }),
+  }),
+)
+
+const testLayer = SettingsHook.layer.pipe(
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provideMerge(SessionHooks.defaultLayer),
+  Layer.provideMerge(mockHookRewakeLayer),
+)
+
+const it = testEffect(testLayer)
+
+const writeSettingsTo = (hooksJson: object) => (dir: string) =>
+  Effect.promise(() =>
+    fs.mkdir(path.join(dir, ".opencode"), { recursive: true }).then(() =>
+      fs.writeFile(path.join(dir, ".opencode", "hooks.json"), JSON.stringify(hooksJson)),
+    ),
+  )
+
+const tmp = (name: string) => path.join(os.tmpdir(), `opencode-test-${name}`)
+
+describe("hook-async-rewake", () => {
+  // ── 4.1: Async hook does not block the trigger ───────────────
+  const marker41 = tmp("async-4-1.txt")
+  it.instance(
+    "async hook does not delay trigger — marker file appears after trigger returns",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+        yield* Effect.promise(() => fs.rm(marker41, { force: true }))
+
+        const r = yield* hook.trigger(
+          { event: "SessionStart", source: "startup" },
+          { sessionID: "sess-4-1", transcriptPath: "" },
+        )
+
+        expect(r.additionalContexts).toEqual([])
+        expect(r.systemMessages).toEqual([])
+        expect(r.blocked).toBeUndefined()
+
+        yield* pollWithTimeout(
+          Effect.promise(() =>
+            fs
+              .access(marker41)
+              .then(() => true as const)
+              .catch(() => undefined),
+          ),
+          "async hook marker file never appeared",
+        )
+      }),
+    {
+      init: writeSettingsTo({
+        SessionStart: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: `sleep 0.3 && touch ${JSON.stringify(marker41)}`,
+                async: true,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.2: Async output cannot gate a decision ─────────────────
+  it.instance(
+    "async PreToolUse hook exit-2 does not block",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+
+        const r = yield* hook.trigger(
+          { event: "PreToolUse", toolName: "Write", toolInput: {} },
+          { sessionID: "sess-4-2", transcriptPath: "" },
+        )
+
+        expect(r.blocked).toBeUndefined()
+        expect(r.permissionDecision).toBeUndefined()
+      }),
+    {
+      init: writeSettingsTo({
+        PreToolUse: [
+          {
+            matcher: "Write",
+            hooks: [{ type: "command", command: "echo blocked >&2 && exit 2", async: true }],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.3: Rewake end-to-end ───────────────────────────────────
+  it.instance(
+    "async+asyncRewake exit-2 admits a steer prompt with sentinel + stderr",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+
+        const r = yield* hook.trigger(
+          { event: "PostToolUse", toolName: "Write", toolInput: {}, toolResponse: {} },
+          { sessionID: "sess-4-3", transcriptPath: "" },
+        )
+
+        expect(r.blocked).toBeUndefined()
+
+        yield* pollWithTimeout(
+          Effect.sync(() => rewakeCalls[0]),
+          "rewake was never called",
+        )
+        expect(rewakeCalls[0].sessionID).toBe("sess-4-3")
+        expect(rewakeCalls[0].text.startsWith(HOOK_REWAKE_SENTINEL)).toBe(true)
+        expect(rewakeCalls[0].text).toContain("rewake-payload-4-3")
+        expect(rewakeCalls[0].text).toContain("</system-reminder>")
+      }),
+    {
+      init: writeSettingsTo({
+        PostToolUse: [
+          {
+            matcher: "Write",
+            hooks: [
+              {
+                type: "command",
+                command: "echo rewake-payload-4-3 >&2 && exit 2",
+                async: true,
+                asyncRewake: true,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.4a: exit-0 admits nothing ──────────────────────────────
+  // Readiness signal: hook writes a marker when its shell command finishes.
+  // runEntry resolve → onAsyncComplete is a synchronous flatMap continuation,
+  // so marker-visible == onAsyncComplete's early-return already executed.
+  // Asserting after marker is deterministic, not a time-window guess.
+  const marker44a = tmp("async-4-4a.txt")
+  it.instance(
+    "exit-0 asyncRewake hook admits nothing",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+        yield* Effect.promise(() => fs.rm(marker44a, { force: true }))
+
+        yield* hook.trigger({ event: "Stop", stopHookActive: false }, { sessionID: "sess-4-4a", transcriptPath: "" })
+
+        yield* pollWithTimeout(
+          Effect.promise(() =>
+            fs
+              .access(marker44a)
+              .then(() => true as const)
+              .catch(() => undefined),
+          ),
+          "4.4a hook marker never appeared — fiber did not reach onAsyncComplete",
+        )
+        // Marker visible ⇒ runEntry done ⇒ onAsyncComplete (sync flatMap) already
+        // hit the parts.length === 0 early return. Deterministic.
+        expect(rewakeCalls.length).toBe(0)
+      }),
+    {
+      init: writeSettingsTo({
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: `echo ok && touch ${JSON.stringify(marker44a)}`,
+                async: true,
+                asyncRewake: true,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.4b: SessionEnd never rewakes ───────────────────────────
+  const marker44b = tmp("async-4-4b.txt")
+  it.instance(
+    "SessionEnd asyncRewake hook never rewakes",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+        yield* Effect.promise(() => fs.rm(marker44b, { force: true }))
+
+        yield* hook.trigger({ event: "SessionEnd", reason: "other" }, { sessionID: "sess-4-4b", transcriptPath: "" })
+
+        yield* pollWithTimeout(
+          Effect.promise(() =>
+            fs
+              .access(marker44b)
+              .then(() => true as const)
+              .catch(() => undefined),
+          ),
+          "4.4b hook marker never appeared — fiber did not reach onAsyncComplete",
+        )
+        // Marker visible ⇒ onAsyncComplete already hit the `event === "SessionEnd"` early return.
+        expect(rewakeCalls.length).toBe(0)
+      }),
+    {
+      init: writeSettingsTo({
+        SessionEnd: [
+          {
+            hooks: [
+              {
+                type: "command",
+                // touch BEFORE exit 2 so the marker is written despite the non-zero exit
+                command: `touch ${JSON.stringify(marker44b)} && echo ending >&2 && exit 2`,
+                async: true,
+                asyncRewake: true,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.4c: missing sessionID skips rewake ─────────────────────
+  const marker44c = tmp("async-4-4c.txt")
+  it.instance(
+    "missing sessionID skips rewake",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+        yield* Effect.promise(() => fs.rm(marker44c, { force: true }))
+
+        yield* hook.trigger({ event: "Stop", stopHookActive: false }, { sessionID: "", transcriptPath: "" })
+
+        yield* pollWithTimeout(
+          Effect.promise(() =>
+            fs
+              .access(marker44c)
+              .then(() => true as const)
+              .catch(() => undefined),
+          ),
+          "4.4c hook marker never appeared — fiber did not reach onAsyncComplete",
+        )
+        // Marker visible ⇒ onAsyncComplete already hit the `!sessionID` early return.
+        expect(rewakeCalls.length).toBe(0)
+      }),
+    {
+      init: writeSettingsTo({
+        Stop: [
+          {
+            hooks: [
+              {
+                type: "command",
+                command: `touch ${JSON.stringify(marker44c)} && echo nosession >&2 && exit 2`,
+                async: true,
+                asyncRewake: true,
+              },
+            ],
+          },
+        ],
+      }),
+    },
+  )
+
+  // ── 4.5: asyncRewake without async is inert ──────────────────
+  it.instance(
+    "asyncRewake:true without async:true runs synchronously",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+
+        yield* hook.trigger({ event: "Stop", stopHookActive: false }, { sessionID: "sess-4-5", transcriptPath: "" })
+        expect(rewakeCalls.length).toBe(0)
+      }),
+    {
+      init: writeSettingsTo({
+        Stop: [{ hooks: [{ type: "command", command: "echo ok", asyncRewake: true }] }],
+      }),
+    },
+  )
+
+  // ── 4.6: Loop guard — sentinel prefix ────────────────────────
+  it.instance(
+    "HOOK_REWAKE_SENTINEL is a stable prefix of rewake prompts",
+    () =>
+      Effect.gen(function* () {
+        expect(typeof HOOK_REWAKE_SENTINEL).toBe("string")
+        expect(HOOK_REWAKE_SENTINEL.length).toBeGreaterThan(0)
+        expect(HOOK_REWAKE_SENTINEL.startsWith("<system-reminder>")).toBe(true)
+      }),
+  )
+
+  // ── 4.7: once async session entry removed at fork time ───────
+  const marker47 = tmp("once-4-7.txt")
+  it.instance(
+    "once:true async session hook fires only once across two triggers",
+    () =>
+      Effect.gen(function* () {
+        rewakeCalls.length = 0
+        const hook = yield* SettingsHook.Service
+        const sessionHooks = yield* SessionHooks.Service
+        yield* Effect.promise(() => fs.rm(marker47, { force: true }))
+
+        yield* sessionHooks.add(SessionID.make("sess-4-7"), {
+          event: "Stop",
+          once: true,
+          hooks: [
+            {
+              type: "command",
+              command: `sleep 0.2 && touch ${JSON.stringify(marker47)}`,
+              async: true,
+            },
+          ],
+        })
+
+        // First trigger — forks the hook, removes entry at fork time
+        yield* hook.trigger({ event: "Stop", stopHookActive: false }, { sessionID: "sess-4-7", transcriptPath: "" })
+
+        // Second trigger immediately — entry already removed
+        const r2 = yield* hook.trigger({ event: "Stop", stopHookActive: false }, { sessionID: "sess-4-7", transcriptPath: "" })
+        expect(r2.additionalContexts).toEqual([])
+
+        // Verify the first hook's marker appeared
+        yield* pollWithTimeout(
+          Effect.promise(() =>
+            fs
+              .access(marker47)
+              .then(() => true as const)
+              .catch(() => undefined),
+          ),
+          "once-marker never appeared",
+        )
+
+        const remaining = yield* sessionHooks.list(SessionID.make("sess-4-7"), "Stop")
+        expect(remaining.length).toBe(0)
+      }),
+  )
+})
