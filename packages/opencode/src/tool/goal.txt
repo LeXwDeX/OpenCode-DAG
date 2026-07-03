@@ -2,14 +2,14 @@ Interact with the autonomous goal loop that drives your session (when one is run
 
 ## Actions
 
-- `status` — Query the current goal: its text, status, turns used/remaining, subgoals, and pause reason (if any). Returns clear information when no goal is active. Use this to know whether you are inside a goal loop, how many turns the budget has left, and whether subgoals remain.
+- `status` — Query the current goal: its text, status, turns used/remaining, subgoals, and pause reason (if any). Returns clear information when no goal is active.
 - `complete` — Declare the current goal achieved. Bypasses the external judge model and ends the loop immediately. Pass `reason` as a one-sentence summary of what was delivered (e.g., "created `src/foo.ts` and all 7 tests pass"). After `complete`, the goal is auto-cleared; the next call to `status` will report "no goal".
 
 ## When to use `status`
 
-- At the start of any non-trivial turn, when you are not sure whether a goal loop is running — this costs nothing and tells you the budget you are consuming.
-- After each significant step, to report progress against the goal's turns budget.
-- When you suspect the goal might be close to budget exhaustion and you need to decide whether to compress work or extend.
+`status` is OPTIONAL. While a goal is active, a live "Current Goal" block (goal text, status, turns used/remaining, subgoals, last judge verdict) is already injected into your system prompt at the start of every turn — you do not need to call `status` to discover whether a goal loop is running or how much budget remains. Reach for `status` only as a deliberate check-in:
+- After a long operation, to re-verify state mid-turn (in case the budget or status shifted).
+- To inspect `pausedReason` when a goal appears stalled.
 
 ## When to use `complete`
 

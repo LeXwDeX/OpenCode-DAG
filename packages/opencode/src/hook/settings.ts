@@ -61,7 +61,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
-import { buildForkHooks } from "./extensions" // [FORK:hook-ext]
+import { buildForkHooks, watchSettings } from "./extensions" // [FORK:hook-ext]
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -388,7 +388,7 @@ export interface TriggerContext {
 }
 
 export interface TriggerResult {
-  /** additionalContext strings appended (deduplicated per instance) */
+  /** additionalContext strings appended (deduplicated per session) */
   additionalContexts: string[]
   /** systemMessage strings emitted by hooks */
   systemMessages: string[]
@@ -972,8 +972,15 @@ function matcherTarget(payload: HookPayload): string {
 interface State {
   settings: Settings
   cwd: string
-  /** Deduplicated additionalContext strings already surfaced in this instance. */
-  seen: Set<string>
+  /**
+   * Deduplicated additionalContext strings, bucketed per sessionID. Each
+   * session sees every distinct context once; a second session is NOT
+   * starved by what the first already saw. The bucket for a session is
+   * evicted on SessionEnd (see trigger) so the map does not grow unboundedly
+   * across the process lifetime. Headless / no-session triggers collapse to
+   * the "" bucket, preserving the prior global-dedup behavior for those.
+   */
+  seen: Map<string, Set<string>>
 }
 
 export interface Interface {
@@ -1050,11 +1057,7 @@ const commandHandler: HookHandler = {
 
 const mcpHandler: HookHandler = {
   type: "mcp",
-  run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, inHook) {
-    if (inHook) {
-      log.warn("nested mcp hook skipped (re-entry guard)", { command: commandText(entry) })
-      return { json: undefined, exitBlock: undefined }
-    }
+  run: Effect.fn("SettingsHook.handler.mcp")(function* (entry, envelope, _cwd, _inHook) {
     const mcpSvc = Option.getOrUndefined(yield* Effect.serviceOption(MCP.Service))
     if (!mcpSvc) {
       log.warn("mcp hook skipped: MCP service not in context", { command: commandText(entry) })
@@ -1245,7 +1248,7 @@ const agentHandler: HookHandler = {
 
       const captured: { value: HookJSONOutput | null } = { value: null }
       const ac = new AbortController()
-      const timeoutMs = entry.timeout ?? DEFAULT_AGENT_TIMEOUT_MS
+      const timeoutMs = entry.timeout ? entry.timeout * 1000 : DEFAULT_AGENT_TIMEOUT_MS
       const timer = setTimeout(() => ac.abort(), timeoutMs)
 
       const loopExit = yield* Effect.tryPromise({
@@ -1334,7 +1337,31 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
         const settings = loadChain(instCtx.directory, instCtx.worktree)
-        return { settings, cwd: instCtx.directory, seen: new Set<string>() } satisfies State
+        const stateObj = {
+          settings,
+          cwd: instCtx.directory,
+          seen: new Map<string, Set<string>>(),
+        } satisfies State
+
+        // [FORK:hook-ext] Hot-reload settings files at runtime. The watcher
+        // re-runs loadChain on a settings.json change and mutates
+        // stateObj.settings in place. trigger reads s.settings via
+        // InstanceState.get on every call, and the cache returns the SAME
+        // state object, so the mutation is visible without invalidating the
+        // cache. The finalizer closes the watcher when the instance scope is
+        // disposed (same scope-based cleanup discipline as GoalLoop.state).
+        const handle = watchSettings(
+          instCtx.directory,
+          instCtx.worktree,
+          () => Effect.sync(() => loadChain(instCtx.directory, instCtx.worktree)),
+          (newSettings) => {
+            stateObj.settings = newSettings
+          },
+          Global.Path.config,
+        )
+        yield* Effect.addFinalizer(() => Effect.sync(() => handle.close()))
+
+        return stateObj
       }),
     )
 
@@ -1388,6 +1415,27 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
 
+      // ── SessionEnd lifecycle cleanup (F2) ──────────────────────
+      // Evict this session's additionalContext dedup bucket AND its dynamic
+      // session-hook store. Both are keyed by sessionID and have no other
+      // eviction path, so without this the process accumulates one bucket +
+      // one hook list per historical session for its entire lifetime.
+      // SessionHooks.clear was previously defined but never invoked — this is
+      // the single call site that fixes that leak.
+      //
+      // Runs BEFORE the WP-6A short-circuit below: a session that registered
+      // no SessionEnd hook (the common case) must still have its state freed,
+      // and placing it after the matcher loop would skip cleanup whenever the
+      // short-circuit fires. Clearing first is safe — a SessionEnd hook that
+      // returns additionalContext just repopulates a bucket for an ending
+      // session, which is harmless.
+      if (payload.event === "SessionEnd" && ctx.sessionID) {
+        s.seen.delete(ctx.sessionID)
+        // NOTE: sessionHooks.clear is deferred to after hook execution
+        // (before each return point below) — clearing here would remove
+        // session-registered SessionEnd hooks before the matcher can see them.
+      }
+
       // ── WP-6A: O(1) short-circuit ─────────────────────────────
       // Skip the entire matcher pipeline (envelope build, target derivation,
       // session merge allocation, matcher regex) when neither the on-disk
@@ -1403,6 +1451,9 @@ export const layer = Layer.effect(
         : false
       if (!hasFile && !hasSession) {
         log.info("trigger short-circuit", { event: payload.event, reason: "no_matchers", hasFile, hasSession })
+        if (payload.event === "SessionEnd" && ctx.sessionID) {
+          yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        }
         return result
       }
 
@@ -1447,6 +1498,9 @@ export const layer = Layer.effect(
       ]
       if (!matchers.length) {
         log.info("trigger short-circuit", { event: payload.event, reason: "empty_matchers" })
+        if (payload.event === "SessionEnd" && ctx.sessionID) {
+          yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        }
         return result
       }
 
@@ -1519,16 +1573,32 @@ export const layer = Layer.effect(
           // Property-based narrowing — works across union variants without depending on
           // hookEventName tag (which the fallback variant may also accept).
           if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
-            const ctx = hso.additionalContext
-            if (!s.seen.has(ctx)) {
-              s.seen.add(ctx)
-              result.additionalContexts.push(ctx)
+            const additionalContext = hso.additionalContext
+            // Per-session dedup (F2): the same context surfaces once per
+            // session, not once per process lifetime. ctx here is the
+            // TriggerContext (sessionID is its bucket key); the local was
+            // renamed off `ctx` so the outer TriggerContext stays reachable.
+            const bucket = s.seen.get(ctx.sessionID) ?? new Set<string>()
+            if (!bucket.has(additionalContext)) {
+              bucket.add(additionalContext)
+              s.seen.set(ctx.sessionID, bucket)
+              result.additionalContexts.push(additionalContext)
             }
           }
           if (hso && "permissionDecision" in hso && hso.permissionDecision) {
-            result.permissionDecision = hso.permissionDecision
-            result.permissionDecisionReason =
-              "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
+            const incoming = hso.permissionDecision
+            const current = result.permissionDecision
+            // Most-restrictive-wins: deny > ask > allow. A later hook cannot
+            // relax an earlier hook's deny (Claude Code permission semantics).
+            const moreRestrictive =
+              current === undefined ||
+              incoming === "deny" ||
+              (incoming === "ask" && current === "allow")
+            if (moreRestrictive) {
+              result.permissionDecision = incoming
+              result.permissionDecisionReason =
+                "permissionDecisionReason" in hso ? hso.permissionDecisionReason : undefined
+            }
           }
           if (hso && "updatedInput" in hso && hso.updatedInput) {
             result.updatedInput = hso.updatedInput
@@ -1548,6 +1618,9 @@ export const layer = Layer.effect(
         if (result.preventContinuation) break
       }
 
+      if (payload.event === "SessionEnd" && ctx.sessionID) {
+        yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+      }
       return result
     })
 
