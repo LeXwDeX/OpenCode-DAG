@@ -87,6 +87,13 @@ jobs:
       - name: Setup Bun
         if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         uses: ./.github/actions/setup-bun
+        with:
+          # Linux and Windows bun caches are each owned by a single saver
+          # elsewhere (ci-typecheck.yml linux, ci-test.yml e2e windows) to
+          # avoid racing on the same {OS}-bun-{hash} key when this manual
+          # release build runs concurrently with a push-triggered CI run.
+          # macOS has no other job in the repo, so it's safe to save here.
+          save-cache: ${{ matrix.name == 'macos' }}
 
       - name: Build CLI
         if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
