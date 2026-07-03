@@ -388,7 +388,7 @@ export interface TriggerContext {
 }
 
 export interface TriggerResult {
-  /** additionalContext strings appended (deduplicated per instance) */
+  /** additionalContext strings appended (deduplicated per session) */
   additionalContexts: string[]
   /** systemMessage strings emitted by hooks */
   systemMessages: string[]
@@ -972,8 +972,15 @@ function matcherTarget(payload: HookPayload): string {
 interface State {
   settings: Settings
   cwd: string
-  /** Deduplicated additionalContext strings already surfaced in this instance. */
-  seen: Set<string>
+  /**
+   * Deduplicated additionalContext strings, bucketed per sessionID. Each
+   * session sees every distinct context once; a second session is NOT
+   * starved by what the first already saw. The bucket for a session is
+   * evicted on SessionEnd (see trigger) so the map does not grow unboundedly
+   * across the process lifetime. Headless / no-session triggers collapse to
+   * the "" bucket, preserving the prior global-dedup behavior for those.
+   */
+  seen: Map<string, Set<string>>
 }
 
 export interface Interface {
@@ -1330,7 +1337,7 @@ export const layer = Layer.effect(
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
         const settings = loadChain(instCtx.directory, instCtx.worktree)
-        return { settings, cwd: instCtx.directory, seen: new Set<string>() } satisfies State
+        return { settings, cwd: instCtx.directory, seen: new Map<string, Set<string>>() } satisfies State
       }),
     )
 
@@ -1383,6 +1390,25 @@ export const layer = Layer.effect(
       using _ = log.time("trigger", { event: payload.event, sessionID: ctx.sessionID })
       const s = yield* InstanceState.get(state)
       const result: TriggerResult = { additionalContexts: [], systemMessages: [] }
+
+      // ── SessionEnd lifecycle cleanup (F2) ──────────────────────
+      // Evict this session's additionalContext dedup bucket AND its dynamic
+      // session-hook store. Both are keyed by sessionID and have no other
+      // eviction path, so without this the process accumulates one bucket +
+      // one hook list per historical session for its entire lifetime.
+      // SessionHooks.clear was previously defined but never invoked — this is
+      // the single call site that fixes that leak.
+      //
+      // Runs BEFORE the WP-6A short-circuit below: a session that registered
+      // no SessionEnd hook (the common case) must still have its state freed,
+      // and placing it after the matcher loop would skip cleanup whenever the
+      // short-circuit fires. Clearing first is safe — a SessionEnd hook that
+      // returns additionalContext just repopulates a bucket for an ending
+      // session, which is harmless.
+      if (payload.event === "SessionEnd" && ctx.sessionID) {
+        s.seen.delete(ctx.sessionID)
+        yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+      }
 
       // ── WP-6A: O(1) short-circuit ─────────────────────────────
       // Skip the entire matcher pipeline (envelope build, target derivation,
@@ -1515,10 +1541,16 @@ export const layer = Layer.effect(
           // Property-based narrowing — works across union variants without depending on
           // hookEventName tag (which the fallback variant may also accept).
           if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
-            const ctx = hso.additionalContext
-            if (!s.seen.has(ctx)) {
-              s.seen.add(ctx)
-              result.additionalContexts.push(ctx)
+            const additionalContext = hso.additionalContext
+            // Per-session dedup (F2): the same context surfaces once per
+            // session, not once per process lifetime. ctx here is the
+            // TriggerContext (sessionID is its bucket key); the local was
+            // renamed off `ctx` so the outer TriggerContext stays reachable.
+            const bucket = s.seen.get(ctx.sessionID) ?? new Set<string>()
+            if (!bucket.has(additionalContext)) {
+              bucket.add(additionalContext)
+              s.seen.set(ctx.sessionID, bucket)
+              result.additionalContexts.push(additionalContext)
             }
           }
           if (hso && "permissionDecision" in hso && hso.permissionDecision) {
