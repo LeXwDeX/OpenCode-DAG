@@ -56,11 +56,19 @@ export const run = Effect.fn("Goal.Judge.run")(function* (
     timeout: GoalPrompts.DEFAULT_JUDGE_TIMEOUT,
   }).pipe(
     Effect.map((text) => parseJudgeResponse(text)),
-    // Fail-open on transport error
+    // Transport errors (timeout, network, non-JSON transport-level failure)
+    // count toward the pause budget (D5). Previously they returned
+    // parseFailed: false, which reset consecutive_parse_failures and let a
+    // flaky provider alternate bad-JSON and timeout indefinitely without
+    // ever hitting MAX_CONSECUTIVE_PARSE_FAILURES. Returning parseFailed: true
+    // feeds them through the same auto-pause path as parse failures, treating
+    // "judge is unreliable" uniformly regardless of failure mode. The verdict
+    // stays "continue" so a single transient blip does not stall the loop;
+    // it only pauses after MAX_CONSECUTIVE_PARSE_FAILURES in a row.
     Effect.orElseSucceed((): JudgeResult => ({
       verdict: "continue",
-      reason: "judge transport error",
-      parseFailed: false,
+      reason: "judge transport error (timeout or network) — counting toward pause budget",
+      parseFailed: true,
     })),
   )
 })
