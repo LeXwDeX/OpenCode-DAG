@@ -316,6 +316,17 @@ export const layer = Layer.effectDiscard(
         const messageID = event.data.part.messageID
         const sessionID = event.data.part.sessionID
         const data = partData(event.data.part)
+        // A part update can race with revert cleanup deleting its parent message
+        // (e.g. an interrupted stream flushing a step-start after resend). The
+        // message is gone, so the part is moot — skip instead of dying on the
+        // foreign key constraint.
+        const message = yield* db
+          .select({ id: MessageTable.id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, messageID))
+          .get()
+          .pipe(Effect.orDie)
+        if (!message) return
         const row = yield* db.select().from(PartTable).where(eq(PartTable.id, id)).get().pipe(Effect.orDie)
         yield* db
           .insert(PartTable)
