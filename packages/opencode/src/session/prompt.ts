@@ -60,7 +60,7 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
-import { SettingsHook } from "@/hook/settings"
+import { SettingsHook, HOOK_REWAKE_SENTINEL } from "@/hook/settings"
 import { HookStartContext } from "@/hook/start-context"
 import { Goal } from "@/goal/goal"
 
@@ -1230,12 +1230,16 @@ export const layer = Layer.effect(
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
 
-      // SettingsHook: UserPromptSubmit — gives hooks a chance to block or modify the turn
+      // SettingsHook: UserPromptSubmit — gives hooks a chance to block or modify the turn.
+      // Loop guard (hook-async-rewake): skip hooks for rewake prompts (those whose
+      // text starts with HOOK_REWAKE_SENTINEL) to prevent hook → rewake → hook loops.
       let hookAdditionalContexts: string[] = []
-      if (settingsHook) {
+      const promptText = input.parts.map((p: any) => p.type === "text" ? p.text : "").join("\n")
+      const isRewake = promptText.startsWith(HOOK_REWAKE_SENTINEL)
+      if (settingsHook && !isRewake) {
         const hookResult = yield* settingsHook
           .trigger(
-            { event: "UserPromptSubmit", prompt: input.parts.map((p: any) => p.type === "text" ? p.text : "").join("\n") },
+            { event: "UserPromptSubmit", prompt: promptText },
             { sessionID: input.sessionID, transcriptPath: "" },
           )
           .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, additionalContexts: [] as string[] } as any)))
