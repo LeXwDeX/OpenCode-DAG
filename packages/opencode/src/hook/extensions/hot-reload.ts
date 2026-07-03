@@ -99,18 +99,21 @@ export function watchSettings(
 
   for (const dir of dirs) {
     try {
-      const watcher = watch(dir, { persistent: false }, (eventType, filename) => {
+      const watcher = watch(dir, { persistent: false }, (_eventType, filename) => {
         if (!filename || !watchedNames.has(filename)) return
-        if (eventType !== "change") return
 
-        // Debounce: 500ms
+        // Debounce: 500ms. Min 1s between reloads.
+        // On min-interval block, reschedule (not drop) so rapid successive
+        // saves are not permanently lost.
         if (debounceTimer) clearTimeout(debounceTimer)
-        debounceTimer = setTimeout(() => {
+        const file = path.join(dir, filename)
+        const tryReload = () => {
           const now = Date.now()
-          if (now - lastReload < 1000) return // Min 1s between reloads
+          if (now - lastReload < 1000) {
+            debounceTimer = setTimeout(tryReload, 1000 - (now - lastReload))
+            return
+          }
           lastReload = now
-
-          const file = path.join(dir, filename)
           log.info("settings file changed, reloading", { file })
           // Fire-and-forget: reload errors are logged but never crash
           Effect.runPromise(reload()).then(
@@ -123,7 +126,8 @@ export function watchSettings(
             },
             (err) => log.warn("settings reload failed", { file, error: String(err) }),
           )
-        }, 500)
+        }
+        debounceTimer = setTimeout(tryReload, 500)
       })
       watchers.push(watcher)
     } catch {
