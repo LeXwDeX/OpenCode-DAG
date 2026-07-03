@@ -1462,7 +1462,7 @@ export const layer = Layer.effect(
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
               sys.hooks(),
-              sys.goal(),
+              sys.goal(sessionID),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
             const system = [

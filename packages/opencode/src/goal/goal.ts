@@ -275,20 +275,12 @@ export const layer = Layer.effect(
     const markDone = Effect.fn("Goal.markDone")(function* (sessionID: SessionID, reason: string) {
       // User/tool-initiated completion: stop the running loop fiber, then
       // perform terminal cleanup (publish done-updated → delete → publish cleared).
+      // State transitions are budget-neutral — turns_used counts continuation
+      // dispatches only (see spec: turn-budget-counts-continuation-dispatches-only),
+      // so markDone does NOT increment. deleteAndPublishDone loads the current
+      // row (preserving whatever turns_used a prior continue dispatch set) and
+      // re-renders the done snapshot from it.
       yield* clearFiber(sessionID)
-      // Increment turns_used so this completion path reports the same
-      // "N turns" count as updateAfterJudge (which also += 1 before marking
-      // done). Without this, status lines and event payloads disagree on
-      // whether the terminal turn was consumed.
-      const current = yield* loadState(sessionID)
-      if (current) {
-        const incremented = new GoalState.Info({
-          ...current,
-          turns_used: (current.turns_used + 1) as any,
-          last_turn_at: Date.now(),
-        })
-        yield* saveState(sessionID, incremented)
-      }
       return yield* deleteAndPublishDone(sessionID, reason)
     })
 
@@ -367,14 +359,24 @@ export const layer = Layer.effect(
         const updated = new GoalState.Info({
           ...state,
           status: "done",
-          turns_used: (state.turns_used + 1) as any,
+          // State transitions are budget-neutral — a `done` verdict drives no
+          // continuation dispatch, so it must NOT consume budget. turns_used
+          // reflects only continuation dispatches (see spec:
+          // turn-budget-counts-continuation-dispatches-only).
+          turns_used: state.turns_used,
           last_turn_at: now,
           last_verdict: "done",
           last_reason: reason,
           consecutive_parse_failures: newParseFailures as any,
         })
         yield* saveState(sessionID, updated)
-        yield* publishGoal(sessionID, updated)
+        // Do NOT publish goal.updated here. deleteAndPublishDone is the SOLE
+        // owner of the terminal event sequence (goal.updated(done) → delete →
+        // goal.cleared); publishing here would double-fire goal.updated(done)
+        // on every judge-declared completion (see spec:
+        // terminal-event-contract-publishes-exactly-once). We still saveState
+        // so deleteAndPublishDone can load the done row and re-render the
+        // snapshot. loop.ts invokes deleteAndPublishDone after this returns.
         return {
           state: updated,
           shouldContinue: false,
