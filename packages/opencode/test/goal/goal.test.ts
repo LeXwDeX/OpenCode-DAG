@@ -722,3 +722,88 @@ describe("Goal.pauseAndPublish — pause transition is uninterruptible (F1)", ()
     }),
   )
 })
+
+// ── Goal.dispatch resume — busy guard (D5) ─────────────────────────
+//
+// `/goal resume` is a control command and bypasses the generic dispatch busy
+// check. Without an explicit guard it would return `kick` on a busy session,
+// prompting prompt.ts to start a second agent loop concurrently. The resume
+// branch now checks sessionStatus first: busy → message (ask to /stop), goal
+// stays paused; idle → kick as before (including the budget-exhaustion announce).
+//
+// SessionStatus is mocked (rather than the real defaultLayer) so the test can
+// pin the busy/idle verdict Goal.dispatch observes without dragging in
+// InstanceRef/InstanceState machinery. Goal.layer is provided the mock, so
+// dispatch queries the same controllable instance.
+
+const mockStatusLayer = (status: SessionStatus.Info) =>
+  Layer.succeed(SessionStatus.Service, {
+    get: () => Effect.succeed(status),
+    set: () => Effect.void,
+    list: () => Effect.succeed(new Map()),
+  })
+
+const resumeLayer = (status: SessionStatus.Info) =>
+  Goal.layer.pipe(
+    Layer.provide(mockStatusLayer(status)),
+    Layer.provide(Database.defaultLayer),
+    Layer.provideMerge(EventV2Bridge.defaultLayer),
+  )
+
+describe("Goal.dispatch resume — busy guard (D5)", () => {
+  testEffect(resumeLayer({ type: "busy" })).live(
+    "busy session: /goal resume returns a message and keeps the goal paused",
+    () =>
+      Effect.gen(function* () {
+        const goal = yield* Goal.Service
+        const sessionID = SessionID.descending()
+        yield* goal.set(sessionID, "ship feature X", 10)
+        yield* goal.pause(sessionID, "user-paused")
+
+        const result = yield* goal.dispatch(sessionID, "resume")
+
+        expect(result.type).toBe("message")
+        const loaded = yield* goal.load(sessionID)
+        expect(loaded?.status).toBe("paused")
+      }),
+  )
+
+  testEffect(resumeLayer({ type: "idle" })).live(
+    "idle session: /goal resume returns a kick and reactivates the goal",
+    () =>
+      Effect.gen(function* () {
+        const goal = yield* Goal.Service
+        const sessionID = SessionID.descending()
+        yield* goal.set(sessionID, "ship feature X", 10)
+        yield* goal.pause(sessionID, "user-paused")
+
+        const result = yield* goal.dispatch(sessionID, "resume")
+
+        expect(result.type).toBe("kick")
+        const loaded = yield* goal.load(sessionID)
+        expect(loaded?.status).toBe("active")
+      }),
+  )
+
+  // Budget-exhausted resume still returns kick on idle (the existing announce
+  // UX), but the busy guard must take precedence over the kick path.
+  testEffect(resumeLayer({ type: "busy" })).live(
+    "busy session: resume does not kick even when budget is exhausted",
+    () =>
+      Effect.gen(function* () {
+        const goal = yield* Goal.Service
+        const sessionID = SessionID.descending()
+        // max_turns 1 → one continue exhausts the budget and auto-pauses.
+        yield* goal.set(sessionID, "ship feature X", 1)
+        yield* goal.updateAfterJudge(sessionID, "continue", "more", false)
+        const paused = yield* goal.load(sessionID)
+        expect(paused?.status).toBe("paused")
+
+        const result = yield* goal.dispatch(sessionID, "resume")
+
+        expect(result.type).toBe("message")
+        const loaded = yield* goal.load(sessionID)
+        expect(loaded?.status).toBe("paused")
+      }),
+  )
+})

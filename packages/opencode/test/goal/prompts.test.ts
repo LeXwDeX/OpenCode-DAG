@@ -13,7 +13,7 @@ function mkState(overrides: Partial<{
   max_turns: number
   created_at: number
   last_turn_at: number
-  last_verdict: "done" | "continue" | "skipped"
+  last_verdict: "done" | "continue"
   last_reason: string
   paused_reason: string
   subgoals: ReadonlyArray<string>
