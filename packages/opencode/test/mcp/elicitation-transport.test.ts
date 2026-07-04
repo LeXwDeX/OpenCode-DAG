@@ -1,5 +1,5 @@
-import { afterEach, describe, expect } from "bun:test"
-import { Effect, Fiber, Layer, Exit } from "effect"
+import { afterEach, beforeEach, describe, expect } from "bun:test"
+import { Cause, Effect, Fiber, Layer, Exit } from "effect"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
@@ -28,6 +28,14 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 // (reply → accept), and does not corrupt the in-flight tool call. The blocking
 // Question.ask during a tool call is exactly the "during a streaming turn" shape —
 // an MCP tool blocks on elicitation exactly as it blocks on any slow operation.
+
+beforeEach(() => {
+  // Explicit pre-test reset. bun runs the whole suite in one process, so a
+  // module-level activeSession slot left behind by a prior file would route
+  // this test's elicitation to the wrong session (or none) before callTool
+  // gets to set the fallback. afterEach alone only cleans up after each test.
+  setActiveElicitationSession(undefined)
+})
 
 afterEach(async () => {
   setActiveElicitationSession(undefined)
@@ -99,6 +107,17 @@ const awaitValue = <A, E>(fiber: Fiber.Fiber<A, E>) =>
     return exit.value
   })
 
+// Non-blocking snapshot of a fiber's state for timeout diagnostics: resolved
+// (with its result text), failed (with the cause), or still pending. Used to
+// tell a silent decline (callTool resolved with `elicit decline`) apart from a
+// genuine hang (still in flight) when the surfacing poll times out.
+const describeFiber = <A, E>(fiber: Fiber.Fiber<A, E>): string => {
+  const exit = fiber.pollUnsafe()
+  if (exit === undefined) return "pending (tool call still in flight)"
+  if (Exit.isSuccess(exit)) return `resolved: ${JSON.stringify((exit.value as { content?: unknown })?.content)}`
+  return `failed: ${Cause.pretty(exit.cause)}`
+}
+
 describe("mcp elicitation — real transport round-trip (5.4)", () => {
   it.instance("server elicits mid-tool-call; client surfaces, user replies, accept round-trips", () =>
     Effect.gen(function* () {
@@ -133,14 +152,34 @@ describe("mcp elicitation — real transport round-trip (5.4)", () => {
       staleCleanup()
       const callFiber = yield* Effect.promise(() => client.callTool({ name: "pick", arguments: {} })).pipe(Effect.forkScoped)
 
-      // The elicitation surfaces as a pending Question.
+      // The elicitation surfaces as a pending Question. Filter by this test's
+      // SESSION so a pending question leaked from a prior file (bun runs the
+      // full suite in one process) can't trip the count check; the total list
+      // is retained for the timeout diagnostic below.
+      let lastItems: readonly Question.Request[] = []
       const pending = yield* pollWithTimeout(
         Effect.gen(function* () {
-          const items = yield* question.list()
-          return items.length === 1 ? (items as readonly Question.Request[]) : undefined
+          const items = (yield* question.list()) as readonly Question.Request[]
+          lastItems = items
+          const mine = items.filter((x) => String(x.sessionID) === SESSION)
+          return mine.length === 1 ? mine : undefined
         }),
         "elicitation never surfaced as a Question",
         "15 seconds",
+      ).pipe(
+        // Self-diagnose on timeout: the callTool fiber's non-blocking poll
+        // separates a silent decline (resolved with `elicit decline`) from a
+        // genuine hang (still pending), and the list snapshot shows whether
+        // the Question surfaced at all.
+        Effect.catch(
+          () =>
+            Effect.fail(
+              new Error(
+                "elicitation never surfaced as a Question — " +
+                  `question.list()=${JSON.stringify(lastItems)}; callFiber: ${describeFiber(callFiber)}`,
+              ),
+            ),
+        ),
       )
       expect(String(pending[0].sessionID)).toBe(SESSION)
 

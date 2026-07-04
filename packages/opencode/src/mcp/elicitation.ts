@@ -253,8 +253,16 @@ export const handleElicitation = Effect.fn("MCP.elicitation.handle")(function* (
   const notification = Option.getOrUndefined(yield* Effect.serviceOption(Notification.Service))
   const sessionID = input.sessionID
 
-  // No interaction layer or no session context → decline immediately.
+  // No interaction layer or no session context → decline immediately. These
+  // branches used to decline silently (Question never surfaces, the caller just
+  // sees a decline), which made routing failures unobservable; log the reason
+  // and a routing snapshot so a decline here is diagnosable in production logs.
   if (!question || !sessionID) {
+    yield* Effect.logWarning("elicitation declined without surfacing", {
+      reason: !question ? "no Question service" : "no sessionID",
+      sessionContext: SessionContext.sessionID,
+      activeSessionFallback: activeSession.map((entry) => entry.id),
+    })
     return { action: "decline" } satisfies ElicitResponse
   }
 
@@ -277,6 +285,7 @@ export const handleElicitation = Effect.fn("MCP.elicitation.handle")(function* (
       )
     yield* SettingsHook.landSystemMessages(hookResult as TriggerResult, { sessionID })
     if ((hookResult as TriggerResult).blocked) {
+      yield* Effect.logWarning("elicitation declined: hook blocked")
       return { action: "decline" } satisfies ElicitResponse
     }
   }
