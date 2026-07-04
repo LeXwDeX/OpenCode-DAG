@@ -1,0 +1,73 @@
+import { Cause, Exit } from "effect"
+import type { TriggerResult } from "./settings"
+
+/**
+ * Pure synchronous reduction of a PreToolUse `TriggerResult` into the three
+ * decisions a tool-execution call site must act on.
+ *
+ * Centralizes:
+ * - deny / blocked → `deniedReason` (caller returns a denied result)
+ * - preventContinuation → `stopReason` (caller short-circuits with a stop message)
+ * - updatedInput → `effectiveArgs` (shallow merge, hook fields override; last hook wins,
+ *   matching CC's documented behavior — the trigger reducer already overwrites
+ *   `updatedInput` per hook so the final value is the last hook's).
+ *
+ * `permissionDecision:"ask"` is intentionally NOT handled here — it requires the
+ * effectful permission dialog (`permission.ask`), which stays at each call site
+ * (paths with a permission context) or degrades to deny (paths without).
+ */
+export interface PreHookDecision {
+  /** Arguments the tool should actually execute with (original, or merged with updatedInput). */
+  readonly effectiveArgs: Record<string, unknown>
+  /** Set when the hook denied/blocked — caller returns a denied result. */
+  readonly deniedReason?: string
+  /** Set when the hook requested continuation stop — caller short-circuits with a stop message. */
+  readonly stopReason?: string
+}
+
+export function applyPreHookDecision(
+  args: Record<string, unknown>,
+  preResult: TriggerResult | undefined,
+): PreHookDecision {
+  if (!preResult) return { effectiveArgs: args }
+
+  if (preResult.permissionDecision === "deny" || preResult.blocked) {
+    const deniedReason =
+      preResult.permissionDecisionReason ?? preResult.blocked?.reason ?? "Denied by PreToolUse hook"
+    return { effectiveArgs: args, deniedReason }
+  }
+
+  if (preResult.preventContinuation) {
+    const stopReason = preResult.stopReason ?? "Hook requested stop"
+    return { effectiveArgs: args, stopReason }
+  }
+
+  const effectiveArgs = preResult.updatedInput ? { ...args, ...preResult.updatedInput } : args
+  return { effectiveArgs }
+}
+
+// ── Permission "ask" verdict classification ─────────────────────────────
+//
+// `permissionDecision:"ask"` triggers a confirmation dialog via
+// `permission.ask(...).pipe(Effect.exit)`. A naive `Exit.isFailure` check would
+// wrongly treat a session ABORT mid-dialog (interrupt cause) or an internal bug
+// (defect cause) as a user denial, masking both as `[Tool denied by hook]`.
+//
+// Only a *typed* permission rejection (DeniedError / RejectedError /
+// CorrectedError) is a real denial. Interrupts and defects MUST propagate so the
+// session aborts / the bug surfaces instead of being silently swallowed.
+export type PermissionAskOutcome =
+  | "approved"
+  | "denied"
+  | { readonly propagate: unknown }
+
+export function classifyPermissionAsk<E>(exit: Exit.Exit<void, E>): PermissionAskOutcome {
+  if (Exit.isSuccess(exit)) return "approved"
+  const cause = exit.cause
+  if (Cause.hasInterrupts(cause) || Cause.hasDies(cause)) {
+    return { propagate: cause }
+  }
+  // No interrupts and no defects ⇒ the remaining failure is a typed permission
+  // rejection in the `E` channel.
+  return "denied"
+}

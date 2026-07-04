@@ -60,7 +60,8 @@ import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
-import { SettingsHook, HOOK_REWAKE_SENTINEL } from "@/hook/settings"
+import { SettingsHook, HOOK_REWAKE_SENTINEL, type TriggerResult } from "@/hook/settings"
+import { applyPreHookDecision } from "@/hook/pre-hook-decision"
 import { HookStartContext } from "@/hook/start-context"
 import { Goal } from "@/goal/goal"
 
@@ -328,19 +329,38 @@ export const layer = Layer.effect(
             { sessionID, transcriptPath: "" },
           )
           .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, permissionDecision: undefined as "allow" | "deny" | "ask" | undefined, permissionDecisionReason: undefined as string | undefined } as any)))
-        if (preResult.permissionDecision === "deny") {
-          const reason = preResult.permissionDecisionReason ?? "Denied by PreToolUse hook"
+        yield* SettingsHook.landSystemMessages(preResult as TriggerResult, { sessionID })
+        const decision = applyPreHookDecision(taskArgs, preResult as any)
+        // deny / blocked → error part
+        if (decision.deniedReason) {
+          if (part.state.status === "running") {
+            part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: decision.deniedReason, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
+          }
+          return { info: assistantMessage, parts: [part] }
+        }
+        // preventContinuation → stop; reflect the stop message as the part output so the agent sees it
+        if (decision.stopReason) {
+          if (part.state.status === "running") {
+            part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: `[Hook stopped] ${decision.stopReason}`, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
+          }
+          return { info: assistantMessage, parts: [part] }
+        }
+        // permissionDecision:"ask" — task-tool dispatch has no permission dialog; degrade to deny.
+        if (preResult.permissionDecision === "ask") {
+          const reason = "Hook requested confirmation but no dialog available"
+          yield* Effect.logWarning("PreToolUse hook asked for confirmation on task-tool path; degrading to deny", {
+            agent: task.agent,
+            reason,
+            hookReason: preResult.permissionDecisionReason,
+          })
           if (part.state.status === "running") {
             part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: reason, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
           }
           return { info: assistantMessage, parts: [part] }
         }
-        if (preResult.blocked) {
-          const reason = (preResult.blocked as any)?.reason ?? "Blocked by PreToolUse hook"
-          if (part.state.status === "running") {
-            part = yield* sessions.updatePart({ ...part, state: { ...part.state, status: "error", error: reason, time: { ...part.state.time, end: Date.now() } } } satisfies SessionV1.ToolPart)
-          }
-          return { info: assistantMessage, parts: [part] }
+        // updatedInput → shallow-merge into taskArgs before dispatch
+        if (decision.effectiveArgs !== taskArgs) {
+          Object.assign(taskArgs, decision.effectiveArgs)
         }
       }
 
@@ -428,12 +448,18 @@ export const layer = Layer.effect(
 
       // SettingsHook: PostToolUse for task tool
       if (settingsHook) {
-        yield* settingsHook
+        const postResult: any = yield* settingsHook
           .trigger(
             { event: "PostToolUse", toolName: TaskTool.id, toolInput: taskArgs, toolResponse: result?.output ?? "", toolUseID: part.callID } as any,
             { sessionID, transcriptPath: "" },
           )
-          .pipe(Effect.ignore)
+          .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+        yield* SettingsHook.landSystemMessages(postResult as TriggerResult, { sessionID })
+        // PostToolUse preventContinuation: tool already executed, annotate its output.
+        if (postResult?.preventContinuation && result) {
+          const stopReason = postResult.stopReason ?? "Hook requested stop"
+          ;(result as any).output = `${result.output ?? ""}\n\n[Hook stopped] ${stopReason}`
+        }
       }
 
       assistantMessage.finish = "tool-calls"
@@ -576,7 +602,11 @@ export const layer = Layer.effect(
           let mutablePart = part
           const cfg = yield* config.get()
           const sh = Shell.preferred(cfg.shell)
-          const args = Shell.args(sh, input.command, cwd)
+          // effectiveCommand mirrors input.command but is mutable: a PreToolUse hook
+          // with `updatedInput` may rewrite it. args / part display / PostToolUse toolInput
+          // all read effectiveCommand so a rewrite is reflected end-to-end.
+          let effectiveCommand = input.command
+          let args = Shell.args(sh, effectiveCommand, cwd)
           let output = ""
           let aborted = false
           let shellHookDenied = false
@@ -620,7 +650,7 @@ export const layer = Layer.effect(
                 { cwd, sessionID: input.sessionID, callID: mutablePart.callID },
                 { env: {} },
               )
-              // SettingsHook: PreToolUse for shell — can deny/block execution
+              // SettingsHook: PreToolUse for shell — can deny/block/stop execution or rewrite the command
               if (settingsHook) {
                 const preResult = yield* settingsHook
                   .trigger(
@@ -628,11 +658,36 @@ export const layer = Layer.effect(
                     { sessionID: input.sessionID, transcriptPath: "" },
                   )
                   .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, permissionDecision: undefined as "allow" | "deny" | "ask" | undefined, permissionDecisionReason: undefined as string | undefined } as any)))
-                if (preResult.permissionDecision === "deny" || preResult.blocked) {
+                yield* SettingsHook.landSystemMessages(preResult as TriggerResult, { sessionID: input.sessionID })
+                const decision = applyPreHookDecision({ command: input.command }, preResult as any)
+                // deny / blocked / stop / ask-degrade all skip execution; each surfaces its own message.
+                let skipReason: string | undefined
+                if (decision.deniedReason) {
                   shellHookDenied = true
-                  const reason = preResult.permissionDecisionReason ?? (preResult.blocked as any)?.reason ?? "Denied by PreToolUse hook"
-                  const errorState = { status: "error" as const, error: reason, time: { start: (mutablePart.state as any).time?.start ?? Date.now(), end: Date.now() }, input: mutablePart.state.input }
+                  skipReason = decision.deniedReason
+                } else if (decision.stopReason) {
+                  shellHookDenied = true
+                  skipReason = `[Hook stopped] ${decision.stopReason}`
+                } else if (preResult.permissionDecision === "ask") {
+                  // Shell dispatch has no permission dialog — degrade ask to deny (design D3).
+                  shellHookDenied = true
+                  skipReason = "Hook requested confirmation but no dialog available"
+                  yield* Effect.logWarning("PreToolUse hook asked for confirmation on shell path; degrading to deny", {
+                    reason: skipReason,
+                    hookReason: preResult.permissionDecisionReason,
+                  })
+                }
+                if (skipReason !== undefined) {
+                  const errorState = { status: "error" as const, error: skipReason, time: { start: (mutablePart.state as any).time?.start ?? Date.now(), end: Date.now() }, input: mutablePart.state.input }
                   mutablePart = yield* sessions.updatePart({ ...mutablePart, state: errorState as any } satisfies SessionV1.ToolPart)
+                } else if (decision.effectiveArgs.command !== undefined && decision.effectiveArgs.command !== input.command) {
+                  // updatedInput rewrote the command — sync execution (args), TUI display (part.state.input),
+                  // and PostToolUse toolInput (which reads effectiveCommand below). `!== undefined` (not
+                  // truthiness) so a hook that clears the command to "" is honored rather than ignored.
+                  effectiveCommand = decision.effectiveArgs.command as string
+                  args = Shell.args(sh, effectiveCommand, cwd)
+                  mutablePart.state.input = { ...(mutablePart.state.input ?? {}), command: effectiveCommand }
+                  yield* sessions.updatePart(mutablePart)
                 }
               }
               if (!shellHookDenied) {
@@ -665,12 +720,22 @@ export const layer = Layer.effect(
 
           // SettingsHook: PostToolUse for shell command (skip if hook denied)
           if (settingsHook && !shellHookDenied) {
-            yield* settingsHook
+            const postResult: any = yield* settingsHook
               .trigger(
-                { event: "PostToolUse", toolName: "bash", toolInput: { command: input.command }, toolResponse: output, toolUseID: mutablePart.callID } as any,
+                { event: "PostToolUse", toolName: "bash", toolInput: { command: effectiveCommand }, toolResponse: output, toolUseID: mutablePart.callID } as any,
                 { sessionID: input.sessionID, transcriptPath: "" },
               )
-              .pipe(Effect.ignore)
+              .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+            yield* SettingsHook.landSystemMessages(postResult as TriggerResult, { sessionID: input.sessionID })
+            // PostToolUse preventContinuation: annotate output (command already ran).
+            if (postResult?.preventContinuation) {
+              const stopReason = postResult.stopReason ?? "Hook requested stop"
+              output += `\n\n[Hook stopped] ${stopReason}`
+              if (mutablePart.state.status === "completed") {
+                mutablePart.state = { ...mutablePart.state, output, metadata: { output } } as any
+                yield* sessions.updatePart(mutablePart)
+              }
+            }
           }
 
           if (Exit.isFailure(exit) && !aborted && !Cause.hasInterruptsOnly(exit.cause)) {
@@ -1244,6 +1309,22 @@ export const layer = Layer.effect(
           )
           .pipe(Effect.catch(() => Effect.succeed({ blocked: undefined, additionalContexts: [] as string[] } as any)))
         hookAdditionalContexts = hookResult.additionalContexts ?? []
+        // Land UserPromptSubmit systemMessages (logged always; injected as synthetic
+        // parts when the turn proceeds so the model sees them — no silent drop).
+        yield* SettingsHook.landSystemMessages(hookResult, {
+          sessionID: input.sessionID,
+          inject: hookResult.blocked
+            ? undefined
+            : (text) =>
+                sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: message.info.id,
+                  sessionID: input.sessionID,
+                  type: "text",
+                  text,
+                  synthetic: true,
+                } satisfies SessionV1.TextPart),
+        })
         if (hookResult.blocked) return message
       }
 
@@ -1290,7 +1371,24 @@ export const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        // Error carried by the assistant message when the turn loop breaks — drives
+        // Stop vs StopFailure hook selection at loop exit.
+        let turnError: SessionV1.Assistant["error"]
+        // stop_hook_active signal: true when this turn is a continuation after a Stop
+        // hook returned block. Resets naturally on the next runLoop invocation (a new
+        // user prompt starts a fresh turn). See CC stop-hook anti-loop semantics.
+        let stopHookBlocked = false
+        // Stop-hook continuation counter: caps how many times a blocked Stop hook may
+        // drive another model turn, guarding against a hook that ignores
+        // stop_hook_active (mirrors task.ts SubagentStop hard limit).
+        let stopContinuationCount = 0
+        // When a Stop hook blocks, the agent gets another model turn; this flag skips
+        // the "already finished" exit for one iteration so the turn can actually run.
+        let forceContinue = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+        // Capture the lastAssistant helper before the loop's destructured `lastAssistant`
+        // (the latest assistant info) shadows it inside the step body.
+        const getLastAssistant = lastAssistant
 
         while (true) {
           yield* status.set(sessionID, { type: "busy" })
@@ -1332,8 +1430,97 @@ export const layer = Layer.effect(
                 callID: orphan.callID,
               })
             }
-            yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
-            break
+            // Stop-hook continuation: when forceContinue is set (a prior Stop hook
+            // blocked), skip the Stop exit for one iteration so another model turn
+            // runs; reset the flag so that turn can finish and Stop normally.
+            if (forceContinue) {
+              forceContinue = false
+            } else {
+              yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
+              yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
+              // SettingsHook: Stop on clean turn exit, StopFailure when it ended in error.
+              if (settingsHook) {
+                const lastAssistantMessage =
+                  lastAssistantMsg?.parts
+                    .filter((part): part is SessionV1.TextPart => part.type === "text")
+                    .map((part) => part.text)
+                    .join("") || undefined
+                const stopPayload = turnError
+                  ? ({
+                      event: "StopFailure",
+                      stopHookActive: stopHookBlocked,
+                      error:
+                        typeof (turnError as { data?: { message?: unknown } }).data?.message === "string"
+                          ? ((turnError as { data: { message: string } }).data.message as string)
+                          : JSON.stringify(turnError),
+                      lastAssistantMessage,
+                    } as const)
+                  : ({ event: "Stop", stopHookActive: stopHookBlocked, lastAssistantMessage } as const)
+                const stopResult = yield* settingsHook
+                  .trigger(stopPayload, { sessionID, transcriptPath: "" })
+                  .pipe(
+                    Effect.catch(() =>
+                      Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult),
+                    ),
+                  )
+                // Consume Stop-hook outputs so nothing is silently dropped: inject
+                // additionalContexts as synthetic text parts (model-visible on the
+                // continuation turn, recorded in history on exit) and land any
+                // systemMessages via the shared outlet (log + inject here).
+                for (const ctx of stopResult.additionalContexts ?? []) {
+                  yield* sessions.updatePart({
+                    id: PartID.ascending(),
+                    messageID: lastUser.id,
+                    sessionID,
+                    type: "text",
+                    text: ctx,
+                    synthetic: true,
+                  } satisfies SessionV1.TextPart)
+                }
+                yield* SettingsHook.landSystemMessages(stopResult, {
+                  sessionID,
+                  inject: (message) =>
+                    sessions.updatePart({
+                      id: PartID.ascending(),
+                      messageID: lastUser.id,
+                      sessionID,
+                      type: "text",
+                      text: message,
+                      synthetic: true,
+                    } satisfies SessionV1.TextPart),
+                })
+                // Stop-hook block → drive another model turn. The next Stop then carries
+                // stop_hook_active=true so a well-behaved hook stops blocking (anti-loop).
+                // Capped by MAX_STOP_CONTINUATIONS so a hook that ignores the signal
+                // can't loop forever; at the limit we log.warn and force a normal exit.
+                if (!turnError && stopResult.blocked) {
+                  if (stopContinuationCount < SettingsHook.MAX_STOP_CONTINUATIONS) {
+                    stopContinuationCount++
+                    stopHookBlocked = true
+                    // Inject the block reason as a synthetic part so the model knows why
+                    // it is being asked to continue (mirrors task.ts SubagentStop).
+                    const reason = stopResult.blocked.reason
+                    if (reason) {
+                      yield* sessions.updatePart({
+                        id: PartID.ascending(),
+                        messageID: lastUser.id,
+                        sessionID,
+                        type: "text",
+                        text: reason,
+                        synthetic: true,
+                      } satisfies SessionV1.TextPart)
+                    }
+                    forceContinue = true
+                    continue
+                  }
+                  yield* Effect.logWarning("Stop hook continuation limit reached; forcing exit", {
+                    "session.id": sessionID,
+                    limit: SettingsHook.MAX_STOP_CONTINUATIONS,
+                  })
+                }
+              }
+              return yield* getLastAssistant(sessionID)
+            }
           }
 
           step++
@@ -1541,21 +1728,15 @@ export const layer = Layer.effect(
             Effect.ensuring(instruction.clear(handle.message.id)),
             Effect.onInterrupt(() => finalizeInterruptedAssistant),
           )
-          if (outcome === "break") break
+          // The turn finished (outcome "break") or is ongoing (tool calls). Either way
+          // loop back: the finished-check at the top of the next iteration fires the
+          // Stop hook and returns once the agent is truly done.
+          if (outcome === "break") turnError = handle.message.error
           continue
         }
-
-        yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
-        // SettingsHook: Stop hook on loop exit
-        if (settingsHook) {
-          yield* settingsHook
-            .trigger(
-              { event: "Stop", stopHookActive: false } as any,
-              { sessionID, transcriptPath: "" },
-            )
-            .pipe(Effect.ignore)
-        }
-        return yield* lastAssistant(sessionID)
+        // Unreachable: the step loop above only exits via `return` inside the
+        // finished-check. Kept so TS infers a definite return type for runLoop.
+        return yield* getLastAssistant(sessionID)
       },
     )
 

@@ -2,12 +2,13 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { ConfigPermissionV1 } from "@opencode-ai/core/v1/config/permission"
 import { InstanceState } from "@/effect/instance-state"
 import { Wildcard } from "@opencode-ai/core/util/wildcard"
-import { Deferred, Effect, Layer, Context } from "effect"
+import { Deferred, Effect, Layer, Context, Scope } from "effect"
 import * as Option from "effect/Option"
 import os from "os"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SettingsHook } from "@/hook/settings"
+import { Notification } from "@/notification"
 import { PermissionV1Event } from "@opencode-ai/schema/permission-v1"
 
 export const Event = PermissionV1Event
@@ -45,8 +46,11 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pe
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
+    const scope = yield* Scope.Scope
     const events = yield* EventV2Bridge.Service
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+    // Notification.Service is resolved at call time (inside ask) — see the emitter
+    // module for why Layer.mergeAll siblings don't cross-provide at construction.
     const state = yield* InstanceState.make<State>(
       Effect.fn("Permission.state")(function* (ctx) {
         void ctx
@@ -78,19 +82,22 @@ export const layer = Layer.effect(
         yield* Effect.logInfo("evaluated", { permission: request.permission, pattern, action: rule })
         if (rule.action === "deny") {
           if (settingsHook) {
-            yield* settingsHook.trigger(
-              {
-                event: "PermissionDenied",
-                toolName: request.permission,
-                toolInput: {
-                  permission: request.permission,
-                  pattern,
-                  ruleset: ruleset.filter((r) => Wildcard.match(request.permission, r.permission)),
-                },
-                toolUseID: request.permission,
-              } as any,
-              { sessionID: request.sessionID ?? "", transcriptPath: "" },
-            ).pipe(Effect.ignore)
+            const pdResult = yield* settingsHook
+              .trigger(
+                {
+                  event: "PermissionDenied",
+                  toolName: request.permission,
+                  toolInput: {
+                    permission: request.permission,
+                    pattern,
+                    ruleset: ruleset.filter((r) => Wildcard.match(request.permission, r.permission)),
+                  },
+                  toolUseID: request.permission,
+                } as any,
+                { sessionID: request.sessionID ?? "", transcriptPath: "" },
+              )
+              .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })))
+            yield* SettingsHook.landSystemMessages(pdResult, { sessionID: request.sessionID ?? "" })
           }
           return yield* new PermissionV1.DeniedError({
             ruleset: ruleset.filter((rule) => Wildcard.match(request.permission, rule.permission)),
@@ -131,7 +138,8 @@ export const layer = Layer.effect(
             toolUseID: id,
           } as any,
           { sessionID: request.sessionID ?? "", transcriptPath: "" },
-        ).pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined } as any)))
+        ).pipe(Effect.catch(() => Effect.succeed({ permissionDecision: undefined, additionalContexts: [], systemMessages: [] } as any)))
+        yield* SettingsHook.landSystemMessages(hookResult as any, { sessionID: request.sessionID ?? "" })
         // Auto-approve/deny based on hook decision
         if ((hookResult as any).permissionDecision === "allow") {
           hookAutoDecided = true
@@ -148,6 +156,21 @@ export const layer = Layer.effect(
       // Only publish Event.Asked if hook didn't already handle the decision
       if (!hookAutoDecided) {
         yield* events.publish(Event.Asked, info)
+        // Notification emitter — routes "agent needs attention" through the single
+        // choke point (which fires the Notification hook). Resolved at call time so
+        // merged compositions find it. Forked so it never blocks the permission flow.
+        const notification = Option.getOrUndefined(yield* Effect.serviceOption(Notification.Service))
+        if (notification) {
+          // Fire-and-forget: the emitter's notify is tolerant (Effect.ignore), so
+          // it cannot alter the permission flow. Forked into the layer scope so it
+          // outlives the ask without blocking the Deferred.await below.
+          yield* notification
+            .notify({
+              message: `Permission requested: ${request.permission} (${request.patterns.join(", ")})`,
+              notificationType: "permission",
+            })
+            .pipe(Effect.ignore, Effect.forkIn(scope), Effect.asVoid)
+        }
       }
       return yield* Effect.ensuring(
         Deferred.await(deferred),
@@ -268,6 +291,6 @@ export const defaultLayer = layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
 )
 
-export const node = LayerNode.make(layer, [EventV2Bridge.node, SettingsHook.node])
+export const node = LayerNode.make(layer, [EventV2Bridge.node, SettingsHook.node, Notification.node])
 
 export * as Permission from "."
