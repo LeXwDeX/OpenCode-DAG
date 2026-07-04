@@ -161,13 +161,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
               // effectiveArgs reflects any PreToolUse updatedInput rewrite (shallow merge).
               args = decision.effectiveArgs
             }
-            // Set the active session for server-initiated MCP elicitation. The
-            // SDK transport dispatch breaks AsyncLocalStorage, so the elicitation
-            // handler reads this module-level slot (set here, cleared below) to
-            // route the surfaced Question to this session.
-            setActiveElicitationSession(ctx.sessionID)
-            const result = yield* item.execute(args, ctx)
-            setActiveElicitationSession(undefined)
+            const result = yield* Effect.suspend(() => {
+              const cleanup = setActiveElicitationSession(ctx.sessionID)
+              return item.execute(args, ctx).pipe(Effect.ensuring(Effect.sync(cleanup)))
+            })
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -556,7 +553,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
             yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-            return yield* Effect.promise(() => execute(args, opts))
+            return yield* Effect.suspend(() => {
+              const cleanup = setActiveElicitationSession(ctx.sessionID)
+              return Effect.promise(() => execute(args, opts)).pipe(Effect.ensuring(Effect.sync(cleanup)))
+            })
           }).pipe(
             Effect.withSpan("Tool.execute", {
               attributes: {
