@@ -1,6 +1,6 @@
 export * as GoalLoop from "./loop"
 
-import { Effect, Layer, Context, Option, Stream, Scope, Fiber } from "effect"
+import { Effect, Layer, Context, Option, Stream, Scope, Fiber, Cause } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -318,10 +318,28 @@ export const layer = Layer.effect(
         lastJudgeReason: reloadedState.last_reason,
       })
 
-      yield* promptSvc.prompt({
-        sessionID,
-        parts: [{ type: "text", text: continuationText }],
-      })
+      // Continuation dispatch can fail (provider fault, session write error,
+      // …). Previously the error escaped to the fork-point Effect.ignore and
+      // was swallowed, leaving the goal silently `active` with no idle event
+      // to drive the next turn — a permanent, invisible stall. Catch the full
+      // cause (recoverable failures + defects) and transition to a recoverable
+      // paused state via the fiber-safe pauseAndPublish (goal.pause would
+      // clearFiber — us — mid-publish; see the preempt branches above).
+      yield* promptSvc
+        .prompt({
+          sessionID,
+          parts: [{ type: "text", text: continuationText }],
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("goal continuation dispatch failed", { error: Cause.pretty(cause) })
+              yield* goal.pauseAndPublish(sessionID, `continuation dispatch failed: ${Cause.pretty(cause)}`).pipe(
+                Effect.ignore,
+              )
+            }),
+          ),
+        )
 
       // NOTE: We deliberately DO NOT call goal.clearLoopFiber here. The
       // promptSvc.prompt above triggers a fresh agent loop, which when it

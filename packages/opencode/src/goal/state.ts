@@ -23,3 +23,13 @@ export class Info extends Schema.Class<Info>("GoalState")({
   consecutive_parse_failures: NonNegativeInt,
   subgoals: Schema.Array(Schema.String).pipe(Schema.optional, Schema.withDecodingDefault(Effect.succeed([] as ReadonlyArray<string>))),
 }) {}
+
+/**
+ * Construct a goal NonNegativeInt field from a plain number, centralizing the
+ * one unavoidable cast. Every call site computes these from validated
+ * arithmetic (0, prev+1, clamped parse-failure counters) so the runtime ≥0
+ * filter is redundant here; this keeps the escape hatch at a single audited
+ * site instead of `as any` scattered across goal.ts.
+ */
+export const nni = (value: number): Schema.Schema.Type<typeof NonNegativeInt> =>
+  value as Schema.Schema.Type<typeof NonNegativeInt>

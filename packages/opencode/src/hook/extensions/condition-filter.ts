@@ -31,8 +31,17 @@ export function evaluate(
   const condition = entry.if
   if (!condition || condition.trim() === "" || condition.trim() === "*") return true
 
-  // Only tool events support condition filtering
-  if (event !== "PreToolUse" && event !== "PostToolUse" && event !== "PostToolUseFailure") {
+  // Tool events that match by tool_name support `if` condition filtering.
+  // This set MUST stay in sync with `matcherTarget` in settings.ts — matcher and
+  // `if` must agree on which events are tool-bound, otherwise `if` would be
+  // silently ignored on events where the matcher still matches by tool_name.
+  if (
+    event !== "PreToolUse" &&
+    event !== "PostToolUse" &&
+    event !== "PostToolUseFailure" &&
+    event !== "PermissionRequest" &&
+    event !== "PermissionDenied"
+  ) {
     return true
   }
 

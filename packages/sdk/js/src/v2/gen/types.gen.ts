@@ -9932,6 +9932,198 @@ export type SessionGoalResponses = {
 
 export type SessionGoalResponse = SessionGoalResponses[keyof SessionGoalResponses]
 
+export type SessionHookListData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/hook"
+}
+
+export type SessionHookListErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionHookListError = SessionHookListErrors[keyof SessionHookListErrors]
+
+export type SessionHookListResponses = {
+  /**
+   * Session hook entries
+   */
+  200: Array<{
+    id: string
+    event:
+      | "PreToolUse"
+      | "PostToolUse"
+      | "PostToolUseFailure"
+      | "Notification"
+      | "UserPromptSubmit"
+      | "PermissionRequest"
+      | "PermissionDenied"
+      | "Setup"
+      | "Stop"
+      | "StopFailure"
+      | "SubagentStart"
+      | "SubagentStop"
+      | "PreCompact"
+      | "PostCompact"
+      | "SessionStart"
+      | "SessionEnd"
+      | "TaskCreated"
+      | "TaskCompleted"
+      | "Elicitation"
+      | "ElicitationResult"
+      | "ConfigChange"
+      | "WorktreeCreate"
+      | "WorktreeRemove"
+      | "InstructionsLoaded"
+      | "CwdChanged"
+      | "FileChanged"
+    matcher?: string
+    hooks: Array<{
+      type: "command" | "mcp" | "http" | "prompt" | "agent"
+      command?: string
+      url?: string
+      prompt?: string
+      headers?: {
+        [key: string]: string
+      }
+      timeout?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      if?: string
+      async?: boolean
+      asyncRewake?: boolean
+    }>
+    once?: boolean
+  }>
+}
+
+export type SessionHookListResponse = SessionHookListResponses[keyof SessionHookListResponses]
+
+export type SessionHookAddData = {
+  body?: {
+    event:
+      | "PreToolUse"
+      | "PostToolUse"
+      | "PostToolUseFailure"
+      | "Notification"
+      | "UserPromptSubmit"
+      | "PermissionRequest"
+      | "PermissionDenied"
+      | "Setup"
+      | "Stop"
+      | "StopFailure"
+      | "SubagentStart"
+      | "SubagentStop"
+      | "PreCompact"
+      | "PostCompact"
+      | "SessionStart"
+      | "SessionEnd"
+      | "TaskCreated"
+      | "TaskCompleted"
+      | "Elicitation"
+      | "ElicitationResult"
+      | "ConfigChange"
+      | "WorktreeCreate"
+      | "WorktreeRemove"
+      | "InstructionsLoaded"
+      | "CwdChanged"
+      | "FileChanged"
+    matcher?: string
+    hooks: Array<{
+      type: "command" | "mcp" | "http" | "prompt" | "agent"
+      command?: string
+      url?: string
+      prompt?: string
+      headers?: {
+        [key: string]: string
+      }
+      timeout?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+      if?: string
+      async?: boolean
+      asyncRewake?: boolean
+    }>
+    once?: boolean
+  }
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/hook"
+}
+
+export type SessionHookAddErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionHookAddError = SessionHookAddErrors[keyof SessionHookAddErrors]
+
+export type SessionHookAddResponses = {
+  /**
+   * Created hook entry id
+   */
+  200: {
+    id: string
+  }
+}
+
+export type SessionHookAddResponse = SessionHookAddResponses[keyof SessionHookAddResponses]
+
+export type SessionHookRemoveData = {
+  body?: never
+  path: {
+    sessionID: string
+    hookID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/hook/{hookID}"
+}
+
+export type SessionHookRemoveErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionHookRemoveError = SessionHookRemoveErrors[keyof SessionHookRemoveErrors]
+
+export type SessionHookRemoveResponses = {
+  /**
+   * Hook removed
+   */
+  204: void
+}
+
+export type SessionHookRemoveResponse = SessionHookRemoveResponses[keyof SessionHookRemoveResponses]
+
 export type SessionDiffData = {
   body?: never
   path: {

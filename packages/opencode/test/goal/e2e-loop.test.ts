@@ -141,3 +141,112 @@ describe("GoalLoop end-to-end — continue → done lifecycle (P2b)", () => {
     }),
   )
 })
+
+// D1 (hooks-goal-completeness): a continuation dispatch failure must surface as a
+// recoverable paused state, not a silent stall. Reuses the e2e harness with a
+// prompt mock that always fails — the only prompt in this flow is the
+// continuation after judge(continue), so it fails and exercises the catchCause
+// → pauseAndPublish branch added in loop.ts.
+describe("GoalLoop — continuation dispatch failure → recoverable pause (D1)", () => {
+  let judgeCalls = 0
+  const reset = () => {
+    judgeCalls = 0
+  }
+
+  const sessionMock = Layer.succeed(Session.Service, {
+    messages: () => Effect.succeed([mkAssistant()]),
+  } as never)
+  // Always-failing prompt — simulates provider fault / session write error.
+  const promptFailMock = Layer.succeed(SessionPrompt.Service, {
+    prompt: () => Effect.fail(new Error("continuation provider down")),
+  } as never)
+  const providerMock = Layer.succeed(Provider.Service, {} as never)
+  const judgeMock = Layer.succeed(
+    GoalLoopJudgeLLM,
+    GoalLoopJudgeLLM.of({
+      call: () =>
+        Effect.sync(() => {
+          judgeCalls += 1
+          return JSON.stringify({ done: false, reason: "more steps needed" })
+        }),
+    }),
+  )
+  const failLayer = GoalLoop.layer.pipe(
+    Layer.provide(sessionMock),
+    Layer.provide(promptFailMock),
+    Layer.provide(providerMock),
+    Layer.provide(judgeMock),
+    Layer.provideMerge(Goal.defaultLayer),
+    Layer.provide(SessionStatus.defaultLayer),
+    Layer.provideMerge(EventV2Bridge.defaultLayer),
+  )
+  const it = testEffect(failLayer)
+
+  // 1.2 — continuation prompt fails → goal transitions to paused with a reason
+  // and a goal.updated(paused) event; afterIdle does not propagate the error.
+  it.instance("continuation prompt 失败 → goal paused + reason + 事件发布", () =>
+    Effect.gen(function* () {
+      reset()
+      const loop = yield* GoalLoop.Service
+      const goal = yield* Goal.Service
+      const events = yield* EventV2Bridge.Service
+      const seen = yield* captureEvents(events)
+      yield* loop.init()
+      const sid = SessionID.descending()
+      yield* goal.set(sid, "ship the feature", 10)
+      // Let the idle subscription wire (InstanceState builds on first init).
+      yield* Effect.sleep(200)
+
+      // idle → judge(continue) → continuation prompt fails → catchCause → pause
+      yield* events.publish(SessionStatus.Event.Status, { sessionID: sid, status: { type: "idle" } })
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const g = yield* goal.load(sid)
+          return g?.status === "paused" ? true : undefined
+        }),
+        "goal never transitioned to paused after continuation failure",
+        "5 seconds",
+      )
+
+      const paused = yield* goal.load(sid)
+      expect(paused?.status).toBe("paused")
+      expect(String(paused?.paused_reason)).toContain("continuation dispatch failed")
+      // goal.updated(paused) published (SSE/TUI visible)
+      expect(seen.some((e) => e.type === GoalEvent.Updated.type && e.status === "paused")).toBe(true)
+      // The continuation was actually attempted: judge ran, turns_used advanced.
+      expect(judgeCalls).toBeGreaterThanOrEqual(1)
+      expect(Number(paused?.turns_used)).toBe(1)
+    }),
+  )
+
+  // 1.3 — after the failure-induced pause, /goal resume restores active and
+  // preserves the turns_used budget (resume must not silently grant a fresh budget).
+  it.instance("paused 后 resume 恢复 active，turns_used 保留", () =>
+    Effect.gen(function* () {
+      reset()
+      const loop = yield* GoalLoop.Service
+      const goal = yield* Goal.Service
+      const events = yield* EventV2Bridge.Service
+      yield* loop.init()
+      const sid = SessionID.descending()
+      yield* goal.set(sid, "ship the feature", 10)
+      yield* Effect.sleep(200)
+      yield* events.publish(SessionStatus.Event.Status, { sessionID: sid, status: { type: "idle" } })
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const g = yield* goal.load(sid)
+          return g?.status === "paused" ? true : undefined
+        }),
+        "goal never transitioned to paused before resume",
+        "5 seconds",
+      )
+      const before = yield* goal.load(sid)
+      const turnsBefore = Number(before?.turns_used)
+
+      const resumed = yield* goal.resume(sid)
+      expect(resumed?.status).toBe("active")
+      expect(Number(resumed?.turns_used)).toBe(turnsBefore) // budget preserved, not reset
+      expect(resumed?.paused_reason).toBeUndefined()
+    }),
+  )
+})
