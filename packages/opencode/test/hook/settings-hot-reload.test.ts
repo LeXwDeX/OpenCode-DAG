@@ -48,6 +48,18 @@ const writeSettings = (dir: string, ctx: string) =>
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
+// Poll a predicate until it returns true (state reached) or the timeout elapses.
+// Replaces fragile fixed sleeps that race the watcher's 2s mtime poll + 500ms
+// debounce on slow CI hosts — wait for the observable effect instead.
+const pollFor = async (fn: () => boolean, timeoutMs = 8000, intervalMs = 100): Promise<boolean> => {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (fn()) return true
+    await sleep(intervalMs)
+  }
+  return fn()
+}
+
 describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
   // F3.1 integration: changing hooks.json at runtime is picked up by the
   // next trigger after the polling debounce. The first trigger runs
@@ -125,18 +137,19 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
     )
 
     // Trigger a change. The poll checks mtime every 2s; ensure a distinct mtime
-    // from the construction snapshot, then wait past the 2s poll + 500ms debounce.
+    // from the construction snapshot, then poll for the reload to fire (the
+    // debounce adds 500ms after the 2s mtime poll, so a fixed sleep races the
+    // scheduler on slow hosts — wait for the observable marker instead).
     await sleep(50)
     await fs.writeFile(file, JSON.stringify({ Stop: [] }))
-    await sleep(3000)
-    expect(marker).toBe("reloaded")
+    expect(await pollFor(() => marker === "reloaded")).toBe(true)
 
-    // After close(), further changes must NOT reload.
+    // After close(), further changes must NOT reload. A positive reload would
+    // land within the 2s+500ms window; sleep past it then assert absence.
     handle.close()
     marker = undefined
     await fs.writeFile(file, JSON.stringify({ Notification: [] }))
-    await sleep(3000)
-    expect(marker).toBeUndefined()
+    expect(await pollFor(() => marker !== undefined, 3500)).toBe(false)
 
     await fs.rm(dir, { recursive: true, force: true })
   }, 15000)
@@ -167,8 +180,7 @@ describe("SettingsHook hot-reload — watchSettings wiring (F3)", () => {
     const oldTime = new Date(Date.now() - 60_000)
     await fs.utimes(file, oldTime, oldTime)
 
-    await sleep(3000)
-    expect(marker).toBe("reloaded")
+    expect(await pollFor(() => marker === "reloaded")).toBe(true)
 
     handle.close()
     await fs.rm(dir, { recursive: true, force: true })

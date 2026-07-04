@@ -280,6 +280,19 @@ export const layer: Layer.Layer<
         },
       })
 
+      // SettingsHook: the active working directory switched to the freshly booted worktree
+      if (settingsHook) {
+        const cwdResult = yield* settingsHook
+          .trigger(
+            { event: "CwdChanged", oldCwd: ctx.directory, newCwd: info.directory },
+            { sessionID: "", transcriptPath: "" },
+          )
+          .pipe(
+            Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })),
+          )
+        yield* SettingsHook.landSystemMessages(cwdResult, { sessionID: "" })
+      }
+
       yield* runStartScripts(info.directory, { projectID, extra })
     })
 
@@ -295,10 +308,13 @@ export const layer: Layer.Layer<
       const info = yield* makeWorktreeInfo({ name: input?.name })
       yield* createFromInfo(info, input?.startCommand)
       if (settingsHook) {
-        yield* settingsHook.trigger(
-          { event: "WorktreeCreate", worktreeId: info.name, worktreePath: info.directory } as any,
-          { sessionID: "", transcriptPath: "" },
-        ).pipe(Effect.ignore)
+        const wcResult = yield* settingsHook
+          .trigger(
+            { event: "WorktreeCreate", path: info.directory, branch: info.name },
+            { sessionID: "", transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })))
+        yield* SettingsHook.landSystemMessages(wcResult, { sessionID: "" })
       }
       return info
     })
@@ -405,10 +421,13 @@ export const layer: Layer.Layer<
       const directory = yield* canonical(input.directory)
 
       if (settingsHook) {
-        yield* settingsHook.trigger(
-          { event: "WorktreeRemove", worktreeId: pathSvc.basename(directory), worktreePath: directory } as any,
-          { sessionID: "", transcriptPath: "" },
-        ).pipe(Effect.ignore)
+        const wrResult = yield* settingsHook
+          .trigger(
+            { event: "WorktreeRemove", path: directory, branch: pathSvc.basename(directory) },
+            { sessionID: "", transcriptPath: "" },
+          )
+          .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })))
+        yield* SettingsHook.landSystemMessages(wrResult, { sessionID: "" })
       }
 
       // Preserve the loaded path casing for the store cache; `directory` is lowercased on Windows.

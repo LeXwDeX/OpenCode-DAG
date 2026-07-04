@@ -300,8 +300,8 @@ describe("§4.7 polling reload: modify hooks.json → reload fires with new sett
   })
 })
 
-describe("§4.8 global hooks.json is NOT reloaded on change (startup-only)", () => {
-  test("modifying global hooks.json does not trigger onReload", async () => {
+describe("§4.8 global hooks.json IS hot-reloaded on change", () => {
+  test("modifying global hooks.json triggers reload and reflects new global hooks", async () => {
     const globalDir = await mktmp("g")
     const projectDir = await mktmp("p")
     try {
@@ -309,12 +309,15 @@ describe("§4.8 global hooks.json is NOT reloaded on change (startup-only)", () 
       await writeHooksJson(projectDir, hooksJsonTopLevel("project-stable"))
 
       let reloadCount = 0
+      let reloadedCommands: string[] = []
       const handle = watchSettings(
         projectDir,
         undefined,
         () => Effect.sync(() => loadChain(projectDir, "", globalDir)),
-        () => {
+        (settings) => {
           reloadCount += 1
+          reloadedCommands =
+            settings.hooks?.SessionStart?.flatMap((m) => m.hooks.map((h) => h.command ?? "")) ?? []
         },
         globalDir,
       )
@@ -323,9 +326,10 @@ describe("§4.8 global hooks.json is NOT reloaded on change (startup-only)", () 
       await sleep(50)
       await writeGlobalHooksJson(globalDir, hooksJsonTopLevel("global-v2"))
 
-      // Past one full poll cycle: if global were watched, it would have fired.
+      // Past one full poll cycle (POLL_INTERVAL_MS=2000) + debounce window.
       await sleep(4000)
-      expect(reloadCount).toBe(0)
+      expect(reloadCount).toBeGreaterThanOrEqual(1)
+      expect(reloadedCommands).toContain("global-v2")
 
       handle.close()
     } finally {

@@ -125,7 +125,7 @@ After migration, report:
 
 ## Hooks.json Format Reference
 
-OpenCode's `hooks.json` uses top-level event keys (27 events total). For the canonical list with per-event input/output shapes, see the `configure-hooks` skill.
+OpenCode's `hooks.json` uses top-level event keys (26 events total). For the canonical list with per-event input/output shapes, see the `configure-hooks` skill.
 
 Supported events:
 
@@ -134,8 +134,11 @@ Supported events:
 - Session lifecycle: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`
 - Subagents: `SubagentStart`, `SubagentStop`
 - Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`
-- Tasks/goals: `TaskCreated`, `TaskCompleted`, `TeammateIdle`
-- Other: `Notification`, `Elicitation`, `ElicitationResult`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`
+- Tasks/goals: `TaskCreated`, `TaskCompleted`
+- MCP elicitation: `Elicitation`, `ElicitationResult`
+- Other: `Notification`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`
+
+Note: Claude Code's `TeammateIdle` event is not supported (no teammate concept in opencode). Entries naming it are skipped with a warning — remove it during import.
 
 Each event maps to an array of **matcher blocks**. Each matcher block has:
 

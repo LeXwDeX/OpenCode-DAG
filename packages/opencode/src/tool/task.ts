@@ -15,7 +15,7 @@ import * as Option from "effect/Option"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
-import { SettingsHook } from "@/hook/settings"
+import { SettingsHook, type TriggerResult } from "@/hook/settings"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -166,12 +166,13 @@ export const TaskTool = Tool.define(
 
       // TaskCreated hook
       if (settingsHook) {
-        yield* settingsHook
+        const result = yield* settingsHook
           .trigger(
-            { event: "TaskCreated", taskID: nextSession.id, taskTitle: params.description } as any,
+            { event: "TaskCreated", taskID: nextSession.id, taskTitle: params.description },
             { sessionID: ctx.sessionID, transcriptPath: "" },
           )
-          .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+          .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+        yield* SettingsHook.landSystemMessages(result, { sessionID: ctx.sessionID })
       }
 
       const msg = yield* MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID }).pipe(
@@ -203,12 +204,13 @@ export const TaskTool = Tool.define(
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         // SubagentStart hook
         if (settingsHook) {
-          yield* settingsHook
+          const result = yield* settingsHook
             .trigger(
-              { event: "SubagentStart", agentID: nextSession.id, agentType: next.name } as any,
+              { event: "SubagentStart", agentID: nextSession.id, agentType: next.name },
               { sessionID: ctx.sessionID, transcriptPath: "" },
             )
-            .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+          yield* SettingsHook.landSystemMessages(result, { sessionID: ctx.sessionID })
         }
         const parts = yield* ops.resolvePromptParts(params.prompt)
         const result = yield* ops.prompt({
@@ -225,12 +227,13 @@ export const TaskTool = Tool.define(
         const text = result.parts.findLast((item) => item.type === "text")?.text ?? ""
         // TaskCompleted hook
         if (settingsHook) {
-          yield* settingsHook
+          const result = yield* settingsHook
             .trigger(
-              { event: "TaskCompleted", taskID: nextSession.id, taskTitle: params.description, result: text } as any,
+              { event: "TaskCompleted", taskID: nextSession.id, taskTitle: params.description, result: text },
               { sessionID: ctx.sessionID, transcriptPath: "" },
             )
-            .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+            .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+          yield* SettingsHook.landSystemMessages(result, { sessionID: ctx.sessionID })
         }
         return text
       })
@@ -336,46 +339,102 @@ export const TaskTool = Tool.define(
         runCancel.fork(cancel)
       }
 
-      return yield* Effect.acquireUseRelease(
-        Effect.sync(() => {
-          ctx.abort.addEventListener("abort", onAbort)
-        }),
-        () =>
-          Effect.gen(function* () {
-            const result = yield* Effect.raceFirst(
-              background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
-              background.waitForPromotion(nextSession.id),
-            )
-            if (result?.metadata?.background === true) return backgroundResult()
-            if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
-            if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
-            return {
-              title: params.description,
-              metadata,
-              output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
-            }
+      return yield* Effect.gen(function* () {
+        const output = yield* Effect.acquireUseRelease(
+          Effect.sync(() => {
+            ctx.abort.addEventListener("abort", onAbort)
           }),
-        (_, exit) =>
-          Effect.gen(function* () {
-            // SubagentStop hook
-            if (settingsHook) {
-              yield* settingsHook
-                .trigger(
-                  { event: "SubagentStop", stopHookActive: false, agentID: nextSession.id, agentType: next.name } as any,
-                  { sessionID: ctx.sessionID, transcriptPath: "" },
-                )
-                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
-            }
-            if (Exit.hasInterrupts(exit))
-              yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
-          }).pipe(
-            Effect.ensuring(
-              Effect.sync(() => {
-                ctx.abort.removeEventListener("abort", onAbort)
-              }),
+          () =>
+            Effect.gen(function* () {
+              const result = yield* Effect.raceFirst(
+                background.wait({ id: nextSession.id }).pipe(Effect.map((waited) => waited.info)),
+                background.waitForPromotion(nextSession.id),
+              )
+              if (result?.metadata?.background === true) return backgroundResult()
+              if (result?.status === "error") return yield* Effect.fail(new Error(result.error ?? "Task failed"))
+              if (result?.status === "cancelled") return yield* Effect.fail(new Error("Task cancelled"))
+              return {
+                title: params.description,
+                metadata,
+                output: renderOutput({ sessionID: nextSession.id, state: "completed", text: result?.output ?? "" }),
+              }
+            }),
+          (_, exit) =>
+            Effect.gen(function* () {
+              if (Exit.hasInterrupts(exit))
+                yield* Effect.all([cancel, background.cancel(nextSession.id)], { discard: true })
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  ctx.abort.removeEventListener("abort", onAbort)
+                }),
+              ),
             ),
-          ),
-      )
+        )
+        // SubagentStop hook with continuation: a blocked SubagentStop re-prompts the
+        // subagent for another turn; the next SubagentStop then carries
+        // stop_hook_active=true so a well-behaved hook stops blocking (anti-loop,
+        // mirroring the prompt.ts Stop path). Skipped when promoted to background
+        // (the subagent is still running, not stopped) — the background completion
+        // path fires SubagentStop via its own release below.
+        const promoted = Boolean((output.metadata as { background?: boolean } | undefined)?.background)
+        if (settingsHook && !promoted) {
+          let subagentStopBlocked = false
+          // Hard cap on blocked-SubagentStop continuation: a misbehaving hook that
+          // ignores stop_hook_active would otherwise re-prompt forever (burning
+          // tokens). Capped here; at the limit we log.warn and stop. Mirrors the
+          // main agent Stop path (prompt.ts). Shared constant from SettingsHook.
+          let lastStillBlocked = false
+          for (let i = 0; i < SettingsHook.MAX_STOP_CONTINUATIONS; i++) {
+            const stopResult = yield* settingsHook
+              .trigger(
+                {
+                  event: "SubagentStop",
+                  stopHookActive: subagentStopBlocked,
+                  agentID: nextSession.id,
+                  agentType: next.name,
+                },
+                { sessionID: ctx.sessionID, transcriptPath: "" },
+              )
+              .pipe(
+                Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)),
+              )
+            // Land any hook systemMessages so they're never silently dropped.
+            yield* SettingsHook.landSystemMessages(stopResult, { sessionID: ctx.sessionID })
+            if (!stopResult.blocked) {
+              lastStillBlocked = false
+              break
+            }
+            lastStillBlocked = true
+            subagentStopBlocked = true
+            // Continue the subagent: feed the block reason and run another turn.
+            // A failure here breaks the loop immediately (don't swallow the error
+            // and re-loop forever — the prior Effect.catch did that).
+            const cont = yield* ops
+              .prompt({
+                messageID: MessageID.ascending(),
+                sessionID: nextSession.id,
+                model: { modelID: model.modelID, providerID: model.providerID },
+                variant: next.model ? undefined : variant,
+                agent: next.name,
+                parts: [{ type: "text", synthetic: true, text: stopResult.blocked.reason || "Continue." }],
+              })
+              .pipe(Effect.exit)
+            if (Exit.isFailure(cont)) {
+              lastStillBlocked = false
+              break
+            }
+          }
+          if (lastStillBlocked) {
+            yield* Effect.logWarning("SubagentStop continuation limit reached; forcing stop", {
+              agentID: nextSession.id,
+              agentType: next.name,
+              limit: SettingsHook.MAX_STOP_CONTINUATIONS,
+            })
+          }
+        }
+        return output
+      })
     })
 
     return {
