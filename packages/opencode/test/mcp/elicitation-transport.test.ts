@@ -8,7 +8,6 @@ import { Question } from "@/question"
 import { Notification } from "@/notification"
 import { SettingsHook, type HookPayload } from "@/hook/settings"
 import { registerElicitationHandler, setActiveElicitationSession } from "@/mcp/elicitation"
-import { SessionContext } from "@/effect/session-context"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EffectBridge } from "@/effect/bridge"
 import { disposeAllInstances, testInstanceStoreLayer } from "../fixture/fixture"
@@ -31,6 +30,7 @@ import { pollWithTimeout, testEffect } from "../lib/effect"
 // an MCP tool blocks on elicitation exactly as it blocks on any slow operation.
 
 afterEach(async () => {
+  setActiveElicitationSession(undefined)
   await disposeAllInstances()
 })
 
@@ -64,6 +64,7 @@ const env = Layer.mergeAll(
 const it = testEffect(env)
 
 const SESSION = "ses_elicitation_transport"
+const STALE_SESSION = "ses_elicitation_transport_stale"
 
 /**
  * Build a stub MCP server whose only tool, "pick", elicits a color choice from
@@ -114,18 +115,23 @@ describe("mcp elicitation — real transport round-trip (5.4)", () => {
       )
       registerElicitationHandler(client, bridge)
       const server = makeStubServer()
+      yield* Effect.addFinalizer(() =>
+        Effect.promise(() => Promise.all([client.close(), server.close()])).pipe(Effect.catch(() => Effect.void)),
+      )
       const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
       yield* Effect.promise(() => Promise.all([client.connect(clientTransport), server.connect(serverTransport)]))
 
       // Drive the tool call. Production MCP tool execution sets the active
       // session synchronously around the server call (the SDK transport dispatch
       // breaks AsyncLocalStorage, so SessionContext alone is insufficient — see
-      // elicitation.ts). The test mirrors that by setting the slot directly.
+      // elicitation.ts). The test mirrors that by setting the fallback directly.
       const before = rec.recorded.length
-      setActiveElicitationSession(SESSION)
-      const callFiber = yield* Effect.promise(() =>
-        SessionContext.run(SESSION, () => client.callTool({ name: "pick", arguments: {} })),
-      ).pipe(Effect.forkScoped)
+      const cleanup = setActiveElicitationSession(SESSION)
+      yield* Effect.addFinalizer(() => Effect.sync(cleanup))
+      const staleCleanup = setActiveElicitationSession(STALE_SESSION)
+      yield* Effect.addFinalizer(() => Effect.sync(staleCleanup))
+      staleCleanup()
+      const callFiber = yield* Effect.promise(() => client.callTool({ name: "pick", arguments: {} })).pipe(Effect.forkScoped)
 
       // The elicitation surfaces as a pending Question.
       const pending = yield* pollWithTimeout(
@@ -136,6 +142,7 @@ describe("mcp elicitation — real transport round-trip (5.4)", () => {
         "elicitation never surfaced as a Question",
         "15 seconds",
       )
+      expect(String(pending[0].sessionID)).toBe(SESSION)
 
       // Reply "green" → adapter validates, accepts, returns content to the server.
       yield* question.reply({ requestID: pending[0].id, answers: [["green"]] })
@@ -154,9 +161,6 @@ describe("mcp elicitation — real transport round-trip (5.4)", () => {
           (p) => p.event === "ElicitationResult" && JSON.stringify((p as { result?: unknown }).result).includes("green"),
         ),
       ).toHaveLength(1)
-
-      // Cleanup the connected pair.
-      yield* Effect.promise(() => Promise.all([client.close(), server.close()])).pipe(Effect.catch(() => Effect.void))
     }),
   )
 })

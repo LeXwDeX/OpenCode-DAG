@@ -43,9 +43,23 @@ const ELICITATION_TIMEOUT_MS = 300_000
  * concurrent cross-session MCP calls are best-effort (last writer wins) —
  * acceptable and strictly better than ALS-only routing, which never resolves.
  */
-let activeSession: string | undefined
-export const setActiveElicitationSession = (id: string | undefined) => {
-  activeSession = id
+type ActiveElicitationSession = { id: string; token: number }
+type ActiveElicitationSessionCleanup = () => void
+
+let activeSessionToken = 0
+const activeSession: ActiveElicitationSession[] = []
+export const setActiveElicitationSession = (id: string | undefined): ActiveElicitationSessionCleanup => {
+  if (id === undefined) {
+    activeSession.splice(0)
+    return () => {}
+  }
+
+  const entry = { id, token: activeSessionToken++ }
+  activeSession.push(entry)
+  return () => {
+    const index = activeSession.findIndex((item) => item.token === entry.token)
+    if (index >= 0) activeSession.splice(index, 1)
+  }
 }
 
 export type ElicitAction = "accept" | "decline" | "cancel"
@@ -319,7 +333,7 @@ export function registerElicitationHandler(
     params?: { message?: string; requestedSchema?: unknown; mode?: string }
   }) => {
     const params = request.params ?? {}
-    const sessionID = SessionContext.sessionID ?? activeSession
+    const sessionID = SessionContext.sessionID ?? activeSession.at(-1)?.id
     const response = await bridge.promise(
       handleElicitation({
         message: params.message ?? "",
