@@ -1385,6 +1385,11 @@ export const layer = Layer.effect(
         // When a Stop hook blocks, the agent gets another model turn; this flag skips
         // the "already finished" exit for one iteration so the turn can actually run.
         let forceContinue = false
+        // Set when the previous iteration's processor outcome was "break" (turn
+        // finished or was blocked, e.g. permission rejected). The top-of-loop
+        // finished-check alone misses blocked turns whose finish is "tool-calls",
+        // so this flag forces the exit path (and its Stop hook) to fire.
+        let turnStopped = false
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
         // Capture the lastAssistant helper before the loop's destructured `lastAssistant`
         // (the latest assistant info) shadows it inside the step body.
@@ -1414,10 +1419,11 @@ export const layer = Layer.effect(
             ) ?? false
 
           if (
-            lastAssistant?.finish &&
-            !["tool-calls"].includes(lastAssistant.finish) &&
-            !hasToolCalls &&
-            lastUser.id < lastAssistant.id
+            turnStopped ||
+            (lastAssistant?.finish &&
+              !["tool-calls"].includes(lastAssistant.finish) &&
+              !hasToolCalls &&
+              lastUser.id < lastAssistant.id)
           ) {
             const orphan = lastAssistantMsg?.parts.find(
               (part): part is SessionV1.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
@@ -1425,7 +1431,7 @@ export const layer = Layer.effect(
             if (orphan) {
               yield* Effect.logWarning("loop exit with orphaned interrupted tool", {
                 "session.id": sessionID,
-                messageID: lastAssistant.id,
+                messageID: lastAssistant?.id,
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
@@ -1435,6 +1441,7 @@ export const layer = Layer.effect(
             // runs; reset the flag so that turn can finish and Stop normally.
             if (forceContinue) {
               forceContinue = false
+              turnStopped = false
             } else {
               yield* compaction.prune({ sessionID }).pipe(Effect.ignore, Effect.forkIn(scope))
               yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
@@ -1730,7 +1737,9 @@ export const layer = Layer.effect(
           )
           // The turn finished (outcome "break") or is ongoing (tool calls). Either way
           // loop back: the finished-check at the top of the next iteration fires the
-          // Stop hook and returns once the agent is truly done.
+          // Stop hook and returns once the agent is truly done. turnStopped covers
+          // blocked turns (permission rejected) whose finish is still "tool-calls".
+          turnStopped = outcome === "break"
           if (outcome === "break") turnError = handle.message.error
           continue
         }

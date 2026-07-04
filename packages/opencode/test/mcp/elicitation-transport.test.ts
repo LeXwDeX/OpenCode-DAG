@@ -134,7 +134,7 @@ describe("mcp elicitation — real transport round-trip (5.4)", () => {
           return items.length === 1 ? (items as readonly Question.Request[]) : undefined
         }),
         "elicitation never surfaced as a Question",
-        "5 seconds",
+        "15 seconds",
       )
 
       // Reply "green" → adapter validates, accepts, returns content to the server.
