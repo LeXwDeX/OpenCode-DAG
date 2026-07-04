@@ -6,7 +6,8 @@ import { NonNegativeInt } from "@opencode-ai/schema/schema"
 export const Status = Schema.Literals(["active", "paused", "done"])
 export type Status = Schema.Schema.Type<typeof Status>
 
-export const Verdict = Schema.Literals(["done", "continue", "skipped"])
+// `skipped` was a dead enum value with no production write path — removed.
+export const Verdict = Schema.Literals(["done", "continue"])
 export type Verdict = Schema.Schema.Type<typeof Verdict>
 
 export class Info extends Schema.Class<Info>("GoalState")({
