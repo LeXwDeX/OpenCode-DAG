@@ -87,3 +87,69 @@ export function addTrusted(dir: string): void {
     log.warn("failed to persist trusted-workspaces.json entry", { dir, error: String(err) })
   }
 }
+
+/**
+ * Scan the hooks.json chain (global / project / worktree) for a `requireTrust:
+ * true` top-level key, without importing `loadChain` from settings.ts (that
+ * would form a settings → workspace-trust → settings cycle). Mirrors the
+ * chain semantics in settings.ts:requireTrust — any single layer opting in
+ * enables enforcement. Used only by `/trust status` to report the gate source.
+ */
+function configRequireTrust(directory: string, worktree?: string): boolean {
+  const files = [
+    path.join(Global.Path.config, "hooks.json"),
+    path.join(directory, ".opencode", "hooks.json"),
+    ...(worktree && worktree !== directory ? [path.join(worktree, ".opencode", "hooks.json")] : []),
+  ]
+  for (const file of files) {
+    try {
+      if (!existsSync(file)) continue
+      const parsed = JSON.parse(readFileSync(file, "utf8"))
+      if (parsed && typeof parsed === "object" && parsed.requireTrust === true) return true
+    } catch {
+      // unreadable / unparseable — treat as not opting in
+    }
+  }
+  return false
+}
+
+/**
+ * `/trust` command dispatch (D3). Pure function — prompt.ts wires it via the
+ * same early-return path as `/goal` and renders `{ text }` as a non-synthetic
+ * text part. Trust writes are NEVER delegated to the LLM (security-sensitive).
+ *
+ * - `args === ""`        → add `directory` to the trust list (idempotent via
+ *                          `addTrusted`'s never-throw dedup) and confirm.
+ * - `args === "status"`  → trust judgment + requireTrust gate source
+ *                          (hooks.json / env / off) + trust file path.
+ */
+export function dispatchTrust(directory: string, args: string, worktree?: string): { text: string } {
+  const sub = args.trim().toLowerCase()
+  const envForced = process.env.OPENCODE_HOOKS_REQUIRE_TRUST === "1"
+  const cfgForced = configRequireTrust(directory, worktree)
+  const gateActive = envForced || cfgForced
+
+  if (sub === "status") {
+    const trusted = isTrusted(directory)
+    const sources: string[] = []
+    if (cfgForced) sources.push("hooks.json requireTrust")
+    if (envForced) sources.push("OPENCODE_HOOKS_REQUIRE_TRUST=1")
+    return {
+      text:
+        `工作区信任状态：\n` +
+        `• 目录：${directory}\n` +
+        `• 信任：${trusted ? "已信任" : "未信任"}\n` +
+        `• requireTrust 门禁：${sources.length > 0 ? sources.join(" + ") : "未启用"}\n` +
+        `• 信任文件：${trustFilePath()}`,
+    }
+  }
+
+  // default: add current workspace to the trust list
+  const already = isTrusted(directory)
+  addTrusted(directory)
+  return {
+    text: already
+      ? `${directory} 已在信任列表中（幂等，未重复追加）。`
+      : `已将 ${directory} 追加到信任列表。${gateActive ? "" : "\n（提示：requireTrust 门禁当前未启用；在 hooks.json 设置 \"requireTrust\": true 或 OPENCODE_HOOKS_REQUIRE_TRUST=1 后，信任列表才会门控 hook 执行。）"}`,
+  }
+}

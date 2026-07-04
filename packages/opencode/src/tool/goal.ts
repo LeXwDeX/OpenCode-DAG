@@ -117,12 +117,14 @@ export const GoalTool = Tool.define<typeof Parameters, Metadata, never>(
               metadata: { goal: null },
             }
           }
-          // markDone performs: clearFiber → saveState(turns_used+1) →
-          // deleteAndPublishDone (publish goal.updated(done) → deleteState →
-          // publish goal.cleared). It returns the post-increment snapshot,
-          // so use its return value (NOT the pre-call `state` above) for
-          // the completion message — otherwise the "N turns" count shown
-          // to the user would be 1 less than what was persisted.
+          // markDone performs: clearFiber → deleteAndPublishDone (publish
+          // goal.updated(done) → deleteState → publish goal.cleared). It is
+          // budget-neutral — turns_used counts continuation dispatches only, so
+          // markDone does NOT increment it (see goal.ts markDone).
+          // deleteAndPublishDone re-loads the current row, so use its return
+          // value (NOT the pre-call `state` above) for the completion message —
+          // otherwise a turn a prior continue dispatch already accounted for
+          // could be missed in the "N turns" count shown to the user.
           const finalState = yield* goal.markDone(ctx.sessionID, params.reason.trim())
 
           const displayState = finalState ?? state

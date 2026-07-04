@@ -242,11 +242,11 @@ export const layer = Layer.effect(
       const state = new GoalState.Info({
         goal,
         status: "active",
-        turns_used: 0 as any,
-        max_turns: (maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS) as any,
+        turns_used: GoalState.nni(0),
+        max_turns: GoalState.nni(maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS),
         created_at: now,
         last_turn_at: now,
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         subgoals: [],
       })
       yield* saveState(sessionID, state)
@@ -307,7 +307,7 @@ export const layer = Layer.effect(
       const updated = new GoalState.Info({
         ...state,
         status: "active",
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         paused_reason: undefined,
         last_turn_at: Date.now(),
       })
@@ -417,7 +417,7 @@ export const layer = Layer.effect(
           last_turn_at: now,
           last_verdict: "done",
           last_reason: reason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         yield* saveState(sessionID, updated)
         // Do NOT publish goal.updated here. deleteAndPublishDone is the SOLE
@@ -434,7 +434,7 @@ export const layer = Layer.effect(
         }
       }
 
-      const turnsUsed = (state.turns_used + 1) as any
+      const turnsUsed = GoalState.nni(Number(state.turns_used) + 1)
 
       if (newParseFailures >= GoalPrompts.MAX_CONSECUTIVE_PARSE_FAILURES) {
         const pauseReason =
@@ -447,7 +447,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Do NOT call clearFiber here. updateAfterJudge is inlined into
         // GoalLoop.afterIdle (loop.ts:122), so the fiber running this code
@@ -476,7 +476,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Same self-interrupt hazard as the parse-failure branch above: we
         // are running inside the afterIdle loop fiber, so clearFiber would
@@ -497,7 +497,7 @@ export const layer = Layer.effect(
         last_turn_at: now,
         last_verdict: "continue",
         last_reason: reason,
-        consecutive_parse_failures: newParseFailures as any,
+        consecutive_parse_failures: GoalState.nni(newParseFailures),
       })
       yield* saveState(sessionID, updated)
       yield* publishGoal(sessionID, updated)
@@ -528,6 +528,11 @@ export const layer = Layer.effect(
             text: "Session 正在执行中。请先 /stop 中断后再设定新目标。",
           }
         }
+        // Known TOCTOU: `get` above then goal.set + continuation dispatch below
+        // is not atomic — the session could flip to busy in between. Accepted:
+        // the loop's idle gating and judge-preempt guard handle that case
+        // gracefully; an atomic check-and-set would need a session-level lock
+        // outside this module's scope.
       }
 
       if (lower === "" || lower === "status") {

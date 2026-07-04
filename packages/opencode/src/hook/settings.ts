@@ -1617,6 +1617,7 @@ const agentHandler: HookHandler = {
           log.warn("agent hook timeout / aborted (non-blocking)", {
             error: cause,
             command: prompt.slice(0, 80),
+            hint: "deep-investigation hooks must also raise entry.timeout — the 60s default aborts well before MAX_AGENT_TURNS (200) is reached",
           })
         } else {
           log.warn("agent hook generateText failed (non-blocking)", {
@@ -1647,8 +1648,37 @@ const agentHandler: HookHandler = {
 // WP-4D-2 constants. MAX_AGENT_TURNS pinned at 200 by user m0021 — gives the LLM
 // enough headroom for deep-investigation hooks before the loop bails. Default
 // timeout matches DEFAULT_TIMEOUT_MS (60s) used by command/http handlers.
+// Note: the 60s default entry.timeout will abort most deep investigations far
+// below 200 turns — to actually exploit the full turn budget, raise entry.timeout
+// on the hook (the turn budget itself is not per-hook configurable).
 const MAX_AGENT_TURNS = 200
 const DEFAULT_AGENT_TIMEOUT_MS = 60_000
+
+// Per-session additionalContext dedup bucket cap. A normal session never
+// approaches this; the bound exists for the headless "" bucket (sessionID=""),
+// which is shared across every prompt of a long-lived headless process and
+// would otherwise accumulate without limit. Eviction is insertion-order-oldest
+// (Set iterates in insertion order), so the least-recently-injected context is
+// dropped first — acceptable since re-injection only matters within a session.
+const MAX_SEEN_PER_BUCKET = 1000
+
+/**
+ * Add `text` to the per-session dedup bucket; returns true when newly added
+ * (the caller then injects it into additionalContexts). Caps the bucket at
+ * MAX_SEEN_PER_BUCKET by evicting the oldest entry — see the constant comment
+ * for why the headless "" bucket needs this.
+ */
+const addSeen = (seen: Map<string, Set<string>>, sessionID: string, text: string): boolean => {
+  const bucket = seen.get(sessionID) ?? new Set<string>()
+  if (bucket.has(text)) return false
+  bucket.add(text)
+  if (bucket.size > MAX_SEEN_PER_BUCKET) {
+    const oldest = bucket.values().next().value
+    if (oldest !== undefined) bucket.delete(oldest)
+  }
+  seen.set(sessionID, bucket)
+  return true
+}
 
 export const layer = Layer.effect(
   Service,
@@ -2020,13 +2050,8 @@ export const layer = Layer.effect(
               (payload.event === "UserPromptSubmit" || payload.event === "SessionStart")
             ) {
               const text = rawStdout.trim()
-              if (text) {
-                const bucket = s.seen.get(ctx.sessionID) ?? new Set<string>()
-                if (!bucket.has(text)) {
-                  bucket.add(text)
-                  s.seen.set(ctx.sessionID, bucket)
-                  result.additionalContexts.push(text)
-                }
+              if (text && addSeen(s.seen, ctx.sessionID, text)) {
+                result.additionalContexts.push(text)
               }
             }
             // once: true entries are cleared after running, regardless of result.
@@ -2056,10 +2081,7 @@ export const layer = Layer.effect(
             // session, not once per process lifetime. ctx here is the
             // TriggerContext (sessionID is its bucket key); the local was
             // renamed off `ctx` so the outer TriggerContext stays reachable.
-            const bucket = s.seen.get(ctx.sessionID) ?? new Set<string>()
-            if (!bucket.has(additionalContext)) {
-              bucket.add(additionalContext)
-              s.seen.set(ctx.sessionID, bucket)
+            if (addSeen(s.seen, ctx.sessionID, additionalContext)) {
               result.additionalContexts.push(additionalContext)
             }
           }

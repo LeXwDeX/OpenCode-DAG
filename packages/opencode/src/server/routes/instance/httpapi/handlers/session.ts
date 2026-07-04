@@ -15,6 +15,8 @@ import { SessionStatus } from "@/session/status"
 import { SessionSummary } from "@/session/summary"
 import { Todo } from "@/session/todo"
 import { Goal } from "@/goal/goal"
+import { SessionHooks, type SessionHookCommand } from "@/hook/session-hooks"
+import { type HookEvent } from "@/hook/settings"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Cause, Effect, Option, Schema, Scope } from "effect"
@@ -35,6 +37,7 @@ import {
   ShellPayload,
   SummarizePayload,
   UpdatePayload,
+  SessionHookAddPayload,
 } from "../groups/session"
 import { PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
@@ -58,6 +61,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
     const goalSvc = yield* Goal.Service
+    const sessionHooks = yield* SessionHooks.Service
     const summary = yield* SessionSummary.Service
     const events = yield* EventV2Bridge.Service
     const scope = yield* Scope.Scope
@@ -427,6 +431,36 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* session.updatePart(payload)
     })
 
+    const hookAdd = Effect.fn("SessionHttpApi.hookAdd")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SessionHookAddPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      // Non-empty hooks[] guard → 4xx. event/type membership is already enforced
+      // by the payload's literal schemas; this completes the validation contract.
+      if (ctx.payload.hooks.length === 0) return yield* new HttpApiError.BadRequest({})
+      const id = yield* sessionHooks.add(ctx.params.sessionID, {
+        event: ctx.payload.event as HookEvent,
+        matcher: ctx.payload.matcher,
+        hooks: ctx.payload.hooks as SessionHookCommand[],
+        once: ctx.payload.once,
+      })
+      return { id }
+    })
+
+    const hookList = Effect.fn("SessionHttpApi.hookList")(function* (ctx: { params: { sessionID: SessionID } }) {
+      yield* requireSession(ctx.params.sessionID)
+      return yield* sessionHooks.listAll(ctx.params.sessionID)
+    })
+
+    const hookRemove = Effect.fn("SessionHttpApi.hookRemove")(function* (ctx: {
+      params: { sessionID: SessionID; hookID: string }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      // remove() is idempotent — a missing id is a no-op, so DELETE always succeeds.
+      yield* sessionHooks.remove(ctx.params.sessionID, ctx.params.hookID)
+    })
+
     return handlers
       .handle("list", list)
       .handle("status", status)
@@ -434,6 +468,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("children", children)
       .handle("todo", todo)
       .handle("goal", goal)
+      .handle("hookAdd", hookAdd)
+      .handle("hookList", hookList)
+      .handle("hookRemove", hookRemove)
       .handle("diff", diff)
       .handle("messages", messages)
       .handle("message", message)

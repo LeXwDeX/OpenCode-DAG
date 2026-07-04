@@ -62,6 +62,7 @@ import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { SettingsHook, HOOK_REWAKE_SENTINEL, type TriggerResult } from "@/hook/settings"
 import { applyPreHookDecision } from "@/hook/pre-hook-decision"
+import { dispatchTrust } from "@/hook/workspace-trust"
 import { HookStartContext } from "@/hook/start-context"
 import { Goal } from "@/goal/goal"
 
@@ -1768,6 +1769,43 @@ export const layer = Layer.effect(
         command: input.command,
         agent: input.agent,
       })
+      // /trust command dispatch — early return BEFORE command registry lookup.
+      // Trust writes are security-sensitive and MUST NOT be delegated to the
+      // LLM-driven command template path; mirror /goal's early-return dispatch
+      // (prompt.ts only wires + renders; the domain logic lives in workspace-trust.ts).
+      if (input.command === "trust") {
+        const ctx = yield* InstanceState.context
+        const result = dispatchTrust(ctx.directory, input.arguments, ctx.worktree)
+        const m = yield* currentModel(input.sessionID)
+        const agentName = input.agent ?? (yield* agents.defaultAgent())
+        const userMsg: SessionV1.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          role: "user",
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          agent: agentName,
+          model: { providerID: m.providerID, modelID: m.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        const cmdText: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: `/trust ${input.arguments}`.trim(),
+        }
+        yield* sessions.updatePart(cmdText)
+        const responsePart: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: result.text,
+        }
+        yield* sessions.updatePart(responsePart)
+        yield* sessions.touch(input.sessionID)
+        return { info: userMsg, parts: [cmdText, responsePart] }
+      }
       // Goal/Subgoal command dispatch — early return BEFORE command registry lookup
       if (goal && (input.command === "goal" || input.command === "subgoal")) {
         const dispatch = input.command === "goal" ? goal.dispatch : goal.dispatchSubgoal
