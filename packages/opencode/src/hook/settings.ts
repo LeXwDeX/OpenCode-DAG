@@ -1944,6 +1944,14 @@ export const layer = Layer.effect(
           cwd: s.cwd,
           trustFile: trustFilePath(),
         })
+        // Still free this session's hook bucket on SessionEnd — the trust gate
+        // is the one early-return path that would otherwise skip the deferred
+        // SessionHooks.clear (mirrors the short-circuit / empty-matcher / end
+        // return points), leaving an untrusted session's registered hooks
+        // leaked in memory for the process lifetime.
+        if (payload.event === "SessionEnd" && ctx.sessionID) {
+          yield* sessionHooks.clear(SessionID.make(ctx.sessionID))
+        }
         return result
       }
 
