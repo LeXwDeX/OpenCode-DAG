@@ -43,6 +43,20 @@
 
 ---
 
+## Fork additions
+
+### Hooks API (26 events × 5 execution types)
+
+Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 26 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more. Hooks load from a global / project / worktree `hooks.json` chain, or can be registered per-session at runtime over the HTTP API; optional workspace-trust gating (`requireTrust` + the `/trust` command) limits hook execution to directories you have approved.
+
+See the [hooks reference](./packages/core/src/plugin/skill/configure-hooks.md).
+
+### Goal Auto-Loop
+
+An autonomous agent loop that continuously drives an agent toward a user-defined goal. An LLM judge decides after each turn whether the goal is achieved or needs more turns, within a configurable turn budget. Use `/goal <target>` to set a goal, `/subgoal` to add sub-goals, and `/goal resume` to continue a paused goal.
+
+---
+
 ### インストール
 
 ```bash
