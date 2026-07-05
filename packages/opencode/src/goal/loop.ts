@@ -202,7 +202,13 @@ export const layer = Layer.effect(
         ((opts) =>
           Effect.gen(function* () {
             const defaultM = yield* provider.defaultModel()
-            const model = yield* provider.getModel(defaultM.providerID, defaultM.modelID)
+            // Judge is a ~200-token JSON binary classification — prefer the
+            // provider's small/fast model (config `small_model`, plugin hint,
+            // or the built-in haiku/flash/nano priority list). Fall back to
+            // the default model when no small model is resolvable, keeping
+            // the prior behavior byte-for-byte for those providers.
+            const small = yield* provider.getSmallModel(defaultM.providerID)
+            const model = small ?? (yield* provider.getModel(defaultM.providerID, defaultM.modelID))
             const language = yield* provider.getLanguage(model)
             const result = yield* Effect.tryPromise({
               try: (signal) =>
