@@ -14,13 +14,14 @@ import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprot
 import type { Client as ClientType } from "@modelcontextprotocol/sdk/client/index.js"
 
 mock.restore()
-// Load Client via a sibling specifier (`/client` rather than `/client/index.js`)
-// that resolves to the same underlying `./client` exports entry. The mock-using
-// sibling test files register `mock.module` for `.../client/index.js`, which is a
-// different specifier — so Bun's module cache does NOT serve the previously-cached
-// MockClient module when we import via this alternate key, AND the mock registry
-// does not intercept this specifier either. `callTool` is therefore available.
-const { Client } = (await import("@modelcontextprotocol/sdk/client")) as unknown as {
+// Cache-bust the import: add a unique query string to force Bun to load a fresh
+// module instance. Turbo runs tests from multiple packages in parallel, and
+// other packages' `mock.module` calls can pollute the global module cache even
+// after `mock.restore()`. A unique query string per import ensures we bypass
+// any cached (mocked) module instances and get the real SDK Client with full
+// `callTool` support.
+const cacheBuster = `?bust=${Date.now()}`
+const { Client } = (await import(`@modelcontextprotocol/sdk/client${cacheBuster}`)) as unknown as {
   Client: typeof ClientType
 }
 import { Question } from "@/question"
