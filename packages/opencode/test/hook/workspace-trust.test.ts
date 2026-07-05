@@ -98,7 +98,7 @@ describe("SettingsHook workspace-trust gate (WP-6B)", () => {
   )
 
   trustIt.instance(
-    "enforcement ON + allowUntrusted:true → hooks execute normally",
+    "enforcement ON + project-layer allowUntrusted:true → still skipped (no self-escape)",
     () =>
       Effect.gen(function* () {
         const hook = yield* SettingsHook.Service
@@ -106,7 +106,11 @@ describe("SettingsHook workspace-trust gate (WP-6B)", () => {
           { event: "SessionStart", source: "startup" },
           { sessionID: "ses-trust-allow", transcriptPath: "" },
         )
-        expect(r.additionalContexts).toEqual([CONTEXT])
+        // The project .opencode/hooks.json is authored by the untrusted repo
+        // itself — its allowUntrusted opt-out is stripped by readChain, so the
+        // gate still silently skips all hooks.
+        expect(r.additionalContexts).toEqual([])
+        expect(r.blocked).toBeUndefined()
       }),
     { init: writeHooks(sessionStartHook({ requireTrust: true, allowUntrusted: true })) },
   )

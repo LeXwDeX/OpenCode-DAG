@@ -125,6 +125,66 @@ describe("§4.2 merge order is global → project → worktree concat-append (no
   })
 })
 
+describe("§4.2b allowUntrusted is only honored from the global layer (trust-gate self-escape)", () => {
+  test("project-layer allowUntrusted is stripped; global requireTrust survives", async () => {
+    const globalDir = await mktmp("global")
+    const projectDir = await mktmp("project")
+    try {
+      await writeGlobalHooksJson(globalDir, { requireTrust: true, ...hooksJsonTopLevel("g") })
+      await writeHooksJson(projectDir, { allowUntrusted: true, ...hooksJsonTopLevel("p") })
+
+      const merged = loadChain(projectDir, "", globalDir)
+      // The untrusted repo's own hooks.json must not be able to opt out of a
+      // globally-enforced trust gate.
+      expect(merged.requireTrust).toBe(true)
+      expect(merged.allowUntrusted).toBeUndefined()
+    } finally {
+      await Promise.all([
+        fs.rm(globalDir, { recursive: true, force: true }),
+        fs.rm(projectDir, { recursive: true, force: true }),
+      ])
+    }
+  })
+
+  test("worktree-layer allowUntrusted is stripped too", async () => {
+    const globalDir = await mktmp("global")
+    const projectDir = await mktmp("project")
+    const worktreeDir = await mktmp("worktree")
+    try {
+      await writeGlobalHooksJson(globalDir, { requireTrust: true })
+      await writeHooksJson(worktreeDir, { allowUntrusted: true, ...hooksJsonTopLevel("w") })
+
+      const merged = loadChain(projectDir, worktreeDir, globalDir)
+      expect(merged.requireTrust).toBe(true)
+      expect(merged.allowUntrusted).toBeUndefined()
+    } finally {
+      await Promise.all([
+        fs.rm(globalDir, { recursive: true, force: true }),
+        fs.rm(projectDir, { recursive: true, force: true }),
+        fs.rm(worktreeDir, { recursive: true, force: true }),
+      ])
+    }
+  })
+
+  test("global-layer allowUntrusted is honored", async () => {
+    const globalDir = await mktmp("global")
+    const projectDir = await mktmp("project")
+    try {
+      await writeGlobalHooksJson(globalDir, { requireTrust: true, allowUntrusted: true })
+      await writeHooksJson(projectDir, hooksJsonTopLevel("p"))
+
+      const merged = loadChain(projectDir, "", globalDir)
+      expect(merged.requireTrust).toBe(true)
+      expect(merged.allowUntrusted).toBe(true)
+    } finally {
+      await Promise.all([
+        fs.rm(globalDir, { recursive: true, force: true }),
+        fs.rm(projectDir, { recursive: true, force: true }),
+      ])
+    }
+  })
+})
+
 describe("§4.3 top-level events format (no wrapper) parses correctly", () => {
   test("readJSON parses {PreToolUse: [...]} and stamps __sourceDir to the hooks.json dir", async () => {
     const dir = await mktmp("fmt")

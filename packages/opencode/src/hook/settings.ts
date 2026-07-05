@@ -59,8 +59,6 @@ import { Auth } from "@/auth"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { buildAgentTools } from "./agent-tools"
 import { SessionHooks } from "./session-hooks"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
 import { HookRewake } from "./rewake"
@@ -215,10 +213,12 @@ export interface Settings {
    */
   requireTrust?: boolean
   /**
-   * Per-layer escape hatch for the workspace-trust gate. When enforcement is on
-   * and the working directory is untrusted, a layer declaring `allowUntrusted:
-   * true` still executes its hooks (silent allow). Matches Claude Code /
-   * VS Code workspace-trust opt-out semantics.
+   * Escape hatch for the workspace-trust gate. Only honored from the GLOBAL
+   * hooks.json layer (`~/.config/opencode/hooks.json`): project / worktree
+   * hooks.json files are controlled by the (potentially untrusted) repository
+   * itself, so letting them declare `allowUntrusted: true` would let a
+   * malicious repo bypass the very gate meant to contain it. `readChain`
+   * strips the field from non-global layers with a log.warn.
    */
   allowUntrusted?: boolean
 }
@@ -726,7 +726,8 @@ export function mergeSettings(layers: Settings[]): Settings {
     }
   }
   // requireTrust is chain-wide: any layer opting in enables enforcement.
-  // allowUntrusted likewise: any layer declaring it escapes the gate.
+  // allowUntrusted merges the same way here, but readChain strips it from
+  // non-global layers before merge — only the global layer's opt-out survives.
   if (layers.some((l) => l.requireTrust === true)) out.requireTrust = true
   if (layers.some((l) => l.allowUntrusted === true)) out.allowUntrusted = true
   return out
@@ -789,6 +790,18 @@ function readChain(
   for (const { scope, file } of chainCandidates(directory, worktree, globalConfig)) {
     const data = readJSON(file)
     if (!data) continue
+    // Trust-gate escape (`allowUntrusted`) is only honored from the global
+    // layer. Project / worktree hooks.json are authored by the repository the
+    // gate is meant to contain — honoring their opt-out would let an untrusted
+    // repo bypass a globally-enforced `requireTrust` by declaring
+    // `allowUntrusted: true` in its own .opencode/hooks.json.
+    if (scope !== "global" && data.allowUntrusted !== undefined) {
+      log.warn("allowUntrusted ignored: only the global hooks.json layer may opt out of the trust gate", {
+        file,
+        scope,
+      })
+      data.allowUntrusted = undefined
+    }
     warnUnsupportedFields(data.hooks, path.dirname(file))
     layers.push(data)
     if (!data.hooks) continue
@@ -826,7 +839,22 @@ export function summarizeChain(directory: string, worktree: string, globalConfig
 // `globalConfig` overrides the resolved OpenCode global config dir so tests can
 // point it at an isolated temp dir instead of the real ~/.config/opencode.
 export function loadChain(directory: string, worktree: string, globalConfig?: string): Settings {
-  const { settings } = readChain(directory, worktree, globalConfig)
+  return loadChainWithSummaries(directory, worktree, globalConfig).settings
+}
+
+/**
+ * Single-call variant returning both the merged settings and the scope-tagged
+ * summaries from ONE pass over the chain files. The SettingsHook layer (initial
+ * state + hot-reload callback) uses this instead of calling `loadChain` and
+ * `summarizeChain` back-to-back, which would read every hooks.json twice and
+ * reopen the transient-inconsistency window `readChain` exists to close.
+ */
+export function loadChainWithSummaries(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): { settings: Settings; summaries: HookSummary[] } {
+  const chain = readChain(directory, worktree, globalConfig)
 
   // Deprecation scan: warn once per OpenCode-owned settings.json that still
   // carries a `hooks` field (D4). Hooks there are NOT loaded — the warning is
@@ -838,7 +866,7 @@ export function loadChain(directory: string, worktree: string, globalConfig?: st
     warnDeprecatedHooksField(fp)
   }
 
-  return settings
+  return chain
 }
 
 /**
@@ -1683,16 +1711,14 @@ const addSeen = (seen: Map<string, Set<string>>, sessionID: string, text: string
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2Bridge.Service
-    const { db } = yield* Database.Service
     const sessionHooks = yield* SessionHooks.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
-        const settings = loadChain(instCtx.directory, instCtx.worktree)
+        const chain = loadChainWithSummaries(instCtx.directory, instCtx.worktree)
         const stateObj = {
-          settings,
-          hooksList: summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config),
+          settings: chain.settings,
+          hooksList: chain.summaries,
           cwd: instCtx.directory,
           seen: new Map<string, Set<string>>(),
         } satisfies State
@@ -1716,9 +1742,9 @@ export const layer = Layer.effect(
           instCtx.directory,
           instCtx.worktree,
           () => Effect.sync(() => {
-            const newSettings = loadChain(instCtx.directory, instCtx.worktree)
-            lastSummaries = summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config)
-            return newSettings
+            const reloaded = loadChainWithSummaries(instCtx.directory, instCtx.worktree)
+            lastSummaries = reloaded.summaries
+            return reloaded.settings
           }),
           (newSettings, changedFile) => {
             stateObj.settings = newSettings
@@ -1740,8 +1766,8 @@ export const layer = Layer.effect(
     )
 
     // Handlers resolve their deps lazily at trigger time from the ambient context.
-    // This keeps the layer lightweight (only EventV2Bridge + Database + SessionHooks
-    // needed at construction), following the Todo pattern exactly.
+    // This keeps the layer lightweight (only SessionHooks needed at
+    // construction), following the Todo pattern exactly.
     const handlers: Record<string, HookHandler> = {
       command: commandHandler,
       mcp: mcpHandler,
@@ -2133,16 +2159,11 @@ export const layer = Layer.effect(
   }),
 )
 
-// defaultLayer provides MCP, HttpClient, Provider, Auth, FileSystem, and
-// ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
-// its bash / read_file / list_dir / grep tools. Every module that consumes
-// these spawn/fs services closes them in its own defaultLayer (see
-// Only provide deps needed at layer construction (EventV2Bridge + Database + SessionHooks).
-// Handler deps (MCP/Provider/Auth/FSUtil/HttpClient/CrossSpawnSpawner) are resolved
-// lazily at trigger time from whatever ambient context the Effect runs in.
+// Only provide deps needed at layer construction (SessionHooks — the sole
+// service yielded in the layer body). Handler deps (MCP/Provider/Auth/FSUtil/
+// HttpClient/CrossSpawnSpawner/HookRewake) are resolved lazily at trigger time
+// from whatever ambient context the Effect runs in.
 export const defaultLayer = layer.pipe(
-  Layer.provide(EventV2Bridge.defaultLayer),
-  Layer.provide(Database.defaultLayer),
   Layer.provide(SessionHooks.defaultLayer),
 )
 
@@ -2223,10 +2244,6 @@ function invokeMcpHook(
   })
 }
 
-export const node = LayerNode.make(layer, [
-  EventV2Bridge.node,
-  Database.node,
-  SessionHooks.node,
-])
+export const node = LayerNode.make(layer, [SessionHooks.node])
 
 export * as SettingsHook from "./settings"
