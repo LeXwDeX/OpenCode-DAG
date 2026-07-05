@@ -1,6 +1,6 @@
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { expect, mock, beforeEach } from "bun:test"
+import { expect, mock, beforeEach, afterAll } from "bun:test"
 import { ListRootsRequestSchema, ToolListChangedNotificationSchema } from "@modelcontextprotocol/sdk/types.js"
 import { Cause, Effect, Exit } from "effect"
 import type { MCP as MCPNS } from "../../src/mcp/index"
@@ -269,6 +269,13 @@ beforeEach(() => {
   connectError = "Mock transport cannot connect"
   clientCreateCount = 0
   transportCloseCount = 0
+})
+
+afterAll(() => {
+  // These MCP SDK mocks are file-scoped fixtures, but Bun's mock.module registry
+  // is process-global during the full suite. Restore it so tests that exercise
+  // a real SDK Client don't inherit this reduced mock implementation.
+  mock.restore()
 })
 
 // Import after mocks
