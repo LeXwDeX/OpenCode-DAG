@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, beforeEach, describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "bun:test"
 import { Effect, Layer } from "effect"
 import * as fs from "fs"
 import * as os from "os"
@@ -7,7 +7,7 @@ import { SettingsHook } from "@/hook/settings"
 import { SessionHooks } from "@/hook/session-hooks"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
-import { dispatchTrust, isTrusted, isTrustedDir, loadTrustedList, trustFilePath } from "@/hook/workspace-trust"
+import { dispatchTrust, isTrusted, isTrustedDir, loadTrustedList } from "@/hook/workspace-trust"
 import { testEffect } from "../lib/effect"
 
 // WP-6B workspace-trust gate. Two layers of tests:
@@ -127,60 +127,46 @@ describe("SettingsHook workspace-trust gate (WP-6B)", () => {
 })
 
 // ── /trust command dispatch (D3) ───────────────────────────────────
-// dispatchTrust hits the real trust file (trustFilePath) and the hooks.json
-// chain, so the block saves/restores the real trust file and uses a clean tmp
-// directory per test. Gate-source assertions target the deterministic paths
-// (env var and the project hooks.json we write) rather than the global
-// hooks.json, which this machine may or may not have set.
+// dispatchTrust takes an optional trust-file param (defaulting to the real
+// trustFilePath()), so every test here points it at an isolated temp file —
+// no save/restore of the real `<Global.Path.data>/trusted-workspaces.json`
+// needed. Gate-source assertions target the deterministic paths (env var and
+// the project hooks.json we write) rather than the global hooks.json, which
+// this machine may or may not have set.
 
 describe("dispatchTrust (/trust command) — D3", () => {
-  const realTrustFile = trustFilePath()
-  let saved: string | undefined
-
-  beforeAll(() => {
-    saved = fs.existsSync(realTrustFile) ? fs.readFileSync(realTrustFile, "utf8") : undefined
-  })
-  afterAll(() => {
-    try {
-      if (saved === undefined) fs.rmSync(realTrustFile, { force: true })
-      else fs.writeFileSync(realTrustFile, saved)
-    } catch {
-      // best-effort restore
-    }
-  })
   beforeEach(() => {
-    try {
-      fs.rmSync(realTrustFile, { force: true })
-    } catch {
-      // best-effort clean slate
-    }
     delete process.env.OPENCODE_HOOKS_REQUIRE_TRUST
   })
 
   const tmpdir = () => fs.mkdtempSync(path.join(os.tmpdir(), "trust-cmd-"))
+  const tmpTrustFile = () => path.join(tmpdir(), "trusted-workspaces.json")
 
   test("/trust 追加目录到信任列表（含目录路径）", () => {
     const dir = tmpdir()
-    const r = dispatchTrust(dir, "")
+    const file = tmpTrustFile()
+    const r = dispatchTrust(dir, "", undefined, file)
     expect(r.text).toContain(dir)
-    expect(isTrusted(dir)).toBe(true)
+    expect(isTrusted(dir, file)).toBe(true)
   })
 
   test("/trust 幂等（重复不重复追加）", () => {
     const dir = tmpdir()
-    dispatchTrust(dir, "")
-    dispatchTrust(dir, "")
+    const file = tmpTrustFile()
+    dispatchTrust(dir, "", undefined, file)
+    dispatchTrust(dir, "", undefined, file)
     // exactly one entry for dir
-    expect(loadTrustedList().filter((d) => d === dir).length).toBe(1)
+    expect(loadTrustedList(file).filter((d) => d === dir).length).toBe(1)
     // confirmation text notes already-trusted
-    expect(dispatchTrust(dir, "").text).toContain("已在信任列表")
+    expect(dispatchTrust(dir, "", undefined, file).text).toContain("已在信任列表")
   })
 
   test("/trust status 显示信任判定 + 信任文件路径", () => {
     const dir = tmpdir()
-    const r = dispatchTrust(dir, "status")
+    const file = tmpTrustFile()
+    const r = dispatchTrust(dir, "status", undefined, file)
     expect(r.text).toContain("未信任")
-    expect(r.text).toContain(realTrustFile)
+    expect(r.text).toContain(file)
     expect(r.text).toContain("requireTrust 门禁")
   })
 
@@ -188,7 +174,7 @@ describe("dispatchTrust (/trust command) — D3", () => {
     const dir = tmpdir()
     fs.mkdirSync(path.join(dir, ".opencode"), { recursive: true })
     fs.writeFileSync(path.join(dir, ".opencode", "hooks.json"), JSON.stringify({ requireTrust: true }))
-    const r = dispatchTrust(dir, "status")
+    const r = dispatchTrust(dir, "status", undefined, tmpTrustFile())
     expect(r.text).toContain("hooks.json requireTrust")
   })
 
@@ -196,16 +182,33 @@ describe("dispatchTrust (/trust command) — D3", () => {
     const dir = tmpdir()
     process.env.OPENCODE_HOOKS_REQUIRE_TRUST = "1"
     try {
-      const r = dispatchTrust(dir, "status")
+      const r = dispatchTrust(dir, "status", undefined, tmpTrustFile())
       expect(r.text).toContain("OPENCODE_HOOKS_REQUIRE_TRUST=1")
     } finally {
       delete process.env.OPENCODE_HOOKS_REQUIRE_TRUST
     }
   })
 
-  test("/trust 写入失败不 throw（沿用 addTrusted never-throw）", () => {
-    // dispatchTrust always returns { text }; addTrusted swallows write errors.
-    const r = dispatchTrust(tmpdir(), "")
-    expect(typeof r.text).toBe("string")
+  test("/trust 写入失败 → 不 throw 且回显失败信息（含信任文件路径）", () => {
+    const dir = tmpdir()
+    // Force the write to fail: a DIRECTORY sits where the trust file should
+    // be, so addTrusted's writeFileSync hits EISDIR and swallows it
+    // (never-throw). dispatchTrust must detect the entry never landed and
+    // echo a failure instead of a false success.
+    const file = path.join(tmpdir(), "trusted-workspaces.json")
+    fs.mkdirSync(file, { recursive: true })
+    const r = dispatchTrust(dir, "", undefined, file)
+    expect(r.text).toContain("失败")
+    expect(r.text).toContain(file)
+    expect(r.text).not.toContain("已将")
+    expect(isTrusted(dir, file)).toBe(false)
+  })
+
+  test("/trust 写入成功时文案不受失败分支影响", () => {
+    const dir = tmpdir()
+    const file = tmpTrustFile()
+    const r = dispatchTrust(dir, "", undefined, file)
+    expect(r.text).toContain("已将")
+    expect(r.text).not.toContain("失败")
   })
 })

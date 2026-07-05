@@ -64,11 +64,12 @@ export function isTrustedDir(dir: string, trusted: readonly string[]): boolean {
 }
 
 /**
- * Is `dir` trusted? Thin shell over `isTrustedDir(dir, loadTrustedList())` —
- * reads the persisted trust list and applies path-boundary matching.
+ * Is `dir` trusted? Thin shell over `isTrustedDir(dir, loadTrustedList(file))`
+ * — reads the persisted trust list and applies path-boundary matching. The
+ * `file` param exists for test isolation and defaults to the real trust file.
  */
-export function isTrusted(dir: string): boolean {
-  return isTrustedDir(dir, loadTrustedList())
+export function isTrusted(dir: string, file: string = trustFilePath()): boolean {
+  return isTrustedDir(dir, loadTrustedList(file))
 }
 
 /**
@@ -76,13 +77,14 @@ export function isTrusted(dir: string): boolean {
  * atomic write). Used by the future interactive trust flow and by tests that
  * need to seed the list. Never throws — a write failure logs and is ignored
  * (the caller can retry; trust is additive, not safety-critical on write).
+ * The `file` param exists for test isolation and defaults to the real file.
  */
-export function addTrusted(dir: string): void {
+export function addTrusted(dir: string, file: string = trustFilePath()): void {
   try {
-    const trusted = loadTrustedList()
+    const trusted = loadTrustedList(file)
     if (trusted.includes(dir)) return
     trusted.push(dir)
-    writeFileSync(trustFilePath(), JSON.stringify(trusted, null, 2))
+    writeFileSync(file, JSON.stringify(trusted, null, 2))
   } catch (err) {
     log.warn("failed to persist trusted-workspaces.json entry", { dir, error: String(err) })
   }
@@ -122,15 +124,22 @@ function configRequireTrust(directory: string, worktree?: string): boolean {
  *                          `addTrusted`'s never-throw dedup) and confirm.
  * - `args === "status"`  → trust judgment + requireTrust gate source
  *                          (hooks.json / env / off) + trust file path.
+ *
+ * The `file` param exists for test isolation and defaults to the real file.
  */
-export function dispatchTrust(directory: string, args: string, worktree?: string): { text: string } {
+export function dispatchTrust(
+  directory: string,
+  args: string,
+  worktree?: string,
+  file: string = trustFilePath(),
+): { text: string } {
   const sub = args.trim().toLowerCase()
   const envForced = process.env.OPENCODE_HOOKS_REQUIRE_TRUST === "1"
   const cfgForced = configRequireTrust(directory, worktree)
   const gateActive = envForced || cfgForced
 
   if (sub === "status") {
-    const trusted = isTrusted(directory)
+    const trusted = isTrusted(directory, file)
     const sources: string[] = []
     if (cfgForced) sources.push("hooks.json requireTrust")
     if (envForced) sources.push("OPENCODE_HOOKS_REQUIRE_TRUST=1")
@@ -140,13 +149,21 @@ export function dispatchTrust(directory: string, args: string, worktree?: string
         `• 目录：${directory}\n` +
         `• 信任：${trusted ? "已信任" : "未信任"}\n` +
         `• requireTrust 门禁：${sources.length > 0 ? sources.join(" + ") : "未启用"}\n` +
-        `• 信任文件：${trustFilePath()}`,
+        `• 信任文件：${file}`,
     }
   }
 
   // default: add current workspace to the trust list
-  const already = isTrusted(directory)
-  addTrusted(directory)
+  const already = isTrusted(directory, file)
+  addTrusted(directory, file)
+  // addTrusted never throws (write failure logs + is swallowed), so re-check
+  // that the entry actually landed — a silent write failure must echo failure
+  // to the user, not a false success (delta spec: hooks-workspace-trust).
+  if (!already && !isTrusted(directory, file)) {
+    return {
+      text: `将 ${directory} 写入信任列表失败（信任文件：${file}）。请检查该路径是否可写，详细错误见日志。`,
+    }
+  }
   return {
     text: already
       ? `${directory} 已在信任列表中（幂等，未重复追加）。`
