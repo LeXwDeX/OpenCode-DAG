@@ -5,7 +5,7 @@
  * top of earlier ones, mirroring Claude Code's merge semantics — hooks
  * accumulate, they do not replace):
  *
- *   1. ~/.config/opencode/hooks.json            (global, loaded once at startup)
+ *   1. ~/.config/opencode/hooks.json            (global, hot-reloaded)
  *   2. <project>/.opencode/hooks.json           (project, hot-reloaded)
  *   3. <worktree>/.opencode/hooks.json          (worktree, hot-reloaded, when ≠ project)
  *
@@ -42,7 +42,7 @@ import os from "os"
 import { existsSync, readFileSync } from "fs"
 import { spawn } from "child_process"
 import { createHash } from "crypto"
-import { Effect, Layer, Context, Option } from "effect"
+import { Effect, Layer, Context, Option, Scope, Exit } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
@@ -59,11 +59,12 @@ import { Auth } from "@/auth"
 import { withTransientReadRetry } from "@/util/effect-http-client"
 import { buildAgentTools } from "./agent-tools"
 import { SessionHooks } from "./session-hooks"
-import { EventV2Bridge } from "@/event-v2-bridge"
-import { Database } from "@opencode-ai/core/database/database"
 import type { SessionHookEntry } from "./session-hooks"
 import { SessionID } from "@/session/schema"
+import { HookRewake } from "./rewake"
+import { EffectBridge } from "@/effect/bridge"
 import { buildForkHooks, watchSettings } from "./extensions" // [FORK:hook-ext]
+import { isTrusted, trustFilePath } from "./workspace-trust" // [FORK:hook-ext] WP-6B
 
 const log = Log.create({ service: "hook.settings" })
 
@@ -86,7 +87,6 @@ export type HookEvent =
   | "PostCompact"
   | "SessionStart"
   | "SessionEnd"
-  | "TeammateIdle"
   | "TaskCreated"
   | "TaskCompleted"
   | "Elicitation"
@@ -99,7 +99,7 @@ export type HookEvent =
   | "FileChanged"
 
 // Runtime set of valid hook event names (for filtering non-event keys in hooks.json)
-const VALID_HOOK_EVENTS = new Set<string>([
+export const VALID_HOOK_EVENTS = new Set<string>([
   "PreToolUse",
   "PostToolUse",
   "PostToolUseFailure",
@@ -116,7 +116,6 @@ const VALID_HOOK_EVENTS = new Set<string>([
   "PostCompact",
   "SessionStart",
   "SessionEnd",
-  "TeammateIdle",
   "TaskCreated",
   "TaskCompleted",
   "Elicitation",
@@ -155,19 +154,34 @@ export interface HookCommand {
    */
   shell?: "bash" | "powershell"
   /**
-   * Conditional gate. CC evaluates this as a boolean expression in the matcher's runtime
-   * context; fork treats it as a placeholder for now (always considered truthy when present).
-   * Reserved for阶段 6 short-circuit logic.
+   * Conditional gate, evaluated by `extensions/condition-filter.ts` in
+   * `ForkHooks.beforeRunEntry` BEFORE each matched entry runs (returning false
+   * skips the entry). Syntax:
+   *   - `ToolName(glob)` — e.g. `Bash(npm install *)`, `Edit(*.ts)`; the tool
+   *     name is matched case-insensitively and the glob is matched against the
+   *     tool's primary argument (Bash→command, Edit/Write/Read→filePath).
+   *   - `*`, empty, or undefined — always matches (no filtering).
+   * For NON-tool events (UserPromptSubmit, Stop, SessionStart, …) the condition
+   * is ignored and always matches (CC behavior). A malformed condition (not
+   * `ToolName(...)`) also fails open to true.
    */
   if?: string
   /**
-   * Async execution flag. CC's AsyncHookRegistry routes async hooks via attachments / task-notification.
-   * Fork currently runs everything sync; this is a P2 schema placeholder.
+   * Async execution flag. When true, the hook is forked into a background fiber
+   * scoped to the SettingsHook service; its output never participates in the
+   * current trigger's TriggerResult (no permissionDecision, blocked, etc. — the
+   * decision point has already passed by the time it completes). Background
+   * fibers die with the process; there is no durable persistence across crashes.
+   * Pair with `asyncRewake` to deliver the result back to the agent.
    */
   async?: boolean
   /**
-   * Companion to `async`: when an async hook exits with code 2, CC re-wakes the agent via
-   * `wrapInSystemReminder` + `task-notification`. Schema placeholder for the same P2 work.
+   * Companion to `async`: when an async hook completes with rewake-worthy output
+   * (exit code 2 stderr, `systemMessage`, `decision:"block"` reason, or
+   * `additionalContext`), a synthetic steer prompt wrapping the output in a
+   * `<system-reminder>` is admitted to the originating session, re-waking the agent.
+   * Without `async`, this field is inert (the hook runs synchronously as usual).
+   * Rewake is suppressed for `SessionEnd` and when no `sessionID` is available.
    */
   asyncRewake?: boolean
   /**
@@ -191,11 +205,20 @@ interface HookMatcher {
 export interface Settings {
   hooks?: Partial<Record<HookEvent, HookMatcher[]>>
   /**
-   * WP-6B placeholder. CC / VS Code-style "workspace trust" flow does not yet
-   * exist in this fork. When a trust system lands (`Project.isTrusted()` or
-   * similar), the trigger entry should short-circuit (silent skip — log.warn +
-   * empty result, NEVER throw / deny) for untrusted workspaces unless this flag
-   * is true. Schema-only for now; see TODO(WP-6B) below in the trigger reducer.
+   * Opt-in enforcement of the workspace-trust gate (WP-6B). When `true` (any
+   * layer in the chain), `SettingsHook.trigger` silently skips ALL hooks for a
+   * working directory that is not on the trust list, unless `allowUntrusted` is
+   * also set. Read from the top-level `requireTrust` key of a hooks.json. Also
+   * enabled by env `OPENCODE_HOOKS_REQUIRE_TRUST=1`. Default false → zero gate.
+   */
+  requireTrust?: boolean
+  /**
+   * Escape hatch for the workspace-trust gate. Only honored from the GLOBAL
+   * hooks.json layer (`~/.config/opencode/hooks.json`): project / worktree
+   * hooks.json files are controlled by the (potentially untrusted) repository
+   * itself, so letting them declare `allowUntrusted: true` would let a
+   * malicious repo bypass the very gate meant to contain it. `readChain`
+   * strips the field from non-global layers with a log.warn.
    */
   allowUntrusted?: boolean
 }
@@ -258,6 +281,17 @@ const HookJSONOutputZodSchema = z.object({
   reason: z.string().optional(),
   hookSpecificOutput: HookSpecificOutputZodSchema.optional(),
 })
+
+// ── Async rewake (hook-async-rewake) ───────────────────────────
+// Sentinel prefix for rewake prompts. UserPromptSubmit hook processing skips
+// prompts whose text starts with this prefix, preventing hook → rewake → hook
+// loops. The prefix must match the opening of buildRewakePrompt exactly.
+export const HOOK_REWAKE_SENTINEL = "<system-reminder>\nAsync hook completed"
+
+function buildRewakePrompt(entry: HookCommand, event: HookEvent, content: string): string {
+  const cmd = descriptorFor(entry)
+  return `${HOOK_REWAKE_SENTINEL} (command: ${cmd}, event: ${event}):\n${content}\n</system-reminder>`
+}
 
 /**
  * hookSpecificOutput discriminated union — Claude Code 1:1.
@@ -397,10 +431,9 @@ export type HookPayload =
     }
   | {
       event: "SessionEnd"
-      reason: "clear" | "logout" | "prompt_input_exit" | "other"
+      reason: "clear" | "delete" | "logout" | "prompt_input_exit" | "other"
     }
   | { event: "Setup"; trigger: string }
-  | { event: "TeammateIdle"; teammateID?: string; teammateName?: string }
   | { event: "TaskCreated"; taskID?: string; taskTitle?: string; taskDescription?: string }
   | { event: "TaskCompleted"; taskID?: string; taskTitle?: string; result?: unknown }
   | { event: "Elicitation"; prompt?: string; schema?: unknown }
@@ -412,9 +445,21 @@ export type HookPayload =
   | { event: "CwdChanged"; oldCwd?: string; newCwd?: string }
   | { event: "FileChanged"; path?: string; changeType?: string }
 
+// Intentional CC-envelope differences (hooks-api-fidelity): these fields are
+// accepted for schema compatibility but deliberately not populated beyond what
+// is documented here, and are NOT bugs:
+//   - `transcript_path`: always "" — this fork has no transcript-file export, so
+//     there is no path to surface (callers pass transcriptPath: "").
+//   - `permission_mode`: only "plan" | "default" via agentToPermissionMode;
+//     acceptEdits / bypassPermissions have no fork equivalent and are omitted
+//     rather than fabricated.
+//   - SessionStart `source` covers only "startup" here; resume/clear/compact have
+//     no distinct entry points in this fork (see openspec hooks-api-fidelity 2.1).
+//   - matcher matching is case-INsensitive here (CC is case-sensitive). A matcher
+//     like `Write` also matches a `write` tool call. Documented deviation, not a bug.
 export interface TriggerContext {
   sessionID: string
-  /** Absolute path to a transcript file (may not yet exist). Empty string if N/A. */
+  /** Absolute path to a transcript file. Intentionally always "" in this fork — no transcript export exists. */
   transcriptPath: string
   /** CC envelope: "plan" | "default"（fork 通过 agentToPermissionMode 映射 agent name 得出）。其他模式（acceptEdits/bypassPermissions）fork 暂不支持。 */
   permissionMode?: string
@@ -434,23 +479,21 @@ export interface TriggerContext {
   isSubAgent?: boolean
 }
 
-export interface TriggerResult {
-  /** additionalContext strings appended (deduplicated per session) */
-  additionalContexts: string[]
-  /** systemMessage strings emitted by hooks */
-  systemMessages: string[]
-  /** Block decision — non-undefined means main flow must short-circuit */
-  blocked?: { reason: string; command: string }
-  /** continue=false from any hook */
-  preventContinuation?: boolean
-  /** stopReason aggregated from hooks that requested non-continuation */
-  stopReason?: string
-  /** Permission verdict (PreToolUse only meaningful) */
-  permissionDecision?: "allow" | "deny" | "ask"
-  permissionDecisionReason?: string
-  /** Last hook's updatedInput wins (CC behavior) */
-  updatedInput?: Record<string, unknown>
-}
+// `TriggerResult` and `landSystemMessages` live in `./trigger-result` (a
+// cycle-free leaf). Re-exported here so existing `SettingsHook.*` /
+// `import { type TriggerResult } from "@/hook/settings"` call sites keep
+// working. See trigger-result.ts for the cycle rationale.
+import type { TriggerResult } from "./trigger-result"
+export type { TriggerResult } from "./trigger-result"
+export { landSystemMessages } from "./trigger-result"
+
+/**
+ * Hard cap on how many times a blocked Stop / SubagentStop hook may drive another
+ * model turn. Guards against a misbehaving hook that ignores `stop_hook_active`
+ * (which would otherwise loop forever burning tokens). Shared by the main agent
+ * Stop path (prompt.ts) and the SubagentStop path (task.ts).
+ */
+export const MAX_STOP_CONTINUATIONS = 5
 
 // ── [FORK:hook-ext] Extension callback interface ────────────────
 //
@@ -650,7 +693,17 @@ export function readJSON(filepath: string): Settings | null {
       path: filepath,
       events: Object.keys(hooks),
     })
-    return { hooks }
+    // Top-level `requireTrust` (WP-6B enforcement opt-in) and `allowUntrusted`
+    // (per-layer gate escape hatch) — booleans on the hooks.json root, not
+    // under `hooks`. Propagated through mergeSettings so any layer turning
+    // either on enables it chain-wide.
+    const requireTrust = typeof obj?.requireTrust === "boolean" ? obj.requireTrust : undefined
+    const allowUntrusted = typeof obj?.allowUntrusted === "boolean" ? obj.allowUntrusted : undefined
+    return {
+      hooks,
+      ...(requireTrust !== undefined ? { requireTrust } : {}),
+      ...(allowUntrusted !== undefined ? { allowUntrusted } : {}),
+    }
   } catch (err) {
     log.error("failed to parse hooks.json", { path: filepath, error: String(err) })
     return null
@@ -672,6 +725,11 @@ export function mergeSettings(layers: Settings[]): Settings {
       acc.push(...(matchers ?? []))
     }
   }
+  // requireTrust is chain-wide: any layer opting in enables enforcement.
+  // allowUntrusted merges the same way here, but readChain strips it from
+  // non-global layers before merge — only the global layer's opt-out survives.
+  if (layers.some((l) => l.requireTrust === true)) out.requireTrust = true
+  if (layers.some((l) => l.allowUntrusted === true)) out.allowUntrusted = true
   return out
 }
 
@@ -712,6 +770,59 @@ function chainCandidates(
 }
 
 /**
+ * Single-pass chain load: reads each hooks.json file EXACTLY ONCE and produces
+ * both the merged Settings and the scope-tagged HookSummary[] from the same
+ * parse. Eliminates the transient-inconsistency window where `loadChain` and
+ * `summarizeChain` re-read the same file independently (a file changing between
+ * the two reads could yield settings and summary that disagree). `loadChain`
+ * and `summarizeChain` are now thin shells over this.
+ *
+ * `warnUnsupportedFields` runs per-file inside this pass (same as the old
+ * `loadChain`), so both shells surface the same warnings.
+ */
+function readChain(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): { settings: Settings; summaries: HookSummary[] } {
+  const layers: Settings[] = []
+  const summaries: HookSummary[] = []
+  for (const { scope, file } of chainCandidates(directory, worktree, globalConfig)) {
+    const data = readJSON(file)
+    if (!data) continue
+    // Trust-gate escape (`allowUntrusted`) is only honored from the global
+    // layer. Project / worktree hooks.json are authored by the repository the
+    // gate is meant to contain — honoring their opt-out would let an untrusted
+    // repo bypass a globally-enforced `requireTrust` by declaring
+    // `allowUntrusted: true` in its own .opencode/hooks.json.
+    if (scope !== "global" && data.allowUntrusted !== undefined) {
+      log.warn("allowUntrusted ignored: only the global hooks.json layer may opt out of the trust gate", {
+        file,
+        scope,
+      })
+      data.allowUntrusted = undefined
+    }
+    warnUnsupportedFields(data.hooks, path.dirname(file))
+    layers.push(data)
+    if (!data.hooks) continue
+    for (const [event, matchers] of Object.entries(data.hooks)) {
+      for (const m of matchers ?? []) {
+        for (const h of m.hooks ?? []) {
+          summaries.push({
+            event: event as HookEvent,
+            scope,
+            type: h.type,
+            descriptor: descriptorFor(h),
+            ...(m.matcher && m.matcher !== "*" ? { matcher: m.matcher } : {}),
+          })
+        }
+      }
+    }
+  }
+  return { settings: mergeSettings(layers), summaries }
+}
+
+/**
  * Produce scope-tagged summaries of the merged hooks chain — one entry per
  * individual hook command, tagged with the layer (global/project/worktree) it
  * came from. Ordering matches loadChain: global first, then project, then
@@ -721,45 +832,41 @@ function chainCandidates(
  * Exported for unit testing only; not part of the public surface.
  */
 export function summarizeChain(directory: string, worktree: string, globalConfig?: string): HookSummary[] {
-  return chainCandidates(directory, worktree, globalConfig).flatMap(({ scope, file }) => {
-    const data = readJSON(file)
-    if (!data?.hooks) return []
-    return Object.entries(data.hooks).flatMap(([event, matchers]) =>
-      (matchers ?? []).flatMap((m) =>
-        (m.hooks ?? []).map((h) => ({
-          event: event as HookEvent,
-          scope,
-          type: h.type,
-          descriptor: descriptorFor(h),
-          ...(m.matcher && m.matcher !== "*" ? { matcher: m.matcher } : {}),
-        })),
-      ),
-    )
-  })
+  return readChain(directory, worktree, globalConfig).summaries
 }
 
 // Exported for unit testing only; not part of the public surface.
 // `globalConfig` overrides the resolved OpenCode global config dir so tests can
 // point it at an isolated temp dir instead of the real ~/.config/opencode.
 export function loadChain(directory: string, worktree: string, globalConfig?: string): Settings {
-  const opencodeGlobal = resolveGlobalConfig(globalConfig)
+  return loadChainWithSummaries(directory, worktree, globalConfig).settings
+}
 
-  const layers = chainCandidates(directory, worktree, globalConfig)
-    .map(({ file }) => {
-      const data = readJSON(file)
-      if (data) warnUnsupportedFields(data.hooks, path.dirname(file))
-      return data
-    })
-    .filter((s): s is Settings => s !== null)
+/**
+ * Single-call variant returning both the merged settings and the scope-tagged
+ * summaries from ONE pass over the chain files. The SettingsHook layer (initial
+ * state + hot-reload callback) uses this instead of calling `loadChain` and
+ * `summarizeChain` back-to-back, which would read every hooks.json twice and
+ * reopen the transient-inconsistency window `readChain` exists to close.
+ */
+export function loadChainWithSummaries(
+  directory: string,
+  worktree: string,
+  globalConfig?: string,
+): { settings: Settings; summaries: HookSummary[] } {
+  const chain = readChain(directory, worktree, globalConfig)
 
   // Deprecation scan: warn once per OpenCode-owned settings.json that still
   // carries a `hooks` field (D4). Hooks there are NOT loaded — the warning is
   // the only signal. `.claude/` files are never scanned (silent ignore per spec).
+  // Lives outside readChain because it reads settings.json (not hooks.json) and
+  // is irrelevant to the summary.
+  const opencodeGlobal = resolveGlobalConfig(globalConfig)
   for (const fp of deprecatedSettingsPaths(opencodeGlobal, directory, worktree)) {
     warnDeprecatedHooksField(fp)
   }
 
-  return mergeSettings(layers)
+  return chain
 }
 
 /**
@@ -845,30 +952,41 @@ export function __resetDeprecatedWarnings(): void {
 }
 
 /**
- * Internal: scan loaded settings for HookCommand fields the fork has not yet implemented
- * (`async`, `asyncRewake`, `if`, `shell`) and emit a single `log.warn` per settings file.
- * Runtime still proceeds — these fields are silently ignored. Exported for unit testing
- * only; not part of the public surface.
+ * Pure detection of HookCommand fields the fork has not yet implemented (`shell`).
+ * Exported for unit testing. `if` is fully implemented via condition-filter
+ * (`extensions/condition-filter.ts` evaluates it in `ForkHooks.beforeRunEntry`),
+ * and `async` / `asyncRewake` are fully implemented (hook-async-execution); all
+ * three are therefore excluded. `shell` has no runtime handler and MUST be flagged.
  */
-export function warnUnsupportedFields(
+export function detectUnsupportedFields(
   hooks: Settings["hooks"],
-  sourceDir: string,
-): void {
-  if (!hooks) return
+): Array<{ field: string; value: unknown; eventName: string }> {
+  if (!hooks) return []
   const unsupported: Array<{ field: string; value: unknown; eventName: string }> = []
   for (const [eventName, matchers] of Object.entries(hooks)) {
     if (!matchers) continue
     for (const m of matchers) {
       for (const h of m.hooks ?? []) {
-        if (h.async !== undefined) unsupported.push({ field: "async", value: h.async, eventName })
-        if (h.asyncRewake !== undefined)
-          unsupported.push({ field: "asyncRewake", value: h.asyncRewake, eventName })
-        if (h.if !== undefined) unsupported.push({ field: "if", value: h.if, eventName })
         if (h.shell !== undefined) unsupported.push({ field: "shell", value: h.shell, eventName })
+        // `if` is implemented (condition-filter); async/asyncRewake implemented.
         // All 5 known types now have handlers; type-level unsupported set is empty by design.
       }
     }
   }
+  return unsupported
+}
+
+/**
+ * Internal: scan loaded settings for HookCommand fields the fork has not yet implemented
+ * (`shell`) and emit a single `log.warn` per settings file. Runtime still proceeds —
+ * this field is silently ignored. Exported for unit testing only; not part of the public
+ * surface. `if` / `async` / `asyncRewake` are fully implemented and excluded.
+ */
+export function warnUnsupportedFields(
+  hooks: Settings["hooks"],
+  sourceDir: string,
+): void {
+  const unsupported = detectUnsupportedFields(hooks)
   if (unsupported.length > 0) {
     log.warn("hook settings contains unsupported fields (will be ignored or fail at runtime)", {
       sourceDir,
@@ -1105,12 +1223,6 @@ function buildStdinEnvelope(payload: HookPayload, ctx: TriggerContext, cwd: stri
       return { ...base, reason: payload.reason }
     case "Setup":
       return { ...base, trigger: payload.trigger }
-    case "TeammateIdle":
-      return {
-        ...base,
-        ...(payload.teammateID !== undefined ? { teammate_id: payload.teammateID } : {}),
-        ...(payload.teammateName !== undefined ? { teammate_name: payload.teammateName } : {}),
-      }
     case "TaskCreated":
       return {
         ...base,
@@ -1250,7 +1362,7 @@ interface HookHandler<E extends HookCommand = HookCommand> {
     envelope: Record<string, unknown>,
     cwd: string,
     inHook: boolean,
-  ) => Effect.Effect<{ json?: HookJSONOutput; exitBlock?: string }>
+  ) => Effect.Effect<{ json?: HookJSONOutput; exitBlock?: string; rawStdout?: string; exitCode?: number | null }>
 }
 
 const commandHandler: HookHandler = {
@@ -1268,7 +1380,7 @@ const commandHandler: HookHandler = {
     // Exit-code 2: block + stderr-as-reason (CC contract)
     if (exitCode === 2) {
       const reason = stderr.trim() || "Hook blocked execution"
-      return { json: parseStdout(stdout, commandText(entry)), exitBlock: reason }
+      return { json: parseStdout(stdout, commandText(entry)), exitBlock: reason, rawStdout: stdout, exitCode }
     }
 
     // Other non-zero exits: log and continue (do not abort main flow)
@@ -1286,7 +1398,11 @@ const commandHandler: HookHandler = {
       })
     }
 
-    return { json: parseStdout(stdout, commandText(entry)), exitBlock: undefined }
+    // exit-0 plain-text stdout (non-JSON) is surfaced via rawStdout so the
+    // trigger aggregator can inject it as additionalContext for
+    // UserPromptSubmit / SessionStart (CC protocol). JSON stdout still parses
+    // normally via parseStdout; rawStdout is only consumed when json is null.
+    return { json: parseStdout(stdout, commandText(entry)), exitBlock: undefined, rawStdout: stdout, exitCode }
   }),
 }
 
@@ -1529,6 +1645,7 @@ const agentHandler: HookHandler = {
           log.warn("agent hook timeout / aborted (non-blocking)", {
             error: cause,
             command: prompt.slice(0, 80),
+            hint: "deep-investigation hooks must also raise entry.timeout — the 60s default aborts well before MAX_AGENT_TURNS (200) is reached",
           })
         } else {
           log.warn("agent hook generateText failed (non-blocking)", {
@@ -1559,22 +1676,49 @@ const agentHandler: HookHandler = {
 // WP-4D-2 constants. MAX_AGENT_TURNS pinned at 200 by user m0021 — gives the LLM
 // enough headroom for deep-investigation hooks before the loop bails. Default
 // timeout matches DEFAULT_TIMEOUT_MS (60s) used by command/http handlers.
+// Note: the 60s default entry.timeout will abort most deep investigations far
+// below 200 turns — to actually exploit the full turn budget, raise entry.timeout
+// on the hook (the turn budget itself is not per-hook configurable).
 const MAX_AGENT_TURNS = 200
 const DEFAULT_AGENT_TIMEOUT_MS = 60_000
+
+// Per-session additionalContext dedup bucket cap. A normal session never
+// approaches this; the bound exists for the headless "" bucket (sessionID=""),
+// which is shared across every prompt of a long-lived headless process and
+// would otherwise accumulate without limit. Eviction is insertion-order-oldest
+// (Set iterates in insertion order), so the least-recently-injected context is
+// dropped first — acceptable since re-injection only matters within a session.
+const MAX_SEEN_PER_BUCKET = 1000
+
+/**
+ * Add `text` to the per-session dedup bucket; returns true when newly added
+ * (the caller then injects it into additionalContexts). Caps the bucket at
+ * MAX_SEEN_PER_BUCKET by evicting the oldest entry — see the constant comment
+ * for why the headless "" bucket needs this.
+ */
+const addSeen = (seen: Map<string, Set<string>>, sessionID: string, text: string): boolean => {
+  const bucket = seen.get(sessionID) ?? new Set<string>()
+  if (bucket.has(text)) return false
+  bucket.add(text)
+  if (bucket.size > MAX_SEEN_PER_BUCKET) {
+    const oldest = bucket.values().next().value
+    if (oldest !== undefined) bucket.delete(oldest)
+  }
+  seen.set(sessionID, bucket)
+  return true
+}
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
-    const events = yield* EventV2Bridge.Service
-    const { db } = yield* Database.Service
     const sessionHooks = yield* SessionHooks.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("SettingsHook.state")(function* (instCtx) {
-        const settings = loadChain(instCtx.directory, instCtx.worktree)
+        const chain = loadChainWithSummaries(instCtx.directory, instCtx.worktree)
         const stateObj = {
-          settings,
-          hooksList: summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config),
+          settings: chain.settings,
+          hooksList: chain.summaries,
           cwd: instCtx.directory,
           seen: new Map<string, Set<string>>(),
         } satisfies State
@@ -1591,17 +1735,27 @@ export const layer = Layer.effect(
         // summaries in one pass; lastSummaries carries the summaries into the
         // onReload callback (watchSettings only threads Settings through).
         let lastSummaries: HookSummary[] = stateObj.hooksList
+        // Bridge back into the instance-scoped Effect context from the plain-JS
+        // onReload callback, so the ConfigChange hook event can fire.
+        const bridge = yield* EffectBridge.make()
         const handle = watchSettings(
           instCtx.directory,
           instCtx.worktree,
           () => Effect.sync(() => {
-            const newSettings = loadChain(instCtx.directory, instCtx.worktree)
-            lastSummaries = summarizeChain(instCtx.directory, instCtx.worktree, Global.Path.config)
-            return newSettings
+            const reloaded = loadChainWithSummaries(instCtx.directory, instCtx.worktree)
+            lastSummaries = reloaded.summaries
+            return reloaded.settings
           }),
-          (newSettings) => {
+          (newSettings, changedFile) => {
             stateObj.settings = newSettings
             stateObj.hooksList = lastSummaries
+            // SettingsHook: ConfigChange — a watched hooks.json layer reloaded.
+            // Fire-and-forget; hook failures never break the reload.
+            bridge.fork(
+              trigger({ event: "ConfigChange", configPath: changedFile }, { sessionID: "", transcriptPath: "" }).pipe(
+                Effect.ignore,
+              ),
+            )
           },
           Global.Path.config,
         )
@@ -1612,8 +1766,8 @@ export const layer = Layer.effect(
     )
 
     // Handlers resolve their deps lazily at trigger time from the ambient context.
-    // This keeps the layer lightweight (only EventV2Bridge + Database + SessionHooks
-    // needed at construction), following the Todo pattern exactly.
+    // This keeps the layer lightweight (only SessionHooks needed at
+    // construction), following the Todo pattern exactly.
     const handlers: Record<string, HookHandler> = {
       command: commandHandler,
       mcp: mcpHandler,
@@ -1648,9 +1802,81 @@ export const layer = Layer.effect(
         return {
           json: undefined as HookJSONOutput | undefined,
           exitBlock: `hook type "${entry.type}" not yet implemented` as string | undefined,
+          rawStdout: undefined as string | undefined,
+          exitCode: undefined as number | null | undefined,
         }
       }
       return yield* handler.run(entry as never, envelope, cwd, inHook)
+    })
+
+    // Background scope for async hooks. Lives as long as the SettingsHook service
+    // instance; closed via finalizer when the instance is disposed.
+    const bgScope = yield* Scope.make()
+    yield* Effect.addFinalizer(() => Scope.close(bgScope, Exit.void))
+
+    /**
+     * Async hook completion handler. Computes rewake-worthiness from the result
+     * and, when `asyncRewake` is set, admits a steer prompt to the originating
+     * session via the opencode Session.Service (ambient in the session runtime).
+     * Best-effort — all errors swallowed to honor the "never crash host" contract.
+     */
+    const onAsyncComplete = Effect.fnUntraced(function* (
+      entry: HookCommand,
+      event: HookEvent,
+      sessionID: string | undefined,
+      hookRewake: HookRewake.Interface | undefined,
+      result: {
+        json?: HookJSONOutput | undefined
+        exitBlock?: string | undefined
+        rawStdout?: string | undefined
+        exitCode?: number | null | undefined
+      },
+    ) {
+      if (!entry.asyncRewake) {
+        log.debug("async hook completed (no rewake)", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+      if (event === "SessionEnd") return
+      if (!sessionID) {
+        log.warn("async hook rewake skipped: no sessionID", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+      if (!hookRewake) {
+        log.warn("async hook rewake skipped: HookRewake.Service unavailable", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+
+      const parts: string[] = []
+      if (result.exitBlock) parts.push(result.exitBlock)
+      if (result.json?.systemMessage) parts.push(result.json.systemMessage)
+      if (result.json?.decision === "block" && result.json.reason) parts.push(result.json.reason)
+      const hso = result.json?.hookSpecificOutput
+      if (hso && "additionalContext" in hso && typeof hso.additionalContext === "string") {
+        parts.push(hso.additionalContext)
+      }
+      // exit-0 plain-text stdout is rewake-worthy for the same two events that
+      // inject it synchronously (P1a async parity).
+      if (
+        !result.json &&
+        result.exitCode === 0 &&
+        result.rawStdout &&
+        (event === "UserPromptSubmit" || event === "SessionStart")
+      ) {
+        const text = result.rawStdout.trim()
+        if (text) parts.push(text)
+      }
+      if (parts.length === 0) {
+        log.debug("async hook completed: nothing rewake-worthy", { command: commandText(entry).slice(0, 80) })
+        return
+      }
+
+      const text = buildRewakePrompt(entry, event, parts.join("\n"))
+      yield* hookRewake.rewake({ sessionID: SessionID.make(sessionID), text }).pipe(
+        Effect.catchDefect((defect) => {
+          log.warn("async hook rewake defect swallowed", { command: commandText(entry).slice(0, 80), error: String(defect) })
+          return Effect.void
+        }),
+      )
     })
 
     const trigger = Effect.fn("SettingsHook.trigger")(function* (
@@ -1703,20 +1929,23 @@ export const layer = Layer.effect(
         return result
       }
 
-      // TODO(WP-6B): once a workspace-trust system exists in this fork, gate
-      // execution here with something like:
-      //
-      //   const trusted = yield* Project.isTrusted(s.cwd)
-      //   if (!trusted && !s.settings.allowUntrusted) {
-      //     log.warn("hooks skipped: workspace not trusted", { cwd: s.cwd })
-      //     return result            // silent allow — never deny / throw
-      //   }
-      //
-      // Hooks reach into the user's shell, network, and LLM accounts; running
-      // them inside an untrusted workspace is the same threat model VS Code
-      // gates with workspace-trust. Until then this is a no-op so behavior is
-      // unchanged. The `allowUntrusted` schema field is already accepted on
-      // Settings so user configs written today won't fail-parse later.
+      // ── WP-6B workspace-trust gate ──────────────────────────────
+      // OPT-IN enforcement: enabled only when any chain layer sets `requireTrust`
+      // OR env OPENCODE_HOOKS_REQUIRE_TRUST=1. When enabled and the working
+      // directory is not on the persisted trust list, ALL hooks are silently
+      // skipped (log.warn pointing at the trust file + cwd, empty TriggerResult).
+      // A layer may declare `allowUntrusted: true` to opt out of the gate. NEVER
+      // deny / throw — a trust gate that throws becomes a denial vector. Default
+      // (enforcement off) is byte-for-byte the prior behavior (zero gate).
+      const requireTrust =
+        s.settings.requireTrust === true || process.env.OPENCODE_HOOKS_REQUIRE_TRUST === "1"
+      if (requireTrust && !isTrusted(s.cwd) && s.settings.allowUntrusted !== true) {
+        log.warn("hooks skipped: workspace not trusted", {
+          cwd: s.cwd,
+          trustFile: trustFilePath(),
+        })
+        return result
+      }
 
       // ── Session-scoped hook resolution (WP-5D) ────────────────
       // Sub-agent stop semantics: if the caller marks this trigger as
@@ -1771,20 +2000,59 @@ export const layer = Layer.effect(
           // [FORK:hook-ext] Pre-dispatch filter — skip entry if condition not met
           if (forkHooks?.beforeRunEntry && !forkHooks.beforeRunEntry(entry, envelope, payload.event)) continue
 
+          // ── Async fork (hook-async-rewake) ──────────────────────
+          // async:true entries are forked into the background and do NOT
+          // participate in the current TriggerResult aggregation. Their output
+          // (when asyncRewake:true) is delivered back via onAsyncComplete →
+          // Session.rewake once the background fiber settles.
+          if (entry.async) {
+            if (group._sessionEntry?.once && ctx.sessionID) {
+              yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
+            }
+            const hookRewake = Option.getOrUndefined(yield* Effect.serviceOption(HookRewake.Service))
+            const capturedEvent = payload.event
+            const capturedSessionID = ctx.sessionID
+            yield* runEntry(entry, envelope, s.cwd, false).pipe(
+              Effect.catchDefect((defect) => {
+                log.warn("async hook entry defect swallowed (host protected)", {
+                  event: capturedEvent,
+                  command: commandText(entry),
+                  error: String(defect),
+                })
+                return Effect.succeed({
+                  json: undefined as HookJSONOutput | undefined,
+                  exitBlock: undefined as string | undefined,
+                  rawStdout: undefined as string | undefined,
+                  exitCode: undefined as number | null | undefined,
+                })
+              }),
+              Effect.flatMap((r) => onAsyncComplete(entry, capturedEvent, capturedSessionID, hookRewake, r)),
+              Effect.catchDefect((defect) => {
+                log.warn("async hook completion defect swallowed", {
+                  command: commandText(entry),
+                  error: String(defect),
+                })
+                return Effect.void
+              }),
+              Effect.forkIn(bgScope),
+            )
+            continue
+          }
+
           // "Never crash host" contract: a hook handler can throw an unrecoverable
           // defect (null deref, OOM, native assert). Effect.catch at the tool-layer
           // call sites only catches typed Failures, so a defect would propagate and
           // kill the session. Catch defects here at the single entry-execution point
           // (covers all handler types: command/mcp/http/prompt/agent) → silent allow,
           // log, and continue to the next entry.
-          const { json, exitBlock } = yield* runEntry(entry, envelope, s.cwd, false).pipe(
+          const { json, exitBlock, rawStdout, exitCode } = yield* runEntry(entry, envelope, s.cwd, false).pipe(
             Effect.catchDefect((defect) => {
               log.warn("hook entry defect swallowed (host protected)", {
                 event: payload.event,
                 command: commandText(entry),
                 error: String(defect),
               })
-              return Effect.succeed({ json: undefined, exitBlock: undefined })
+              return Effect.succeed({ json: undefined, exitBlock: undefined, rawStdout: undefined, exitCode: undefined })
             }),
           )
 
@@ -1797,6 +2065,21 @@ export const layer = Layer.effect(
           }
 
           if (!json) {
+            // P1a: exit-0 plain-text stdout → additionalContext for the two
+            // events CC injects it for (UserPromptSubmit / SessionStart). JSON
+            // stdout was already parsed above (json defined → this branch
+            // skipped); only non-JSON exit-0 output reaches here. Runs through
+            // the same per-session dedup bucket as hookSpecificOutput.
+            if (
+              rawStdout &&
+              exitCode === 0 &&
+              (payload.event === "UserPromptSubmit" || payload.event === "SessionStart")
+            ) {
+              const text = rawStdout.trim()
+              if (text && addSeen(s.seen, ctx.sessionID, text)) {
+                result.additionalContexts.push(text)
+              }
+            }
             // once: true entries are cleared after running, regardless of result.
             if (group._sessionEntry?.once && ctx.sessionID) {
               yield* sessionHooks.remove(SessionID.make(ctx.sessionID), group._sessionEntry.id)
@@ -1824,10 +2107,7 @@ export const layer = Layer.effect(
             // session, not once per process lifetime. ctx here is the
             // TriggerContext (sessionID is its bucket key); the local was
             // renamed off `ctx` so the outer TriggerContext stays reachable.
-            const bucket = s.seen.get(ctx.sessionID) ?? new Set<string>()
-            if (!bucket.has(additionalContext)) {
-              bucket.add(additionalContext)
-              s.seen.set(ctx.sessionID, bucket)
+            if (addSeen(s.seen, ctx.sessionID, additionalContext)) {
               result.additionalContexts.push(additionalContext)
             }
           }
@@ -1879,16 +2159,11 @@ export const layer = Layer.effect(
   }),
 )
 
-// defaultLayer provides MCP, HttpClient, Provider, Auth, FileSystem, and
-// ChildProcessSpawner. The agent handler (WP-4D-2) yields the latter two for
-// its bash / read_file / list_dir / grep tools. Every module that consumes
-// these spawn/fs services closes them in its own defaultLayer (see
-// Only provide deps needed at layer construction (EventV2Bridge + Database + SessionHooks).
-// Handler deps (MCP/Provider/Auth/FSUtil/HttpClient/CrossSpawnSpawner) are resolved
-// lazily at trigger time from whatever ambient context the Effect runs in.
+// Only provide deps needed at layer construction (SessionHooks — the sole
+// service yielded in the layer body). Handler deps (MCP/Provider/Auth/FSUtil/
+// HttpClient/CrossSpawnSpawner/HookRewake) are resolved lazily at trigger time
+// from whatever ambient context the Effect runs in.
 export const defaultLayer = layer.pipe(
-  Layer.provide(EventV2Bridge.defaultLayer),
-  Layer.provide(Database.defaultLayer),
   Layer.provide(SessionHooks.defaultLayer),
 )
 
@@ -1969,10 +2244,6 @@ function invokeMcpHook(
   })
 }
 
-export const node = LayerNode.make(layer, [
-  EventV2Bridge.node,
-  Database.node,
-  SessionHooks.node,
-])
+export const node = LayerNode.make(layer, [SessionHooks.node])
 
 export * as SettingsHook from "./settings"

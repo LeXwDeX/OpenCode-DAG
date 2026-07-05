@@ -27,6 +27,7 @@ import { McpOAuthCallback } from "./oauth-callback"
 import { McpAuth } from "./auth"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { TuiEvent } from "@/server/tui-event"
+import { registerElicitationHandler } from "./elicitation"
 import open from "open"
 import { Cause, Effect, Exit, Layer, Option, Context, Schema, Stream } from "effect"
 import { EffectBridge } from "@/effect/bridge"
@@ -41,8 +42,9 @@ const CLIENT_OPTIONS = {
   capabilities: {
     // https://github.com/anomalyco/opencode/issues/11948
     // sampling: {},
-    // https://github.com/anomalyco/opencode/issues/23066
-    // elicitation: {},
+    // mcp-elicitation-notification: elicitation client capability + handler wiring.
+    // The handler is registered per-client in `watch` (the connected-client chokepoint).
+    elicitation: {},
     // https://github.com/anomalyco/opencode/issues/2308
     roots: {},
     // https://github.com/anomalyco/opencode/issues/28567
@@ -432,6 +434,10 @@ export const layer = Layer.effect(
     )
 
     function watch(s: State, name: string, client: MCPClient, bridge: EffectBridge.Shape, timeout?: number) {
+      // mcp-elicitation-notification: handle `elicitation/create` reverse requests.
+      // Routes through the Question service (best-effort session via SessionContext),
+      // firing Elicitation/ElicitationResult hooks and the Notification emitter.
+      registerElicitationHandler(client, bridge)
       client.onclose = () => {
         if (s.clients[name] !== client) return
         delete s.clients[name]

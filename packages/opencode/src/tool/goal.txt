@@ -28,3 +28,7 @@ Interact with the autonomous goal loop that drives your session (when one is run
 {"action": "status"}
 {"action": "complete", "reason": "Goal delivered: 3 test files created, all assertions pass after refactor."}
 ```
+
+## Notes
+
+- The external judge that decides whether the goal is `done` or should `continue` only inspects the last 4000 characters of your final assistant message each turn (see `JUDGE_RESPONSE_SNIPPET_CHARS`). Keep the substantive outcome of the turn visible in that tail — e.g. end with a one-line summary of what was delivered/verified. A long response that buries the result earlier in the message may be judged as incomplete even when the work is done.

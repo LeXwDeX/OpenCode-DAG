@@ -1,12 +1,11 @@
 /**
  * [FORK:hook-ext] Hooks config hot reload — not in upstream
  *
- * Polls the project (and worktree) `.opencode/hooks.json` files for mtime
- * changes and triggers a reload when a modification is detected.
+ * Polls the global (`~/.config/opencode/hooks.json`), project, and (when
+ * distinct) worktree `.opencode/hooks.json` files for mtime changes and
+ * triggers a reload when a modification is detected.
  *
- * Scope: project + worktree ONLY. The global `~/.config/opencode/hooks.json` is
- * loaded once at startup and NOT polled — global hooks change rarely; changing
- * them requires a restart. `.claude/` directories are never read.
+ * Scope: global + project + worktree. `.claude/` directories are never read.
  *
  * Strategy: interval polling (mtime check every POLL_INTERVAL_MS), not fs.watch.
  * Rationale: inotify events are unreliable on WSL2 DrvFs mounts (`/mnt/*`) and
@@ -33,11 +32,18 @@ const log = Log.create({ service: "hook.extensions.hot-reload" })
 const POLL_INTERVAL_MS = 2000
 
 /**
- * hooks.json files polled for changes: project + worktree only. Global and
- * `.claude/` are excluded — global is startup-only, `.claude/` is never read.
+ * hooks.json files polled for changes: global + project + worktree. `.claude/`
+ * is never read. Global is included so editing `~/.config/opencode/hooks.json`
+ * takes effect without a restart (previously startup-only).
  */
-function watchedFiles(projectDir: string, worktree: string | undefined): string[] {
-  const files = [path.join(projectDir, ".opencode", "hooks.json")]
+function watchedFiles(
+  projectDir: string,
+  worktree: string | undefined,
+  opencodeGlobalConfig?: string,
+): string[] {
+  const files: string[] = []
+  if (opencodeGlobalConfig) files.push(path.join(opencodeGlobalConfig, "hooks.json"))
+  files.push(path.join(projectDir, ".opencode", "hooks.json"))
   if (worktree && worktree !== projectDir) {
     files.push(path.join(worktree, ".opencode", "hooks.json"))
   }
@@ -74,7 +80,7 @@ function mtimeOrZero(file: string): number {
 }
 
 /**
- * Poll `.opencode/hooks.json` (project + worktree) for mtime changes. On a
+ * Poll `hooks.json` (global + project + worktree) for mtime changes. On a
  * change, call the reload callback which should re-run loadChain() and update
  * the state. `onReload` mutates the cached state object in place (same contract
  * as the prior fs.watch implementation).
@@ -83,21 +89,21 @@ function mtimeOrZero(file: string): number {
  * @param worktree - Optional git worktree root; its .opencode/hooks.json is polled too
  * @param reload - Effect that re-runs loadChain() and returns new Settings
  * @param onReload - Callback invoked with new settings and changed file path
- * @param _opencodeGlobalConfig - Retained for signature compatibility; the global
- *   hooks.json is loaded once at startup and intentionally NOT polled.
+ * @param opencodeGlobalConfig - OpenCode global config dir; its hooks.json is
+ *   also polled so global hooks edits hot-reload without a restart.
  */
 export function watchSettings(
   projectDir: string,
   worktree: string | undefined,
   reload: () => Effect.Effect<Settings>,
   onReload: (newSettings: Settings, changedFile: string) => void,
-  _opencodeGlobalConfig?: string,
+  opencodeGlobalConfig?: string,
 ): HotReloadHandle {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
   let lastReload = 0
   let closed = false
 
-  const files = watchedFiles(projectDir, worktree)
+  const files = watchedFiles(projectDir, worktree, opencodeGlobalConfig)
   // Seed mtime snapshots so a pre-existing file does not fire on the first poll.
   const mtimes = new Map<string, number>(files.map((f) => [f, mtimeOrZero(f)]))
   log.info("polling hooks.json files", { files })

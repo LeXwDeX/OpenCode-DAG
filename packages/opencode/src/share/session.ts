@@ -55,13 +55,16 @@ export const layer = Layer.effect(
         log.info("SessionStart hook: firing trigger", { sessionID: result.id })
         const exit = yield* settingsHook
           .trigger(
-            { event: "SessionStart", source: "startup", sessionID: result.id } as any,
+            { event: "SessionStart", source: "startup" },
             { sessionID: result.id, transcriptPath: "" },
           )
           .pipe(Effect.exit)
-        if (exit._tag === "Success" && startCtx && exit.value.additionalContexts?.length) {
-          for (const ctx of exit.value.additionalContexts) {
-            if (ctx) yield* startCtx.append(result.id, ctx)
+        if (exit._tag === "Success") {
+          yield* SettingsHook.landSystemMessages(exit.value, { sessionID: result.id })
+          if (startCtx && exit.value.additionalContexts?.length) {
+            for (const ctx of exit.value.additionalContexts) {
+              if (ctx) yield* startCtx.append(result.id, ctx)
+            }
           }
         }
       }

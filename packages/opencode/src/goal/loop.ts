@@ -1,6 +1,6 @@
 export * as GoalLoop from "./loop"
 
-import { Effect, Layer, Context, Stream, Scope } from "effect"
+import { Effect, Layer, Context, Option, Stream, Scope, Fiber, Cause } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -19,6 +19,29 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/GoalLoop") {}
+
+/**
+ * Test-only injection point for the judge LLM call (D5). When provided in the
+ * Effect context, `afterIdle` uses `call` instead of the production
+ * Provider → generateText path, so e2e tests can script judge verdicts
+ * (continue→done) with no network or Provider credentials. Production never
+ * provides it, so the Provider path is byte-for-byte unchanged.
+ */
+export type JudgeCallLLM = (opts: {
+  system: string
+  user: string
+  temperature: number
+  maxTokens: number
+  timeout: number
+}) => Effect.Effect<string, Error>
+
+export interface GoalLoopJudgeLLMInterface {
+  readonly call: JudgeCallLLM
+}
+
+export class GoalLoopJudgeLLM extends Context.Service<GoalLoopJudgeLLM, GoalLoopJudgeLLMInterface>()(
+  "@opencode/GoalLoop/JudgeLLM",
+) {}
 
 /**
  * Pure predicate: returns true when the most recent user message in `msgs`
@@ -92,10 +115,30 @@ export const layer = Layer.effect(
           Stream.runForEach((evt) =>
             Effect.gen(function* () {
               const sid = evt.data.sessionID
-              // v1.17.11: idle has no cause field; afterIdle handles
-              // abort detection via shouldPreempt (user message after cancel)
+              // D4 (fiber lifecycle): do NOT fork or register a fiber for
+              // sessions without an active goal. Without this pre-check the
+              // fibers Map grows once per idle event for every session that
+              // ever went idle — including ones that never set a goal. afterIdle
+              // re-checks goal state internally too; that internal check stays
+              // as a TOCTOU guard (goal could be cleared between this load and
+              // the fork). v1.17.11: idle has no cause field; afterIdle handles
+              // abort detection via shouldPreempt (user message after cancel).
+              const goalState = yield* goal.load(sid)
+              if (!goalState || goalState.status !== "active") return
               const fiber = yield* afterIdle(sid).pipe(Effect.ignore, Effect.forkIn(scope))
               yield* goal.registerLoopFiber(sid, fiber)
+              // D4 self-clean: when this afterIdle fiber completes naturally,
+              // remove it from the fibers Map IF it is still the registered one.
+              // A newer idle event may have already registered a fresh fiber
+              // (registerLoopFiber interrupts + overwrites the old one);
+              // clearLoopFiberIf's identity check avoids evicting the new fiber.
+              // The watcher never interrupts and completes right after its
+              // target, so it does not accumulate across idle events.
+              yield* Fiber.await(fiber).pipe(
+                Effect.flatMap(() => goal.clearLoopFiberIf(sid, fiber)),
+                Effect.ignore,
+                Effect.forkIn(scope),
+              )
             }).pipe(Effect.ignore),
           ),
           Effect.forkScoped,
@@ -149,26 +192,39 @@ export const layer = Layer.effect(
         .slice(-4000)
       if (!responseText) return
 
-      const callLLM = (opts: { system: string; user: string; temperature: number; maxTokens: number; timeout: number }) =>
-        Effect.gen(function* () {
-          const defaultM = yield* provider.defaultModel()
-          const model = yield* provider.getModel(defaultM.providerID, defaultM.modelID)
-          const language = yield* provider.getLanguage(model)
-          const result = yield* Effect.tryPromise({
-            try: (signal) =>
-              generateText({
-                model: language,
-                system: opts.system,
-                prompt: opts.user,
-                temperature: opts.temperature,
-                maxOutputTokens: opts.maxTokens,
-                abortSignal: signal,
-              }),
-            catch: (e) => new Error(`judge LLM call failed: ${e}`),
-          }).pipe(Effect.timeout(`${opts.timeout} seconds`))
-          if (!result) return ""
-          return result.text
-        })
+      // Judge LLM call: prefer the test-injected callable (D5) so e2e tests
+      // can script verdicts without Provider/network; otherwise build the
+      // production Provider → generateText path. The verdict logic below is
+      // unchanged — only the callLLM construction point moved.
+      const injected = Option.getOrUndefined(yield* Effect.serviceOption(GoalLoopJudgeLLM))
+      const callLLM: JudgeCallLLM =
+        injected?.call ??
+        ((opts) =>
+          Effect.gen(function* () {
+            const defaultM = yield* provider.defaultModel()
+            // Judge is a ~200-token JSON binary classification — prefer the
+            // provider's small/fast model (config `small_model`, plugin hint,
+            // or the built-in haiku/flash/nano priority list). Fall back to
+            // the default model when no small model is resolvable, keeping
+            // the prior behavior byte-for-byte for those providers.
+            const small = yield* provider.getSmallModel(defaultM.providerID)
+            const model = small ?? (yield* provider.getModel(defaultM.providerID, defaultM.modelID))
+            const language = yield* provider.getLanguage(model)
+            const result = yield* Effect.tryPromise({
+              try: (signal) =>
+                generateText({
+                  model: language,
+                  system: opts.system,
+                  prompt: opts.user,
+                  temperature: opts.temperature,
+                  maxOutputTokens: opts.maxTokens,
+                  abortSignal: signal,
+                }),
+              catch: (e) => new Error(`judge LLM call failed: ${e}`),
+            }).pipe(Effect.timeout(`${opts.timeout} seconds`))
+            if (!result) return ""
+            return result.text
+          }))
 
       const verdict = yield* GoalJudge.run(
         goalState.goal,
@@ -268,10 +324,28 @@ export const layer = Layer.effect(
         lastJudgeReason: reloadedState.last_reason,
       })
 
-      yield* promptSvc.prompt({
-        sessionID,
-        parts: [{ type: "text", text: continuationText }],
-      })
+      // Continuation dispatch can fail (provider fault, session write error,
+      // …). Previously the error escaped to the fork-point Effect.ignore and
+      // was swallowed, leaving the goal silently `active` with no idle event
+      // to drive the next turn — a permanent, invisible stall. Catch the full
+      // cause (recoverable failures + defects) and transition to a recoverable
+      // paused state via the fiber-safe pauseAndPublish (goal.pause would
+      // clearFiber — us — mid-publish; see the preempt branches above).
+      yield* promptSvc
+        .prompt({
+          sessionID,
+          parts: [{ type: "text", text: continuationText }],
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("goal continuation dispatch failed", { error: Cause.pretty(cause) })
+              yield* goal.pauseAndPublish(sessionID, `continuation dispatch failed: ${Cause.pretty(cause)}`).pipe(
+                Effect.ignore,
+              )
+            }),
+          ),
+        )
 
       // NOTE: We deliberately DO NOT call goal.clearLoopFiber here. The
       // promptSvc.prompt above triggers a fresh agent loop, which when it

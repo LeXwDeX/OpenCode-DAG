@@ -16,7 +16,7 @@ Load the `configure-hooks` skill first — it documents the canonical 27-event l
 
 Ask the user for each field, one at a time:
 
-**Event** — one of the 27 valid events (see the `configure-hooks` skill for the full list). Tool lifecycle: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`. Permission: `PermissionRequest`, `PermissionDenied`. Session: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`. Subagents: `SubagentStart`, `SubagentStop`. Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`. Tasks: `TaskCreated`, `TaskCompleted`, `TeammateIdle`. Other: `Notification`, `Elicitation`, `ElicitationResult`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`.
+**Event** — one of the 26 valid events (see the `configure-hooks` skill for the full list). Tool lifecycle: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`. Permission: `PermissionRequest`, `PermissionDenied`. Session: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`. Subagents: `SubagentStart`, `SubagentStop`. Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`. Tasks: `TaskCreated`, `TaskCompleted`. MCP elicitation: `Elicitation`, `ElicitationResult`. Other: `Notification`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`.
 
 **Reject invalid event names before doing anything else** — show the valid list and re-ask. Do NOT write the file for an unknown event.
 

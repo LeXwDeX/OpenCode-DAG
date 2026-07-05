@@ -22,6 +22,7 @@ export interface Interface {
   readonly addSubgoal: (sessionID: SessionID, subgoal: string) => Effect.Effect<GoalState.Info | undefined>
   readonly removeSubgoal: (
     sessionID: SessionID,
+    /** 1-based index of the subgoal to remove (1 = first subgoal). */
     index: number,
   ) => Effect.Effect<
     | { tag: "ok"; removed: string; state: GoalState.Info }
@@ -54,6 +55,20 @@ export interface Interface {
   >
     readonly registerLoopFiber: (sessionID: SessionID, fiber: Fiber.Fiber<unknown, unknown>) => Effect.Effect<void>
     readonly clearLoopFiber: (sessionID: SessionID) => Effect.Effect<void>
+    /**
+     * Identity-scoped loop-fiber cleanup. Removes the fibers-Map entry for
+     * `sessionID` ONLY if it currently still points at `fiber` (a newer idle
+     * event may have already registered a fresh fiber via registerLoopFiber,
+     * which interrupts and overwrites). MUST NOT interrupt the fiber — callers
+     * invoke this once the fiber has already completed its work (natural
+     * completion via the GoalLoop idle watcher). Without the identity check, a
+     * naturally-completing old fiber would evict a freshly-registered new fiber
+     * and silently stall the goal loop.
+     */
+    readonly clearLoopFiberIf: (
+      sessionID: SessionID,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ) => Effect.Effect<void>
     /**
      * Terminal cleanup for the "done" transition: publishes goal.updated(status=done)
      * with a transient snapshot, deletes the row, then publishes goal.cleared.
@@ -121,6 +136,20 @@ export const layer = Layer.effect(
       const existing = fibers.get(sessionID)
       if (existing) {
         yield* Fiber.interrupt(existing)
+        fibers.delete(sessionID)
+      }
+    })
+
+    // Identity-scoped self-clean for naturally-completing loop fibers. Deletes
+    // the map entry only when it still references THIS fiber — a subsequent
+    // idle event's registerFiber may have already interrupted the old fiber and
+    // installed a new one, and deleting unconditionally would evict the new
+    // fiber. Never interrupts: the calling fiber has already finished its work.
+    const clearFiberIf = Effect.fnUntraced(function* (
+      sessionID: SessionID,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ) {
+      if (fibers.get(sessionID) === fiber) {
         fibers.delete(sessionID)
       }
     })
@@ -213,11 +242,11 @@ export const layer = Layer.effect(
       const state = new GoalState.Info({
         goal,
         status: "active",
-        turns_used: 0 as any,
-        max_turns: (maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS) as any,
+        turns_used: GoalState.nni(0),
+        max_turns: GoalState.nni(maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS),
         created_at: now,
         last_turn_at: now,
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         subgoals: [],
       })
       yield* saveState(sessionID, state)
@@ -278,7 +307,7 @@ export const layer = Layer.effect(
       const updated = new GoalState.Info({
         ...state,
         status: "active",
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         paused_reason: undefined,
         last_turn_at: Date.now(),
       })
@@ -388,7 +417,7 @@ export const layer = Layer.effect(
           last_turn_at: now,
           last_verdict: "done",
           last_reason: reason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         yield* saveState(sessionID, updated)
         // Do NOT publish goal.updated here. deleteAndPublishDone is the SOLE
@@ -405,7 +434,7 @@ export const layer = Layer.effect(
         }
       }
 
-      const turnsUsed = (state.turns_used + 1) as any
+      const turnsUsed = GoalState.nni(Number(state.turns_used) + 1)
 
       if (newParseFailures >= GoalPrompts.MAX_CONSECUTIVE_PARSE_FAILURES) {
         const pauseReason =
@@ -418,7 +447,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Do NOT call clearFiber here. updateAfterJudge is inlined into
         // GoalLoop.afterIdle (loop.ts:122), so the fiber running this code
@@ -447,7 +476,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Same self-interrupt hazard as the parse-failure branch above: we
         // are running inside the afterIdle loop fiber, so clearFiber would
@@ -468,7 +497,7 @@ export const layer = Layer.effect(
         last_turn_at: now,
         last_verdict: "continue",
         last_reason: reason,
-        consecutive_parse_failures: newParseFailures as any,
+        consecutive_parse_failures: GoalState.nni(newParseFailures),
       })
       yield* saveState(sessionID, updated)
       yield* publishGoal(sessionID, updated)
@@ -499,6 +528,11 @@ export const layer = Layer.effect(
             text: "Session 正在执行中。请先 /stop 中断后再设定新目标。",
           }
         }
+        // Known TOCTOU: `get` above then goal.set + continuation dispatch below
+        // is not atomic — the session could flip to busy in between. Accepted:
+        // the loop's idle gating and judge-preempt guard handle that case
+        // gracefully; an atomic check-and-set would need a session-level lock
+        // outside this module's scope.
       }
 
       if (lower === "" || lower === "status") {
@@ -517,6 +551,18 @@ export const layer = Layer.effect(
       }
 
       if (lower === "resume") {
+        // Busy guard, symmetric with the set-new-goal guard above. `resume` is a
+        // control command so it bypasses the generic busy check; without this,
+        // resuming a goal on a busy session would return `kick`, prompting
+        // prompt.ts to start a second agent loop concurrently with the running
+        // one. Keep the goal paused and ask the user to /stop first instead.
+        const resumeStatus = yield* sessionStatus.get(sessionID)
+        if (resumeStatus.type === "busy") {
+          return {
+            type: "message" as const,
+            text: "Session 正在执行中。请先 /stop 中断后再 /goal resume。",
+          }
+        }
         const result = yield* resume(sessionID)
         if (!result) return { type: "message" as const, text: "没有已暂停的目标可以恢复。" }
         // Warning UX for budget-exhaustion pauses: we kept turns_used intact
@@ -646,6 +692,7 @@ export const layer = Layer.effect(
       updateAfterJudge,
       registerLoopFiber: registerFiber,
       clearLoopFiber: clearFiber,
+      clearLoopFiberIf: clearFiberIf,
       deleteAndPublishDone,
       pauseAndPublish,
     })

@@ -55,17 +55,30 @@ Top-level keys are event names; each maps to a list of matcher blocks:
 - `"Bash|Edit|Write"` — pipe-separated list
 - any other string — treated as a regex tested against the target
 
-## Events (27 total)
+## Events (26 total)
 
 Tool lifecycle: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`
 Permission: `PermissionRequest`, `PermissionDenied`
 Session lifecycle: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`
 Subagents: `SubagentStart`, `SubagentStop`
 Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`
-Tasks/goals: `TaskCreated`, `TaskCompleted`, `TeammateIdle`
-Other: `Notification`, `Elicitation`, `ElicitationResult`, `ConfigChange`,
-`WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`,
-`FileChanged`
+Tasks/goals: `TaskCreated`, `TaskCompleted`
+MCP elicitation: `Elicitation`, `ElicitationResult`
+Other: `Notification`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`,
+`InstructionsLoaded`, `CwdChanged`, `FileChanged`
+
+Removed event: `TeammateIdle` — no teammate concept exists in opencode, so it
+could never fire. Entries naming it in hooks.json are skipped with a warning
+(not an error); delete them.
+
+`Elicitation` / `ElicitationResult` fire when an MCP server issues
+`elicitation/create`; the ask is mapped onto the Question UI, validated against
+the requested schema, and answered accept/decline/cancel. `Notification` fires
+for "agent needs attention" moments (permission asks, MCP elicitation asks)
+through the internal Notification emitter; hook commands are the only external
+effect today (OS/desktop delivery is a future change). A blocking `Elicitation`
+hook deny short-circuits to `decline` without surfacing; unanswered elicitations
+decline after 5 minutes (headless compositions decline immediately).
 
 If you need the exact input/output shape for a specific event, read
 `packages/opencode/src/hook/settings.ts` (`HookEvent`, `HookSpecificOutput`) —

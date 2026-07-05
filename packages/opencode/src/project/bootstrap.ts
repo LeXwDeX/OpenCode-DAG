@@ -10,6 +10,7 @@ import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { GoalLoop } from "@/goal/loop"
+import { SettingsHook } from "@/hook/settings"
 import { Service } from "./bootstrap-service"
 
 export { Service } from "./bootstrap-service"
@@ -64,6 +65,14 @@ export const layer = Layer.effect(
         yield* goalLoop.value
           .init()
           .pipe(Effect.catchCause((cause) => Effect.logWarning("goal loop init failed", { cause })))
+      }
+      // SettingsHook: Setup fires once per instance bootstrap. Resolved lazily
+      // (like GoalLoop) so bootstrap layers stay self-contained.
+      const settingsHook = yield* Effect.serviceOption(SettingsHook.Service)
+      if (settingsHook._tag === "Some") {
+        yield* settingsHook.value
+          .trigger({ event: "Setup", trigger: "startup" }, { sessionID: "", transcriptPath: "" })
+          .pipe(Effect.ignore)
       }
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 

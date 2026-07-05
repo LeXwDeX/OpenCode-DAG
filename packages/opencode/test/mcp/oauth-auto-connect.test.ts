@@ -1,4 +1,4 @@
-import { expect, mock, beforeEach } from "bun:test"
+import { expect, mock, beforeEach, afterAll } from "bun:test"
 import { Effect, Layer } from "effect"
 import { testEffect } from "../lib/effect"
 
@@ -125,6 +125,12 @@ beforeEach(() => {
   connectSucceedsImmediately = false
   serverCapabilities = { tools: {} }
   listToolsCalls = 0
+})
+
+afterAll(() => {
+  // Prevent this file's MCP SDK module mocks from leaking into later tests that
+  // need the real Client implementation (notably elicitation-transport).
+  mock.restore()
 })
 
 // Import modules after mocking

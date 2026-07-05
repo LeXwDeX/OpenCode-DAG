@@ -7,6 +7,11 @@ export const DEFAULT_MAX_TURNS = 20
 // Was 30_000 (ms) which produced "30000 seconds" = 8.3h (effectively no timeout).
 export const DEFAULT_JUDGE_TIMEOUT_SECONDS = 30
 export const MAX_CONSECUTIVE_PARSE_FAILURES = 3
+// Known tradeoff: the judge only sees the last JUDGE_RESPONSE_SNIPPET_CHARS of
+// the final assistant message. This bounds judge cost/latency but means a long
+// response that buries a problem in an earlier section can pass review. The
+// budget is generous for normal replies; the limit is also surfaced in
+// tool/goal.txt so operators know the judge's view is tail-bounded.
 export const JUDGE_RESPONSE_SNIPPET_CHARS = 4000
 // Zombie-goal freshness guard threshold (D6). A goal that is still active with
 // turns_used 0 after this many ms, and whose initial kick produced no assistant

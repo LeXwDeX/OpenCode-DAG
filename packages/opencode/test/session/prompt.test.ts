@@ -47,6 +47,7 @@ import { Shell } from "@opencode-ai/core/shell"
 import { Snapshot } from "../../src/snapshot"
 import { ToolRegistry } from "@/tool/registry"
 import { Truncate } from "@/tool/truncate"
+import { SettingsHook, type HookPayload } from "@/hook/settings"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Ripgrep } from "@opencode-ai/core/ripgrep"
 import { Format } from "../../src/format"
@@ -161,6 +162,54 @@ const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
 const processorCreateStarted: Array<() => void> = []
+
+// Recording SettingsHook stub (hook-event-wiring 4.2): captures Stop/StopFailure
+// trigger payloads from the prompt loop without executing real hooks.
+const hookRecorded: HookPayload[] = []
+// Test-only opt-in: when > 0, the recorder returns a block decision for the next
+// N Stop triggers (drives the Stop-hook continuation path so stop_hook_active can
+// be observed transitioning false → true). Defaults to 0 (never block).
+let stopBlockNext = 0
+// Test-only controls for the hooks-stop-continuation-fidelity regression tests.
+// All default inert so existing tests are unaffected.
+//   stopBlockAlways       — every Stop blocks (hard-limit test)
+//   stopSystemMessages    — returned on every Stop (systemMessage-outlet test)
+//   stopAdditionalContexts— returned on every Stop (additionalContext test)
+//   subagentStopBlockAlways— every SubagentStop blocks (SubagentStop hard-limit test)
+let stopBlockAlways = false
+let stopSystemMessages: string[] = []
+let stopAdditionalContexts: string[] = []
+let subagentStopBlockAlways = false
+const hookRecorderLayer = Layer.succeed(
+  SettingsHook.Service,
+  SettingsHook.Service.of({
+    trigger: (payload) =>
+      Effect.sync(() => {
+        hookRecorded.push(payload)
+        let blocked: { reason: string; command: string } | undefined
+        if (payload.event === "Stop") {
+          if (stopBlockAlways || stopBlockNext > 0) {
+            if (!stopBlockAlways) stopBlockNext--
+            blocked = { reason: "test: stop-hook block", command: "recorder" }
+          }
+        }
+        if (payload.event === "SubagentStop" && subagentStopBlockAlways) {
+          blocked = { reason: "test: subagent-stop block", command: "recorder" }
+        }
+        const systemMessages = payload.event === "Stop" ? stopSystemMessages : []
+        const additionalContexts = payload.event === "Stop" ? stopAdditionalContexts : []
+        return {
+          blocked,
+          permissionDecision: undefined,
+          permissionDecisionReason: undefined,
+          additionalContexts,
+          systemMessages,
+          hookSpecificOutput: undefined,
+        }
+      }),
+    list: () => Effect.succeed([]),
+  }),
+)
 const blockingProcessor = Layer.succeed(
   SessionProcessor.Service,
   SessionProcessor.Service.of({
@@ -170,6 +219,7 @@ const blockingProcessor = Layer.succeed(
 
 function makePrompt(input?: { mcpInstructions?: MCP.ServerInstructions[]; processor?: "blocking" }) {
   const deps = Layer.mergeAll(
+    hookRecorderLayer,
     Session.defaultLayer,
     Snapshot.defaultLayer,
     LLM.defaultLayer,
@@ -628,6 +678,306 @@ it.instance("loop stops provider overflow instead of auto-compacting when disabl
     }
     expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
   }),
+)
+
+it.instance("loop fires StopFailure (not Stop) when the turn ends in error", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => ({
+      ...providerCfg(url),
+      compaction: { auto: false },
+    }))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.error(413, { error: { message: "request entity too large" } })
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+
+    const before = hookRecorded.length
+    const result = yield* prompt.loop({ sessionID: chat.id })
+    const fired = hookRecorded.slice(before)
+
+    // Error propagation unchanged: the loop still returns the errored assistant.
+    expect(result.info.role).toBe("assistant")
+    if (result.info.role === "assistant") expect(result.info.error?.name).toBe("ContextOverflowError")
+
+    const stopFailures = fired.filter((p) => p.event === "StopFailure")
+    expect(stopFailures).toHaveLength(1)
+    expect(stopFailures[0]).toMatchObject({ event: "StopFailure", stopHookActive: false })
+    expect((stopFailures[0] as { error?: string }).error).toBeTruthy()
+    expect(fired.filter((p) => p.event === "Stop")).toHaveLength(0)
+  }),
+)
+
+it.instance("loop fires Stop (not StopFailure) on clean completion", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig((url) => providerCfg(url))
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ title: "Pinned" })
+
+    yield* llm.text("hi there")
+    yield* prompt.prompt({
+      sessionID: chat.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+
+    const before = hookRecorded.length
+    yield* prompt.loop({ sessionID: chat.id })
+    const fired = hookRecorded.slice(before)
+
+    expect(fired.filter((p) => p.event === "Stop")).toHaveLength(1)
+    expect(fired.filter((p) => p.event === "StopFailure")).toHaveLength(0)
+  }),
+)
+
+type StopPayload = Extract<HookPayload, { event: "Stop" }>
+const stopPayloads = (slice: HookPayload[]) => slice.filter((p): p is StopPayload => p.event === "Stop")
+
+// hooks-api-fidelity: stop_hook_active anti-loop signal. A blocked Stop drives a
+// continuation turn; the second Stop carries stop_hook_active=true. A fresh user
+// prompt starts a new turn so the signal resets to false.
+unix(
+  "stop_hook_active: false → block-continue → true → new input resets to false",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => providerCfg(url))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "stop-hook-active" })
+
+      // Turn 1: two model replies queued — the first finishes and is blocked by
+      // the Stop hook, the continuation turn consumes the second and is allowed.
+      yield* llm.text("first reply")
+      yield* llm.text("continuation reply")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "go" }],
+      })
+      stopBlockNext = 1
+      const before = hookRecorded.length
+      yield* prompt.loop({ sessionID: chat.id })
+      const turn1 = stopPayloads(hookRecorded.slice(before))
+      // First Stop (stop_hook_active=false) blocked → continuation → second Stop
+      // (stop_hook_active=true) allowed.
+      expect(turn1).toHaveLength(2)
+      expect(turn1[0].stopHookActive).toBe(false)
+      expect(turn1[1].stopHookActive).toBe(true)
+      stopBlockNext = 0
+
+      // Turn 2: a new user prompt resets the signal — the Stop is false again.
+      yield* llm.text("third reply")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "again" }],
+      })
+      const before2 = hookRecorded.length
+      yield* prompt.loop({ sessionID: chat.id })
+      const turn2 = stopPayloads(hookRecorded.slice(before2))
+      expect(turn2).toHaveLength(1)
+      expect(turn2[0].stopHookActive).toBe(false)
+    }),
+)
+
+// hooks-stop-continuation-fidelity: Stop block reason injection, hard limit, and
+// systemMessage outlet. Each test resets its recorder control in a finally-style
+// finalizer so a failure can't poison sibling tests.
+
+const syntheticTexts = (sessionID: SessionID) =>
+  Effect.gen(function* () {
+    const msgs = yield* MessageV2.filterCompactedEffect(sessionID)
+    return msgs
+      .flatMap((m) => m.parts)
+      .filter((p): p is SessionV1.TextPart => p.type === "text" && p.synthetic === true)
+      .map((p) => p.text)
+  })
+
+unix(
+  "Stop block continuation injects the block reason as a synthetic text part",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "stop-reason-inject" })
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          stopBlockNext = 0
+        }),
+      )
+
+      yield* llm.text("first reply")
+      yield* llm.text("continuation reply")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "go" }],
+      })
+      stopBlockNext = 1
+      yield* prompt.loop({ sessionID: chat.id })
+
+      // The blocked Stop's reason is injected as a synthetic text part so the
+      // continuation turn carries it in context (mirrors task.ts SubagentStop).
+      expect(yield* syntheticTexts(chat.id)).toContain("test: stop-hook block")
+    }),
+)
+
+unix(
+  "Stop hard limit: a hook that always blocks is capped at MAX_STOP_CONTINUATIONS",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "stop-hard-limit" })
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          stopBlockAlways = false
+        }),
+      )
+
+      const max = SettingsHook.MAX_STOP_CONTINUATIONS
+      // One reply per turn: the initial turn plus MAX continuation turns.
+      for (let i = 0; i <= max; i++) yield* llm.text(`reply ${i}`)
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "go" }],
+      })
+      stopBlockAlways = true
+      const before = hookRecorded.length
+      yield* prompt.loop({ sessionID: chat.id })
+      const stops = stopPayloads(hookRecorded.slice(before))
+
+      // 1 initial Stop (stop_hook_active=false) + MAX continuation Stops (true),
+      // then the hard limit forces exit — no infinite loop.
+      expect(stops).toHaveLength(max + 1)
+      expect(stops[0]!.stopHookActive).toBe(false)
+      for (let i = 1; i <= max; i++) expect(stops[i]!.stopHookActive).toBe(true)
+    }),
+)
+
+unix(
+  "Stop hook systemMessage is landed as a synthetic text part (no silent drop)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "stop-sysmsg" })
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          stopSystemMessages = []
+        }),
+      )
+
+      yield* llm.text("done reply")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "go" }],
+      })
+      stopSystemMessages = ["SYSMSG-MARKER-123"]
+      yield* prompt.loop({ sessionID: chat.id })
+
+      // The Stop path lands systemMessages via the shared outlet (log + inject
+      // here), so the marker reaches the conversation rather than being dropped.
+      expect(yield* syntheticTexts(chat.id)).toContain("SYSMSG-MARKER-123")
+    }),
+)
+
+unix(
+  "Stop hook additionalContext is consumed (not dropped) on the Stop path",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "stop-addctx" })
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          stopAdditionalContexts = []
+        }),
+      )
+
+      yield* llm.text("done reply")
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "go" }],
+      })
+      stopAdditionalContexts = ["ADDCTX-MARKER-456"]
+      yield* prompt.loop({ sessionID: chat.id })
+
+      expect(yield* syntheticTexts(chat.id)).toContain("ADDCTX-MARKER-456")
+    }),
+)
+
+unix(
+  "SubagentStop hard limit: a hook that always blocks is capped (no infinite loop)",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        agent: { general: { model: "test/test-model" } },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "subagent-stop-limit",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          subagentStopBlockAlways = false
+        }),
+      )
+
+      const max = SettingsHook.MAX_STOP_CONTINUATIONS
+      // Main agent emits the task tool call; the subagent then runs 1 initial
+      // turn + MAX continuation turns (one per blocked SubagentStop), and the
+      // main agent takes a follow-up turn after the task tool returns.
+      yield* llm.tool("task", {
+        description: "subagent stop limit probe",
+        prompt: "just say ok",
+        subagent_type: "general",
+      })
+      for (let i = 0; i < max + 2; i++) yield* llm.text("ok")
+
+      subagentStopBlockAlways = true
+      const before = hookRecorded.length
+      yield* prompt.prompt({
+        sessionID: chat.id,
+        agent: "build",
+        parts: [{ type: "text", text: "run the subagent" }],
+      })
+      const subStops = hookRecorded
+        .slice(before)
+        .filter((p): p is Extract<HookPayload, { event: "SubagentStop" }> => p.event === "SubagentStop")
+
+      // The for-loop caps continuation at MAX: SubagentStop fires exactly MAX
+      // times (first with stop_hook_active=false, rest true), then the loop
+      // exits — a misbehaving hook can't re-prompt the subagent forever.
+      expect(subStops).toHaveLength(max)
+      expect(subStops[0]!.stopHookActive).toBe(false)
+      for (let i = 1; i < max; i++) expect(subStops[i]!.stopHookActive).toBe(true)
+    }),
+  30_000,
 )
 
 noLLMServer.instance.skip(
