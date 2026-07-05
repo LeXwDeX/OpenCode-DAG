@@ -1,9 +1,19 @@
-import { afterEach, beforeEach, describe, expect } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock } from "bun:test"
 import { Cause, Effect, Fiber, Layer, Exit } from "effect"
-import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+
+// Bypass Bun's process-global mock registry. Sibling MCP tests register
+// `mock.module("@modelcontextprotocol/sdk/client/index.js", ...)` with reduced
+// MockClient implementations (intentionally no transport, no `callTool`);
+// under Bun's --only-failures retry, that mock can still be in place when this
+// file's failure is re-run in the second test pass, yielding `client.callTool
+// is not a function`. Restore the registry first, then dynamically import the
+// real Client (dynamic import is required here because static imports hoist
+// and would resolve from the already-mocked module cache entry before this code).
+mock.restore()
+const { Client } = await import("@modelcontextprotocol/sdk/client/index.js")
 import { Question } from "@/question"
 import { Notification } from "@/notification"
 import { SettingsHook, type HookPayload } from "@/hook/settings"
