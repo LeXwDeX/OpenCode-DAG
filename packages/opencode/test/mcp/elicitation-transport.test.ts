@@ -1,19 +1,28 @@
+// Bypass Bun's process-global mock registry AND module cache. Sibling MCP
+// tests register `mock.module("@modelcontextprotocol/sdk/client/index.js", ...)`
+// with reduced MockClient implementations (no transport, no `callTool`);
+// `mock.restore()` clears the registry, but Bun's module cache is keyed by
+// specifier and retains the previously-resolved *mock instance* for that path.
+// We therefore pull types from the public path via a type-only import, but at
+// runtime load Client from the dist/esm path — a different specifier → a
+// different cache entry → the real SDK Client with full callTool support.
 import { afterEach, beforeEach, describe, expect, mock } from "bun:test"
 import { Cause, Effect, Fiber, Layer, Exit } from "effect"
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
+import type { Client as ClientType } from "@modelcontextprotocol/sdk/client/index.js"
 
-// Bypass Bun's process-global mock registry. Sibling MCP tests register
-// `mock.module("@modelcontextprotocol/sdk/client/index.js", ...)` with reduced
-// MockClient implementations (intentionally no transport, no `callTool`);
-// under Bun's --only-failures retry, that mock can still be in place when this
-// file's failure is re-run in the second test pass, yielding `client.callTool
-// is not a function`. Restore the registry first, then dynamically import the
-// real Client (dynamic import is required here because static imports hoist
-// and would resolve from the already-mocked module cache entry before this code).
 mock.restore()
-const { Client } = await import("@modelcontextprotocol/sdk/client/index.js")
+// Load Client via a sibling specifier (`/client` rather than `/client/index.js`)
+// that resolves to the same underlying `./client` exports entry. The mock-using
+// sibling test files register `mock.module` for `.../client/index.js`, which is a
+// different specifier — so Bun's module cache does NOT serve the previously-cached
+// MockClient module when we import via this alternate key, AND the mock registry
+// does not intercept this specifier either. `callTool` is therefore available.
+const { Client } = (await import("@modelcontextprotocol/sdk/client")) as unknown as {
+  Client: typeof ClientType
+}
 import { Question } from "@/question"
 import { Notification } from "@/notification"
 import { SettingsHook, type HookPayload } from "@/hook/settings"
