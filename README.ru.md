@@ -1,143 +1,162 @@
-<p align="center">
-  <a href="https://opencode.ai">
-    <picture>
-      <source srcset="packages/console/app/src/asset/logo-ornate-dark.svg" media="(prefers-color-scheme: dark)">
-      <source srcset="packages/console/app/src/asset/logo-ornate-light.svg" media="(prefers-color-scheme: light)">
-      <img src="packages/console/app/src/asset/logo-ornate-light.svg" alt="OpenCode logo">
-    </picture>
-  </a>
-</p>
-<p align="center">Открытый AI-агент для программирования.</p>
-<p align="center">
-  <a href="https://opencode.ai/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
-  <a href="https://www.npmjs.com/package/opencode-ai"><img alt="npm" src="https://img.shields.io/npm/v/opencode-ai?style=flat-square" /></a>
-  <a href="https://github.com/anomalyco/opencode/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/anomalyco/opencode/publish.yml?style=flat-square&branch=dev" /></a>
-</p>
+<!--
+SPDX-License-Identifier: AGPL-3.0-or-later
+Copyright (c) 2026 the fork author (see NOTICE file for attribution).
+Licensed under GNU AGPL v3; modifications must be open-sourced.
+-->
 
 <p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.zh.md">简体中文</a> |
-  <a href="README.zht.md">繁體中文</a> |
-  <a href="README.ko.md">한국어</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.it.md">Italiano</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.bs.md">Bosanski</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.no.md">Norsk</a> |
-  <a href="README.br.md">Português (Brasil)</a> |
-  <a href="README.th.md">ไทย</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.uk.md">Українська</a> |
-  <a href="README.bn.md">বাংলা</a> |
-  <a href="README.gr.md">Ελληνικά</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
+  <a href="./README.md">English</a> ·
+  <a href="./README.zh.md">简体中文</a> ·
+  <a href="./README.zht.md">繁體中文</a> ·
+  <a href="./README.ar.md">العربية</a> ·
+  <a href="./README.br.md">Português (Brasil)</a> ·
+  <a href="./README.bs.md">Bosanski</a> ·
+  <a href="./README.da.md">Dansk</a> ·
+  <a href="./README.de.md">Deutsch</a> ·
+  <a href="./README.es.md">Español</a> ·
+  <a href="./README.fr.md">Français</a> ·
+  <a href="./README.it.md">Italiano</a> ·
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.ko.md">한국어</a> ·
+  <a href="./README.no.md">Norsk</a> ·
+  <a href="./README.pl.md">Polski</a> ·
+  <a href="./README.ru.md"><b>Русский</b></a> ·
+  <a href="./README.th.md">ไทย</a> ·
+  <a href="./README.tr.md">Türkçe</a> ·
+  <a href="./README.uk.md">Українська</a> ·
+  <a href="./README.vi.md">Tiếng Việt</a> ·
+  <a href="./README.gr.md">Ελληνικά</a> ·
+  <a href="./README.bn.md">বাংলা</a>
 </p>
 
-[![OpenCode Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://opencode.ai)
+# OpenCode-DAG
+
+> **Расширенный форк [opencode](https://github.com/anomalyco/opencode) с продакшн-готовым движком DAG-воркфлоу для многоагентной оркестровки.**
+
+Создан на базе терминального AI-агента [opencode](https://github.com/anomalyco/opencode) под лицензией MIT. **Не аффилирован с командой OpenCode и не одобрен ею.**
 
 ---
 
-## Fork additions
+## Статус веток
 
-### Hooks API (26 events × 5 execution types)
+| Ветка | База | Содержимое | Статус |
+|--------|------|---------|--------|
+| **`main`** | v1.17.11 | Hooks + Goal + оптимизация Tools | ✅ **Стабильно** |
+| **`dag-branch`** | main + DAG | движок DAG-воркфлоу (114 файлов) | 🔧 **В разработке** — адаптация к API v1.17.11 |
 
-Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 26 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more. Hooks load from a global / project / worktree `hooks.json` chain, or can be registered per-session at runtime over the HTTP API; optional workspace-trust gating (`requireTrust` + the `/trust` command) limits hook execution to directories you have approved.
-
-See the [hooks reference](./packages/core/src/plugin/skill/configure-hooks.md).
-
-### Goal Auto-Loop
-
-An autonomous agent loop that continuously drives an agent toward a user-defined goal. An LLM judge decides after each turn whether the goal is achieved or needs more turns, within a configurable turn budget. Use `/goal <target>` to set a goal, `/subgoal` to add sub-goals, and `/goal resume` to continue a paused goal.
+> [!IMPORTANT]
+> **Движок DAG-воркфлоу в настоящее время переносится** с v1.15.10 в кодовую базу v1.17.11.
+> Он находится на ветке `dag-branch` и **пока не работает**. Ветка `main` полностью пригодна к использованию
+> с Hooks, авто-циклом Goal и отображением исключений Tools — всё готово к продакшену.
 
 ---
 
-### Установка
+## Чем этот форк отличается
+
+### 📌 Стабильно на `main`
+
+#### API Hooks (26 событий × 5 типов выполнения)
+
+Полная совместимость с протоколом hooks Claude Code: типы хуков `command`, `mcp`, `http`, `prompt`, `agent` с 26 событиями хуков, включая `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate` и другие. Хуки загружаются из цепочки глобального / проектного / рабочего-дерева `hooks.json`, либо регистрируются на сессию во время выполнения через HTTP API; опциональное доверие рабочему пространству (`requireTrust` + команда `/trust`) ограничивает выполнение хуков каталогами, которые вы одобрили.
+
+Подробнее — [справочник по hooks](./packages/core/src/plugin/skill/configure-hooks.md).
+
+#### Goal авто-цикл
+
+Автономный цикл агента, который непрерывно ведёт агента к заданной пользователем цели. LLM-судья после каждого хода решает, достигнута ли цель или требуются ещё ходы, в рамках настраиваемого бюджета ходов. `/goal <target>` — задать, `/subgoal` — добавить подцели, `/goal resume` — продолжить приостановленную цель.
+
+#### Отображение исключений Tools
+
+- **Починка JSON**: `safeParseJson` + `fixJsonUnicodeEscapes` — восстанавливает сломанные многобайтовые Unicode-эскейпы в JSON, сгенерированном LLM
+- **Валидация Question-инструмента**: структурированное форматирование ошибок с подсказками на уровне полей и примерами корректного вызова
+- **Описания инструментов**: расширены `.txt`-документы для `question`, `task`, `skill`, `webfetch`, `websearch` с секциями Parameters и Returns
+- **Починка шелл-пайпа**: `stdout/stderr: "pipe"` во всех вызовах `ChildProcess.make` + корректный дрейн reader-fiber
+
+### 🔧 В разработке на `dag-branch`
+
+#### Движок DAG-воркфлоу (AGPL-3.0)
+
+**Движок DAG-воркфлоу (направленный ациклический граф)**, который позволяет LLM-агентам оркестрировать сложные многоузловые параллельные задачи в рамках одной сессии.
+
+> ⚠️ **Статус**: Скопирован «как есть» из форка v1.15.10 (114 файлов). 217 ошибок типов ожидают адаптации API (синхронный `Database.use` → Effect-вариант `Database.Service`, `Bus` → `EventV2Bridge` и т.д.). Пока не компилируется.
+
+| Возможность | Описание |
+|---|---|
+| **Авто-планирование** | Порождает дочерних агентов в порядке зависимостей, параллельно там, где возможно |
+| **Динамическое перепланирование** | Добавление/удаление/обновление узлов и корректировка конкурентности в процессе выполнения |
+| **Целостность конечного автомата** | Четыре железных закона: обход конечного автомата запрещён, терминальные состояния необратимы, события должны транслироваться, персистентность перед мутацией |
+| **Терминальный TUI** | Полная панель управления DAG с блочно-символьной картой топологии, деревом, диалогами узлов, обновлениями в реальном времени |
+| **Восстановление после сбоя** | Обнаруживает и возобновляет осиротевшие запущенные воркфлоу при перезапуске |
+| **Условное ветвление** | Узлы могут условно выполняться или пропускаться на основе вывода восходящих узлов |
+| **Вложенность Sub-DAG** | Тип воркера `dag` порождает рекурсивные под-воркфлоу (макс. глубина 3) |
+| **Персистентный аудит** | SQLite-схема на 6 таблиц, все переходы состояний отслеживаемы |
+
+### CJK и исправления локализации
+
+Обширные исправления обработки китайского/японского/корейского текста: токенизация, полноширинная пунктуация, пути файлов, ввод через IME в терминальном UI. Подробнее — [список исправлений](./docs/localization/zh-hans-fixes.md).
+
+### Двойная изоляция: Sandbox + Worktree
+
+- **Sandbox** — эфемерные временные каталоги с LSP-диагностикой для безопасных экспериментов с кодом
+- **Worktree** — `git worktree` изоляция на каждый воркфлоу для параллельного мультиагентного редактирования
+
+---
+
+## Установка
 
 ```bash
-# YOLO
 curl -fsSL https://opencode.ai/install | bash
 
-# Менеджеры пакетов
-npm i -g opencode-ai@latest        # или bun/pnpm/yarn
-scoop install opencode             # Windows
-choco install opencode             # Windows
-brew install anomalyco/tap/opencode # macOS и Linux (рекомендуем, всегда актуально)
-brew install opencode              # macOS и Linux (официальная формула brew, обновляется реже)
-sudo pacman -S opencode            # Arch Linux (Stable)
-paru -S opencode-bin               # Arch Linux (Latest from AUR)
-mise use -g opencode               # любая ОС
-nix run nixpkgs#opencode           # или github:anomalyco/opencode для самой свежей ветки dev
+# Package managers
+npm i -g opencode-ai@latest
+brew install anomalyco/tap/opencode
+scoop install opencode
+# ...and more — see upstream docs
 ```
 
 > [!TIP]
 > Перед установкой удалите версии старше 0.1.x.
 
-### Десктопное приложение (BETA)
+---
 
-OpenCode также доступен как десктопное приложение. Скачайте его со [страницы релизов](https://github.com/anomalyco/opencode/releases) или с [opencode.ai/download](https://opencode.ai/download).
+## Сохранённый апстрим — и больше
 
-| Платформа             | Загрузка                           |
-| --------------------- | ---------------------------------- |
-| macOS (Apple Silicon) | `opencode-desktop-mac-arm64.dmg`   |
-| macOS (Intel)         | `opencode-desktop-mac-x64.dmg`     |
-| Windows               | `opencode-desktop-windows-x64.exe` |
-| Linux                 | `.deb`, `.rpm` или AppImage        |
+Все возможности апстрима под лицензией MIT полностью сохранены:
 
-```bash
-# macOS (Homebrew)
-brew install --cask opencode-desktop
-# Windows (Scoop)
-scoop bucket add extras; scoop install extras/opencode-desktop
-```
+- **Десктоп-приложение** (macOS / Windows / Linux) — загрузка из [релизов](https://github.com/anomalyco/opencode/releases)
+- **Агенты Build и Plan** — `Tab` переключает между полным доступом и режимом только-чтение
+- **Мульти-провайдер** — Claude, OpenAI, Google, локальные модели через [OpenCode Zen](https://opencode.ai/zen)
+- **Встроенный LSP** — диагностика в реальном времени от языковых серверов
+- **Клиент/серверная архитектура** — запуск локально, управление удалённо с мобильного
 
-#### Каталог установки
-
-Скрипт установки выбирает путь установки в следующем порядке приоритета:
-
-1. `$OPENCODE_INSTALL_DIR` - Пользовательский каталог установки
-2. `$XDG_BIN_DIR` - Путь, совместимый со спецификацией XDG Base Directory
-3. `$HOME/bin` - Стандартный каталог пользовательских бинарников (если существует или можно создать)
-4. `$HOME/.opencode/bin` - Fallback по умолчанию
-
-```bash
-# Примеры
-OPENCODE_INSTALL_DIR=/usr/local/bin curl -fsSL https://opencode.ai/install | bash
-XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://opencode.ai/install | bash
-```
-
-### Agents
-
-В OpenCode есть два встроенных агента, между которыми можно переключаться клавишей `Tab`.
-
-- **build** - По умолчанию, агент с полным доступом для разработки
-- **plan** - Агент только для чтения для анализа и изучения кода
-  - По умолчанию запрещает редактирование файлов
-  - Запрашивает разрешение перед выполнением bash-команд
-  - Идеален для изучения незнакомых кодовых баз или планирования изменений
-
-Также включен сабагент **general** для сложных поисков и многошаговых задач.
-Он используется внутренне и может быть вызван в сообщениях через `@general`.
-
-Подробнее об [agents](https://opencode.ai/docs/agents).
-
-### Документация
-
-Больше информации о том, как настроить OpenCode: [**наши docs**](https://opencode.ai/docs).
-
-### Вклад
-
-Если вы хотите внести вклад в OpenCode, прочитайте [contributing docs](./CONTRIBUTING.md) перед тем, как отправлять pull request.
-
-### Разработка на базе OpenCode
-
-Если вы делаете проект, связанный с OpenCode, и используете "opencode" как часть имени (например, "opencode-dashboard" или "opencode-mobile"), добавьте примечание в README, чтобы уточнить, что проект не создан командой OpenCode и не аффилирован с нами.
+Этот форк добавляет DAG-движок, CJK-исправления, рабочее пространство песочницы для кодинга и отслеживание целей — ничего не ломая.
 
 ---
 
-**Присоединяйтесь к нашему сообществу** [Discord](https://discord.gg/opencode) | [X.com](https://x.com/opencode)
+## Лицензия
+
+Этот репозиторий использует **смешанную модель лицензирования**:
+
+| Содержимое | Лицензия | Расположение |
+|---------|---------|----------|
+| Код апстрима opencode (подавляющее большинство) | **MIT** | [`LICENSE`](./LICENSE) |
+| Самописный движок DAG-воркфлоу | **GNU AGPL v3** | [`packages/opencode/src/dag/LICENSE`](./packages/opencode/src/dag/LICENSE) |
+
+Полные детали границ — в [`NOTICE`](./NOTICE).
+
+> ⚖️ **Почему AGPL?** DAG-движок — ключевая отличительная работа. AGPL гарантирует, что любой дериватив — включая SaaS-развёртывания — обязан внести вклад обратно.
+
+---
+
+## Документация
+
+- [`docs/harness-dag.md`](./docs/harness-dag.md) — архитектура и использование DAG-движка
+- [`docs/localization/zh-hans-fixes.md`](./docs/localization/zh-hans-fixes.md) — каталог CJK-исправлений
+- [`NOTICE`](./NOTICE) — границы лицензий и атрибуция
+- [`AGENTS.md`](./AGENTS.md) — руководство по контрибуции и разработке
+
+## Сообщество
+
+- 📖 [Сообщество апстрима opencode](https://opencode.ai)
+- 📝 [Трекер проблем форка](./issues)
+- 🔗 [GitHub](https://github.com/LeXwDeX/OpenCode-DAG)
