@@ -43,6 +43,20 @@
 
 ---
 
+## 此分支新增
+
+### Hooks API（26 个事件 × 5 种执行类型）
+
+完整兼容 Claude Code 的 hooks 协议：`command`、`mcp`、`http`、`prompt`、`agent` 五种 hook 类型，覆盖 26 个 hook 事件，包括 `PreToolUse`、`PostToolUse`、`SessionStart`、`PermissionRequest`、`WorktreeCreate` 等。Hooks 可从 全局 / 项目 / worktree 的 `hooks.json` 链加载，也可在运行时通过 HTTP API 按会话注册；可选的工作区信任门禁（`requireTrust` + `/trust` 命令）会将 hook 执行限制在你已信任的目录内。
+
+参见 [hooks 参考文档](./packages/core/src/plugin/skill/configure-hooks.md)。
+
+### Goal 自动循环
+
+一个自主的 agent 循环，持续驱动 agent 朝用户设定的目标推进。LLM 裁判在每一轮后判断目标是否达成、是否需要继续，并受可配置的轮次预算约束。用 `/goal <目标>` 设定目标，`/subgoal` 添加子目标，`/goal resume` 恢复已暂停的目标。
+
+---
+
 ### 安装
 
 ```bash
