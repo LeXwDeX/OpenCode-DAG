@@ -1103,7 +1103,7 @@ export class InitError extends Schema.TaggedErrorClass<InitError>()("ProviderIni
 
 export class NoProvidersError extends Schema.TaggedErrorClass<NoProvidersError>()("ProviderNoProvidersError", {}) {
   override get message() {
-    return "No providers are available"
+    return "No providers are available. Configure a provider or restore network access to load the model catalog."
   }
 
   static isInstance(input: unknown): input is NoProvidersError {
@@ -1115,7 +1115,7 @@ export class NoModelsError extends Schema.TaggedErrorClass<NoModelsError>()("Pro
   providerID: ProviderV2.ID,
 }) {
   override get message() {
-    return `No models are available for provider: ${this.providerID}`
+    return `No models are available for provider: ${this.providerID}. Configure a model for this provider or restore network access to load the model catalog.`
   }
 
   static isInstance(input: unknown): input is NoModelsError {

@@ -2,6 +2,7 @@
 import type { TuiCommand, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { TuiKeybind } from "../config/keybind"
 import type { DialogContext } from "../ui/dialog"
+import { TuiLog } from "../util/log"
 
 const COMMAND_PALETTE_SHOW = "command.palette.show"
 const warned = new Set<string>()
@@ -13,7 +14,7 @@ type LegacyKeybinds = TuiPluginApi["tuiConfig"]["keybinds"]
 
 function warnCommandShim(api: string, replacement: string) {
   // Warn v1 plugins about deprecated `api.command`; remove this shim path in v2.
-  console.warn("[tui.plugin] deprecated TUI plugin API", { api, replacement })
+  TuiLog.write("warn", "[tui.plugin] deprecated TUI plugin API", { api, replacement })
 }
 
 function createCommandShimDialog(dialog: CommandShimDialog): LegacyDialog {
