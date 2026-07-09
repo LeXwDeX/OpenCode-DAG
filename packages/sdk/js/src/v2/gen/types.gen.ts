@@ -6,6 +6,7 @@ export type ClientOptions = {
 
 export type Event =
   | EventModelsDevRefreshed
+  | EventModelsDevFetchFailed
   | EventIntegrationUpdated
   | EventIntegrationConnectionUpdated
   | EventCatalogUpdated
@@ -754,6 +755,13 @@ export type GlobalEvent = {
         type: "models-dev.refreshed"
         properties: {
           [key: string]: unknown
+        }
+      }
+    | {
+        id: string
+        type: "models-dev.fetch_failed"
+        properties: {
+          source: string
         }
       }
     | {
@@ -2829,6 +2837,7 @@ export type ProviderNotFoundError = {
 
 export type V2Event =
   | V2EventModelsDevRefreshed
+  | V2EventModelsDevFetchFailed
   | V2EventIntegrationUpdated
   | V2EventIntegrationConnectionUpdated
   | V2EventCatalogUpdated
@@ -4392,6 +4401,23 @@ export type V2EventModelsDevRefreshed = {
   type: "models-dev.refreshed"
   data: {
     [key: string]: unknown
+  }
+}
+
+export type V2EventModelsDevFetchFailed = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  type: "models-dev.fetch_failed"
+  data: {
+    source: string
   }
 }
 
@@ -6257,6 +6283,14 @@ export type EventModelsDevRefreshed = {
   type: "models-dev.refreshed"
   properties: {
     [key: string]: unknown
+  }
+}
+
+export type EventModelsDevFetchFailed = {
+  id: string
+  type: "models-dev.fetch_failed"
+  properties: {
+    source: string
   }
 }
 

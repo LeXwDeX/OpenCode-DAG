@@ -95,6 +95,27 @@ jobs:
           # macOS has no other job in the repo, so it's safe to save here.
           save-cache: ${{ matrix.name == 'macos' }}
 
+      # Embed a models.dev catalog snapshot into the binary so air-gapped
+      # users can start opencode without reaching https://models.dev at
+      # runtime (see packages/opencode/script/generate.ts fallback order).
+      - name: Fetch models.dev Snapshot
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
+        run: |
+          snapshot_path="$RUNNER_TEMP/models-dev-api.json"
+          if command -v cygpath &>/dev/null; then
+            snapshot_path="$(cygpath -m "$snapshot_path")"
+          fi
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 30 https://models.dev/api.json -o "$snapshot_path"; then
+              echo "models.dev snapshot downloaded (attempt $attempt)"
+              echo "MODELS_DEV_API_JSON=$snapshot_path" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "models.dev download failed (attempt $attempt), retrying..."
+            sleep 5
+          done
+          echo "::warning::Failed to download models.dev api.json; build will fall back to @opencode-ai/models snapshot or an empty catalog"
+
       - name: Build CLI
         if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         run: ./packages/opencode/script/build.ts --single --skip-install
