@@ -2,9 +2,11 @@ import { NodeHttpServer, NodeServices } from "@effect/platform-node"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { describe, expect } from "bun:test"
 import { ConfigErrorV1 } from "@opencode-ai/core/v1/config/error"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 import { Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { errorLayer } from "../../src/server/routes/instance/httpapi/middleware/error"
+import { Provider } from "../../src/provider/provider"
 import { NotFoundError } from "../../src/storage/storage"
 import { testEffect } from "../lib/effect"
 
@@ -96,6 +98,45 @@ describe("HttpApi error middleware", () => {
 
       expect(response.status).toBe(500)
       expectUnknownErrorBody(body)
+    }),
+  )
+
+  it.live("returns provider no-providers defects as named actionable client errors", () =>
+    Effect.gen(function* () {
+      yield* HttpRouter.add("GET", "/no-providers", Effect.die(new Provider.NoProvidersError({}))).pipe(
+        Layer.provide(errorLayer),
+        HttpRouter.serve,
+        Layer.build,
+      )
+
+      const response = yield* HttpClientRequest.get("/no-providers").pipe(HttpClient.execute)
+      const body = yield* response.json
+
+      expect(response.status).toBe(400)
+      expect(body).toMatchObject({
+        name: "ProviderNoProvidersError",
+        data: { message: new Provider.NoProvidersError({}).message },
+      })
+    }),
+  )
+
+  it.live("returns provider no-models defects as named actionable client errors", () =>
+    Effect.gen(function* () {
+      const error = new Provider.NoModelsError({ providerID: ProviderV2.ID.make("anthropic") })
+      yield* HttpRouter.add("GET", "/no-models", Effect.die(error)).pipe(
+        Layer.provide(errorLayer),
+        HttpRouter.serve,
+        Layer.build,
+      )
+
+      const response = yield* HttpClientRequest.get("/no-models").pipe(HttpClient.execute)
+      const body = yield* response.json
+
+      expect(response.status).toBe(400)
+      expect(body).toMatchObject({
+        name: "ProviderNoModelsError",
+        data: { message: error.message },
+      })
     }),
   )
 })
