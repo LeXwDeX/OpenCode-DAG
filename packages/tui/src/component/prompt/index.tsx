@@ -10,7 +10,7 @@ import {
 } from "@opentui/core"
 import type { CommandContext } from "@opentui/keymap"
 import { createEffect, createMemo, onMount, createSignal, onCleanup, on, Show, Switch, Match } from "solid-js"
-import "opentui-spinner/solid"
+import "../../ui/spinner-register"
 import path from "path"
 import { fileURLToPath } from "url"
 import { useLocal } from "../../context/local"
@@ -56,6 +56,7 @@ import { useTuiConfig } from "../../config"
 import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
+import { TuiLog } from "../../util/log"
 
 export type PromptProps = {
   sessionID?: string
@@ -1004,10 +1005,11 @@ export function Prompt(props: PromptProps) {
 
       if (res.error) {
         if (finishMoveProgress) move.finishSubmit()
-        console.log("Creating a session failed:", res.error)
+        TuiLog.write("error", "Creating a session failed", res.error)
 
         toast.show({
-          message: "Creating a session failed. Open console for more details.",
+          title: "Creating a session failed",
+          message: errorMessage(res.error),
           variant: "error",
         })
 

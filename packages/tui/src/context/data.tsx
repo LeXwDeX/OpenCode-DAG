@@ -20,6 +20,7 @@ import type {
 } from "@opencode-ai/sdk/v2"
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "./helper"
+import { TuiLog } from "../util/log"
 import { useSDK } from "./sdk"
 import { useEvent } from "./event"
 import { createSignal, onCleanup, onMount } from "solid-js"
@@ -560,7 +561,7 @@ export const { use: useData, provider: DataProvider } = createSimpleContext({
         result.location.skill.refresh(),
       ]).then((settled) => {
         for (const failure of settled.filter((item) => item.status === "rejected"))
-          console.error("Failed to refresh default location data", failure.reason)
+          TuiLog.write("error", "Failed to refresh default location data", failure.reason)
       })
     })
 

@@ -16,20 +16,12 @@
  * 3. Update FORK_POINTS.md with the new bridge point
  */
 
-import type { ForkHooks, HookCommand, HookEvent, HookJSONOutput } from "../settings"
+import type { ForkHooks, HookCommand, HookEvent } from "../settings"
 import type { SessionHooks } from "../session-hooks"
 import { evaluate as evaluateCondition } from "./condition-filter"
-import { recordToolExecution } from "./post-tool-batch"
 
 export { watchSettings, type HotReloadHandle } from "./hot-reload"
 export { evaluate as evaluateCondition } from "./condition-filter"
-export {
-  recordToolExecution,
-  getBatch,
-  resetBatch,
-  getBatchCount,
-  type BatchEntry,
-} from "./post-tool-batch"
 
 /**
  * Build the ForkHooks implementation.
@@ -50,20 +42,13 @@ export function buildForkHooks(_deps: {
     },
 
     /**
-     * Post-dispatch observation — tracks tool executions for batch state.
-     * Never modifies the result.
+     * Post-dispatch observation extension point. The ForkHooks.afterRunEntry
+     * interface and its settings.ts trigger call site are intentionally kept
+     * (future extensions — metrics, rate-limiting, etc. — can plug behavior
+     * back in here), but the previous post-tool-batch tracker was removed: its
+     * per-session `batches` Map grew unbounded and had no consumer. Currently a
+     * no-op; never modifies the result.
      */
-    afterRunEntry(
-      entry: HookCommand,
-      envelope: Record<string, unknown>,
-      event: HookEvent,
-      result: { json?: HookJSONOutput; exitBlock?: string },
-    ): void {
-      // Extract sessionID from envelope for batch tracking
-      const sessionID = (envelope.session_id as string) ?? ""
-      if (sessionID) {
-        recordToolExecution(sessionID, entry, envelope, event, result)
-      }
-    },
+    afterRunEntry: () => {},
   }
 }

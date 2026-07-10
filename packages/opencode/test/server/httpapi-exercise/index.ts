@@ -1205,6 +1205,50 @@ const scenarios: Scenario[] = [
       check(!("pausedReason" in body), "pausedReason should be absent when goal is active")
     }),
   http.protected
+    .post("/session/{sessionID}/hook", "session.hook.add")
+    .seeded((ctx) => ctx.session({ title: "Hook session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/hook", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: {
+        event: "UserPromptSubmit",
+        hooks: [{ type: "command", command: "printf '%s' 'hook-ran'" }],
+      },
+    }))
+    .json(200, (body) => {
+      object(body)
+      check(typeof body.id === "string" && body.id.length > 0, "hook add should return an entry id")
+    }),
+  http.protected
+    .post("/session/{sessionID}/hook", "session.hook.add.invalid")
+    .seeded((ctx) => ctx.session({ title: "Hook invalid session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/hook", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+      body: { event: "NotAnEvent", hooks: [{ type: "command", command: "printf '%s' 'x'" }] },
+    }))
+    .status(400),
+  http.protected
+    .get("/session/{sessionID}/hook", "session.hook.list")
+    .seeded((ctx) => ctx.session({ title: "Hook list session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/hook", { sessionID: ctx.state.id }),
+      headers: ctx.headers(),
+    }))
+    .json(200, array),
+  http.protected
+    .delete("/session/{sessionID}/hook/{hookID}", "session.hook.remove")
+    .seeded((ctx) => ctx.session({ title: "Hook remove session" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/hook/{hookID}", {
+        sessionID: ctx.state.id,
+        hookID: "does-not-exist",
+      }),
+      headers: ctx.headers(),
+    }))
+    // DELETE is idempotent — a non-existent hookID succeeds (204 NoContent).
+    .status(204),
+  http.protected
     .get("/session/{sessionID}/diff", "session.diff")
     .seeded((ctx) => ctx.session({ title: "Diff session" }))
     .at((ctx) => ({ path: route("/session/{sessionID}/diff", { sessionID: ctx.state.id }), headers: ctx.headers() }))

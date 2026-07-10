@@ -22,6 +22,7 @@ export interface Interface {
   readonly addSubgoal: (sessionID: SessionID, subgoal: string) => Effect.Effect<GoalState.Info | undefined>
   readonly removeSubgoal: (
     sessionID: SessionID,
+    /** 1-based index of the subgoal to remove (1 = first subgoal). */
     index: number,
   ) => Effect.Effect<
     | { tag: "ok"; removed: string; state: GoalState.Info }
@@ -54,6 +55,20 @@ export interface Interface {
   >
     readonly registerLoopFiber: (sessionID: SessionID, fiber: Fiber.Fiber<unknown, unknown>) => Effect.Effect<void>
     readonly clearLoopFiber: (sessionID: SessionID) => Effect.Effect<void>
+    /**
+     * Identity-scoped loop-fiber cleanup. Removes the fibers-Map entry for
+     * `sessionID` ONLY if it currently still points at `fiber` (a newer idle
+     * event may have already registered a fresh fiber via registerLoopFiber,
+     * which interrupts and overwrites). MUST NOT interrupt the fiber — callers
+     * invoke this once the fiber has already completed its work (natural
+     * completion via the GoalLoop idle watcher). Without the identity check, a
+     * naturally-completing old fiber would evict a freshly-registered new fiber
+     * and silently stall the goal loop.
+     */
+    readonly clearLoopFiberIf: (
+      sessionID: SessionID,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ) => Effect.Effect<void>
     /**
      * Terminal cleanup for the "done" transition: publishes goal.updated(status=done)
      * with a transient snapshot, deletes the row, then publishes goal.cleared.
@@ -125,6 +140,20 @@ export const layer = Layer.effect(
       }
     })
 
+    // Identity-scoped self-clean for naturally-completing loop fibers. Deletes
+    // the map entry only when it still references THIS fiber — a subsequent
+    // idle event's registerFiber may have already interrupted the old fiber and
+    // installed a new one, and deleting unconditionally would evict the new
+    // fiber. Never interrupts: the calling fiber has already finished its work.
+    const clearFiberIf = Effect.fnUntraced(function* (
+      sessionID: SessionID,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ) {
+      if (fibers.get(sessionID) === fiber) {
+        fibers.delete(sessionID)
+      }
+    })
+
     // Terminal cleanup for "done" transitions. Loads current state (if any),
     // constructs a transient snapshot with status="done" + the given reason,
     // emits goal.updated(done), deletes the row, then emits goal.cleared.
@@ -140,20 +169,32 @@ export const layer = Layer.effect(
     // would interrupt ourselves before goal.cleared was published (the
     // event bus would miss the terminal event, and TUI/SSE consumers
     // polling state would never see the transition).
+    //
+    // The whole terminal sequence (load → publish(done) → delete →
+    // publish(cleared)) runs inside Effect.uninterruptible. This is
+    // defense-in-depth (F1): even if a future caller arranges for the loop
+    // fiber to be interrupted mid-call, the terminal event contract still
+    // completes atomically — goal.cleared cannot be skipped by an interrupt
+    // landing between publish(done) and publish(cleared). The operations are
+    // short synchronous DB + event publishes, so there is no deadlock risk.
     const deleteAndPublishDone = Effect.fnUntraced(function* (sessionID: SessionID, reason: string) {
-      const state = yield* loadState(sessionID)
-      if (state) {
-        const doneState = new GoalState.Info({
-          ...state,
-          status: "done",
-          last_verdict: "done",
-          last_reason: reason,
-        })
-        yield* publishGoal(sessionID, doneState)
-      }
-      yield* deleteState(sessionID)
-      yield* events.publish(GoalEvent.Cleared, { sessionID })
-      return state
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const state = yield* loadState(sessionID)
+          if (state) {
+            const doneState = new GoalState.Info({
+              ...state,
+              status: "done",
+              last_verdict: "done",
+              last_reason: reason,
+            })
+            yield* publishGoal(sessionID, doneState)
+          }
+          yield* deleteState(sessionID)
+          yield* events.publish(GoalEvent.Cleared, { sessionID })
+          return state
+        }),
+      )
     })
 
     function loadState(sessionID: SessionID) {
@@ -201,11 +242,11 @@ export const layer = Layer.effect(
       const state = new GoalState.Info({
         goal,
         status: "active",
-        turns_used: 0 as any,
-        max_turns: (maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS) as any,
+        turns_used: GoalState.nni(0),
+        max_turns: GoalState.nni(maxTurns ?? GoalPrompts.DEFAULT_MAX_TURNS),
         created_at: now,
         last_turn_at: now,
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         subgoals: [],
       })
       yield* saveState(sessionID, state)
@@ -232,18 +273,27 @@ export const layer = Layer.effect(
     // clearFiber so it can be called from inside the loop fiber itself
     // (loop.ts shouldPreempt branch). The fiber naturally terminates when
     // afterIdle returns; no explicit interrupt needed.
+    //
+    // Wrapped in Effect.uninterruptible (F1): the save → publish sequence
+    // is atomic, so an interrupt landing between persisting the paused row
+    // and publishing goal.updated(paused) can never leave a paused DB row
+    // with no corresponding event on the bus.
     const pauseAndPublish = Effect.fnUntraced(function* (sessionID: SessionID, reason: string) {
-      const state = yield* loadState(sessionID)
-      if (!state || state.status !== "active") return undefined
-      const updated = new GoalState.Info({
-        ...state,
-        status: "paused",
-        paused_reason: reason,
-        last_turn_at: Date.now(),
-      })
-      yield* saveState(sessionID, updated)
-      yield* publishGoal(sessionID, updated)
-      return updated
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const state = yield* loadState(sessionID)
+          if (!state || state.status !== "active") return undefined
+          const updated = new GoalState.Info({
+            ...state,
+            status: "paused",
+            paused_reason: reason,
+            last_turn_at: Date.now(),
+          })
+          yield* saveState(sessionID, updated)
+          yield* publishGoal(sessionID, updated)
+          return updated
+        }),
+      )
     })
 
     const resume = Effect.fn("Goal.resume")(function* (sessionID: SessionID) {
@@ -257,7 +307,7 @@ export const layer = Layer.effect(
       const updated = new GoalState.Info({
         ...state,
         status: "active",
-        consecutive_parse_failures: 0 as any,
+        consecutive_parse_failures: GoalState.nni(0),
         paused_reason: undefined,
         last_turn_at: Date.now(),
       })
@@ -275,20 +325,12 @@ export const layer = Layer.effect(
     const markDone = Effect.fn("Goal.markDone")(function* (sessionID: SessionID, reason: string) {
       // User/tool-initiated completion: stop the running loop fiber, then
       // perform terminal cleanup (publish done-updated → delete → publish cleared).
+      // State transitions are budget-neutral — turns_used counts continuation
+      // dispatches only (see spec: turn-budget-counts-continuation-dispatches-only),
+      // so markDone does NOT increment. deleteAndPublishDone loads the current
+      // row (preserving whatever turns_used a prior continue dispatch set) and
+      // re-renders the done snapshot from it.
       yield* clearFiber(sessionID)
-      // Increment turns_used so this completion path reports the same
-      // "N turns" count as updateAfterJudge (which also += 1 before marking
-      // done). Without this, status lines and event payloads disagree on
-      // whether the terminal turn was consumed.
-      const current = yield* loadState(sessionID)
-      if (current) {
-        const incremented = new GoalState.Info({
-          ...current,
-          turns_used: (current.turns_used + 1) as any,
-          last_turn_at: Date.now(),
-        })
-        yield* saveState(sessionID, incremented)
-      }
       return yield* deleteAndPublishDone(sessionID, reason)
     })
 
@@ -367,14 +409,24 @@ export const layer = Layer.effect(
         const updated = new GoalState.Info({
           ...state,
           status: "done",
-          turns_used: (state.turns_used + 1) as any,
+          // State transitions are budget-neutral — a `done` verdict drives no
+          // continuation dispatch, so it must NOT consume budget. turns_used
+          // reflects only continuation dispatches (see spec:
+          // turn-budget-counts-continuation-dispatches-only).
+          turns_used: state.turns_used,
           last_turn_at: now,
           last_verdict: "done",
           last_reason: reason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         yield* saveState(sessionID, updated)
-        yield* publishGoal(sessionID, updated)
+        // Do NOT publish goal.updated here. deleteAndPublishDone is the SOLE
+        // owner of the terminal event sequence (goal.updated(done) → delete →
+        // goal.cleared); publishing here would double-fire goal.updated(done)
+        // on every judge-declared completion (see spec:
+        // terminal-event-contract-publishes-exactly-once). We still saveState
+        // so deleteAndPublishDone can load the done row and re-render the
+        // snapshot. loop.ts invokes deleteAndPublishDone after this returns.
         return {
           state: updated,
           shouldContinue: false,
@@ -382,11 +434,11 @@ export const layer = Layer.effect(
         }
       }
 
-      const turnsUsed = (state.turns_used + 1) as any
+      const turnsUsed = GoalState.nni(Number(state.turns_used) + 1)
 
       if (newParseFailures >= GoalPrompts.MAX_CONSECUTIVE_PARSE_FAILURES) {
         const pauseReason =
-          "judge 模型未返回有效 JSON 判定。请配置 auxiliary.goalJudge 指向更可靠的模型，然后 /goal resume。"
+          "judge 模型未返回有效 JSON 判定。请检查模型配置或换用更可靠的模型，然后 /goal resume。"
         const updated = new GoalState.Info({
           ...state,
           status: "paused",
@@ -395,7 +447,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Do NOT call clearFiber here. updateAfterJudge is inlined into
         // GoalLoop.afterIdle (loop.ts:122), so the fiber running this code
@@ -424,7 +476,7 @@ export const layer = Layer.effect(
           last_verdict: "continue",
           last_reason: reason,
           paused_reason: pauseReason,
-          consecutive_parse_failures: newParseFailures as any,
+          consecutive_parse_failures: GoalState.nni(newParseFailures),
         })
         // Same self-interrupt hazard as the parse-failure branch above: we
         // are running inside the afterIdle loop fiber, so clearFiber would
@@ -445,7 +497,7 @@ export const layer = Layer.effect(
         last_turn_at: now,
         last_verdict: "continue",
         last_reason: reason,
-        consecutive_parse_failures: newParseFailures as any,
+        consecutive_parse_failures: GoalState.nni(newParseFailures),
       })
       yield* saveState(sessionID, updated)
       yield* publishGoal(sessionID, updated)
@@ -476,6 +528,11 @@ export const layer = Layer.effect(
             text: "Session 正在执行中。请先 /stop 中断后再设定新目标。",
           }
         }
+        // Known TOCTOU: `get` above then goal.set + continuation dispatch below
+        // is not atomic — the session could flip to busy in between. Accepted:
+        // the loop's idle gating and judge-preempt guard handle that case
+        // gracefully; an atomic check-and-set would need a session-level lock
+        // outside this module's scope.
       }
 
       if (lower === "" || lower === "status") {
@@ -494,6 +551,18 @@ export const layer = Layer.effect(
       }
 
       if (lower === "resume") {
+        // Busy guard, symmetric with the set-new-goal guard above. `resume` is a
+        // control command so it bypasses the generic busy check; without this,
+        // resuming a goal on a busy session would return `kick`, prompting
+        // prompt.ts to start a second agent loop concurrently with the running
+        // one. Keep the goal paused and ask the user to /stop first instead.
+        const resumeStatus = yield* sessionStatus.get(sessionID)
+        if (resumeStatus.type === "busy") {
+          return {
+            type: "message" as const,
+            text: "Session 正在执行中。请先 /stop 中断后再 /goal resume。",
+          }
+        }
         const result = yield* resume(sessionID)
         if (!result) return { type: "message" as const, text: "没有已暂停的目标可以恢复。" }
         // Warning UX for budget-exhaustion pauses: we kept turns_used intact
@@ -623,6 +692,7 @@ export const layer = Layer.effect(
       updateAfterJudge,
       registerLoopFiber: registerFiber,
       clearLoopFiber: clearFiber,
+      clearLoopFiberIf: clearFiberIf,
       deleteAndPublishDone,
       pauseAndPublish,
     })

@@ -1,33 +1,45 @@
 - To regenerate the JavaScript SDK, run `./packages/sdk/js/script/build.ts`.
-- The default branch in this repo is `dev`.
-- Local `main` ref may not exist; use `dev` or `origin/dev` for diffs.
+- The default branch in this repo is `main`.
 
 ## Git Workflow (铁律)
 
 ```
-feat/* ──merge──▶ dev ──push──▶ main
+feat/**, fix/** ──PR(Typecheck 门禁)──▶ dev ──push 触发全量测试──▶
+    dev ──手动 release-fork──▶ prerelease 测试版
+    dev ──PR(全量测试门禁)──▶ main ──手动 release-fork──▶ 正式版
 ```
 
-| Branch | CI/TDD | Purpose |
-|--------|--------|---------|
-| `feat/*` | ❌ 不跑 | 功能开发，频繁变更 |
-| `dev` | ✅ **必须全量跑完** | TDD + CI 集成测试门禁 |
-| `main` | ❌ 不跑 | 发布专用，只接受 dev 验证通过的代码 |
+**分层门禁**：`dev` 是快速集成层（仅 Typecheck），`main` 是正式质量门禁（Typecheck + 全量 Unit Tests + E2E）。所有改动通过 PR 流转，禁止直推 `main` 和 `dev`（由 GitHub Rulesets 强制）。
+
+| Branch | 直推 | PR 门禁 | CI 触发 | Purpose |
+|--------|------|---------|---------|---------|
+| `{type}/**` | ✅ 允许 | — | ❌ 不跑 | 开发分支，频繁变更 |
+| `dev` | ❌ 禁止 | PR 必须通过 **Typecheck** | ✅ push 触发 Typecheck + 全量测试 | 快速集成层 |
+| `main` | ❌ 禁止 | PR 必须通过 **Typecheck + Unit Tests + E2E (linux + windows)** | ✅ push 触发全量 | 正式质量门禁 + 发版 |
 
 **流程**：
-1. 从 `dev` 切出 `feat/xxx` 分支开发
-2. 功能完成后合并到 `dev`
-3. `dev` 的 CI（test + typecheck）必须全绿
-4. 验证通过后才能 push 到 `main`
-5. `main` 只用于发版（`fork-release` 手动触发）
+1. 从 `main` 切出 `feat/**` 或 `fix/**` 分支开发
+2. PR → `dev`（Typecheck 门禁，快速合并）
+3. push 到 `dev` 自动触发全量测试验证
+4. 从 `dev` 手动 `release-fork` → 产出 **prerelease** 测试版
+5. PR `dev` → `main`（全量测试门禁：Typecheck + Unit Tests + E2E）
+6. 合并到 `main` 后手动 `release-fork` → 产出**正式版**
 
-CI 配置：`test.yml` 和 `typecheck.yml` 仅在 push 到 `dev` 时触发，`cancel-in-progress: false` 保证每次都跑完。
+**Rulesets（GitHub Settings → Rules → Rulesets）**：
+- `protect-main`：禁止直推/删除/force-push；PR 需通过 4 项检查（Typecheck、Unit Tests (linux)、E2E Tests (linux)、E2E Tests (windows)）
+- `protect-dev`：禁止直推/删除/force-push；PR 需通过 Typecheck
+- `branch-naming`：只允许创建 `feat/**`、`fix/**`、`chore/**`、`docs/**`、`refactor/**`、`test/**`、`release/**`、`hotfix/**` 前缀的新分支
+
+**CI 配置**：
+- `ci-typecheck.yml`：push 到 `main`/`dev` + PR → `main`/`dev` 时触发（快速门禁）
+- `ci-test.yml`：push 到 `main`/`dev` + PR → `main` 时触发全量测试（`cancel-in-progress: false` 保证跑完）
+- `release-fork.yml`：手动触发；从 `dev` 发布自动标记 `--prerelease`，从 `main` 发布正式版
 
 ## Branch Names
 
-Use a short branch name of at most three words, separated by hyphens. Do not use slashes or type prefixes such as `feat/` or `fix/`.
+Format: `{type}/{short-name}` where `type` is one of: `feat`, `fix`, `chore`, `docs`, `refactor`, `test`, `release`, `hotfix`. The short name uses hyphens, at most three words. Enforced by GitHub Ruleset `branch-naming`.
 
-Examples: `session-recovery`, `fix-scroll-state`, `regenerate-sdk`.
+Examples: `feat/session-recovery`, `fix/scroll-state`, `docs/branch-naming`, `refactor/dag-spawn`, `test/auth-flow`, `chore/regenerate-sdk`, `release/v1.18`, `hotfix/critical-patch`.
 
 ## Commits and PR Titles
 

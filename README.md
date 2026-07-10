@@ -6,27 +6,7 @@ Licensed under GNU AGPL v3; modifications must be open-sourced.
 
 <p align="center">
   <a href="./README.md"><b>English</b></a> ·
-  <a href="./README.zh.md">简体中文</a> ·
-  <a href="./README.zht.md">繁體中文</a> ·
-  <a href="./README.ar.md">العربية</a> ·
-  <a href="./README.br.md">Português (Brasil)</a> ·
-  <a href="./README.bs.md">Bosanski</a> ·
-  <a href="./README.da.md">Dansk</a> ·
-  <a href="./README.de.md">Deutsch</a> ·
-  <a href="./README.es.md">Español</a> ·
-  <a href="./README.fr.md">Français</a> ·
-  <a href="./README.it.md">Italiano</a> ·
-  <a href="./README.ja.md">日本語</a> ·
-  <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.no.md">Norsk</a> ·
-  <a href="./README.pl.md">Polski</a> ·
-  <a href="./README.ru.md">Русский</a> ·
-  <a href="./README.th.md">ไทย</a> ·
-  <a href="./README.tr.md">Türkçe</a> ·
-  <a href="./README.uk.md">Українська</a> ·
-  <a href="./README.vi.md">Tiếng Việt</a> ·
-  <a href="./README.gr.md">Ελληνικά</a> ·
-  <a href="./README.bn.md">বাংলা</a>
+  <a href="./README.zh.md">简体中文</a>
 </p>
 
 # OpenCode-DAG
@@ -55,15 +35,15 @@ Built on top of the MIT-licensed [opencode](https://github.com/anomalyco/opencod
 
 ### 📌 Stable on `main`
 
-#### Hooks API (22 events × 5 execution types)
+#### Hooks API (26 events × 5 execution types)
 
-Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 17 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more.
+Full Claude Code hooks protocol compatibility: `command`, `mcp`, `http`, `prompt`, `agent` hook types with 26 hook events including `PreToolUse`, `PostToolUse`, `SessionStart`, `PermissionRequest`, `WorktreeCreate`, and more. Hooks load from a global / project / worktree `hooks.json` chain, or can be registered per-session at runtime over the HTTP API; optional workspace-trust gating (`requireTrust` + the `/trust` command) limits hook execution to directories you have approved.
 
-See [hooks reference](./packages/opencode/src/session/prompt/hooks-reference.md).
+See [hooks reference](./packages/core/src/plugin/skill/configure-hooks.md).
 
 #### Goal Auto-Loop
 
-An autonomous agent loop that continuously drives an agent toward a user-defined goal. Uses an LLM judge to decide whether the goal is achieved or needs more turns. `/goal <target>` to set, `/subgoal` to add sub-goals.
+An autonomous agent loop that continuously drives an agent toward a user-defined goal. An LLM judge decides after each turn whether the goal is achieved or needs more turns, within a configurable turn budget. `/goal <target>` to set, `/subgoal` to add sub-goals, `/goal resume` to continue a paused goal.
 
 #### Tools Exception Exposure
 

@@ -203,6 +203,12 @@ import type {
   SessionGetResponses,
   SessionGoalErrors,
   SessionGoalResponses,
+  SessionHookAddErrors,
+  SessionHookAddResponses,
+  SessionHookListErrors,
+  SessionHookListResponses,
+  SessionHookRemoveErrors,
+  SessionHookRemoveResponses,
   SessionInitErrors,
   SessionInitResponses,
   SessionListErrors,
@@ -3364,6 +3370,157 @@ export class Provider extends HeyApiClient {
   }
 }
 
+export class Hook extends HeyApiClient {
+  /**
+   * List session-scoped hooks
+   *
+   * List all hook entries currently registered for this session.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<SessionHookListResponses, SessionHookListErrors, ThrowOnError>({
+      url: "/session/{sessionID}/hook",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Register a session-scoped hook
+   *
+   * Register a hook entry scoped to this session. The entry joins the same matcher/aggregation pipeline as on-disk hooks; once:true entries auto-remove after first execution. Storage is in-memory and is cleared on SessionEnd.
+   */
+  public add<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      event?:
+        | "PreToolUse"
+        | "PostToolUse"
+        | "PostToolUseFailure"
+        | "Notification"
+        | "UserPromptSubmit"
+        | "PermissionRequest"
+        | "PermissionDenied"
+        | "Setup"
+        | "Stop"
+        | "StopFailure"
+        | "SubagentStart"
+        | "SubagentStop"
+        | "PreCompact"
+        | "PostCompact"
+        | "SessionStart"
+        | "SessionEnd"
+        | "TaskCreated"
+        | "TaskCompleted"
+        | "Elicitation"
+        | "ElicitationResult"
+        | "ConfigChange"
+        | "WorktreeCreate"
+        | "WorktreeRemove"
+        | "InstructionsLoaded"
+        | "CwdChanged"
+        | "FileChanged"
+      matcher?: string
+      hooks?: Array<{
+        type: "command" | "mcp" | "http" | "prompt" | "agent"
+        command?: string
+        url?: string
+        prompt?: string
+        headers?: {
+          [key: string]: string
+        }
+        timeout?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+        if?: string
+        async?: boolean
+        asyncRewake?: boolean
+      }>
+      once?: boolean
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "event" },
+            { in: "body", key: "matcher" },
+            { in: "body", key: "hooks" },
+            { in: "body", key: "once" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<SessionHookAddResponses, SessionHookAddErrors, ThrowOnError>({
+      url: "/session/{sessionID}/hook",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+
+  /**
+   * Remove a session-scoped hook
+   *
+   * Remove a session hook entry by id. Idempotent — deleting a non-existent id succeeds.
+   */
+  public remove<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      hookID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "path", key: "hookID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).delete<SessionHookRemoveResponses, SessionHookRemoveErrors, ThrowOnError>({
+      url: "/session/{sessionID}/hook/{hookID}",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Session2 extends HeyApiClient {
   /**
    * List sessions
@@ -4361,6 +4518,11 @@ export class Session2 extends HeyApiClient {
       ...options,
       ...params,
     })
+  }
+
+  private _hook?: Hook
+  get hook(): Hook {
+    return (this._hook ??= new Hook({ client: this.client }))
   }
 }
 

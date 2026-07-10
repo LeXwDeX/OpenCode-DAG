@@ -11,7 +11,9 @@
 # Inputs  : version        — release version string (e.g. "1.14.30-fork.2")
 #                            Leave blank for auto timestamped version.
 #           create_release — when true, create a GitHub Release with the
-#                            built binaries + SHA256SUMS attached.
+#                            built binaries + SHA256SUMS attached. Builds
+#                            from any branch other than `main` are marked
+#                            prerelease (test build); `main` = formal release.
 #           platforms      — comma-separated subset of linux,macos,windows
 #                            to build. Leave blank to build all three.
 # Jobs    : build-cli — 3-OS matrix, bundles ripgrep + single-file binary
@@ -85,6 +87,34 @@ jobs:
       - name: Setup Bun
         if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
         uses: ./.github/actions/setup-bun
+        with:
+          # Linux and Windows bun caches are each owned by a single saver
+          # elsewhere (ci-typecheck.yml linux, ci-test.yml e2e windows) to
+          # avoid racing on the same {OS}-bun-{hash} key when this manual
+          # release build runs concurrently with a push-triggered CI run.
+          # macOS has no other job in the repo, so it's safe to save here.
+          save-cache: ${{ matrix.name == 'macos' }}
+
+      # Embed a models.dev catalog snapshot into the binary so air-gapped
+      # users can start opencode without reaching https://models.dev at
+      # runtime (see packages/opencode/script/generate.ts fallback order).
+      - name: Fetch models.dev Snapshot
+        if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
+        run: |
+          snapshot_path="$RUNNER_TEMP/models-dev-api.json"
+          if command -v cygpath &>/dev/null; then
+            snapshot_path="$(cygpath -m "$snapshot_path")"
+          fi
+          for attempt in 1 2 3; do
+            if curl -fsSL --max-time 30 https://models.dev/api.json -o "$snapshot_path"; then
+              echo "models.dev snapshot downloaded (attempt $attempt)"
+              echo "MODELS_DEV_API_JSON=$snapshot_path" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "models.dev download failed (attempt $attempt), retrying..."
+            sleep 5
+          done
+          echo "::warning::Failed to download models.dev api.json; build will fall back to @opencode-ai/models snapshot or an empty catalog"
 
       - name: Build CLI
         if: inputs.platforms == '' || contains(inputs.platforms, matrix.name)
@@ -162,11 +192,19 @@ jobs:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+        # Releases built from any branch other than `main` (e.g. `dev`) are
+        # test builds and get marked --prerelease; only `main` produces a
+        # formal release.
         run: |
+          EXTRA_FLAGS=()
+          if [ "${{ github.ref_name }}" != "main" ]; then
+            EXTRA_FLAGS+=(--prerelease)
+          fi
           gh release create "${{ steps.tag.outputs.tag }}" \
             --title "opencode ${{ steps.tag.outputs.version }}" \
             --notes "Fork release from branch ${{ github.ref_name }}" \
             --target "${{ github.sha }}" \
+            "${EXTRA_FLAGS[@]}" \
             release-assets/*
 
   # No-op job for push-triggered runs — just registers the workflow in Actions UI

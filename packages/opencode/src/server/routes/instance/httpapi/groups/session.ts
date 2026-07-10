@@ -26,6 +26,7 @@ import { described } from "./metadata"
 import { QueryBoolean } from "./query"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { VALID_HOOK_EVENTS, type HookEvent } from "@/hook/settings"
 
 const root = "/session"
 export const ListQuery = Schema.Struct({
@@ -76,6 +77,37 @@ export const PermissionResponsePayload = Schema.Struct({
   response: PermissionV1.Reply,
 })
 
+// Session-scoped hook registration (D2). Event/type membership is validated
+// declaratively by the literal schemas (unknown event/type → 4xx); the
+// non-empty hooks[] guard is enforced at the handler boundary.
+const HookEventParam = Schema.Literals([...VALID_HOOK_EVENTS])
+const HookTypeParam = Schema.Literals(["command", "mcp", "http", "prompt", "agent"])
+export const SessionHookCommandPayload = Schema.Struct({
+  type: HookTypeParam,
+  command: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  prompt: Schema.optional(Schema.String),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  timeout: Schema.optional(Schema.Number),
+  if: Schema.optional(Schema.String),
+  async: Schema.optional(Schema.Boolean),
+  asyncRewake: Schema.optional(Schema.Boolean),
+})
+export const SessionHookAddPayload = Schema.Struct({
+  event: HookEventParam,
+  matcher: Schema.optional(Schema.String),
+  hooks: Schema.Array(SessionHookCommandPayload),
+  once: Schema.optional(Schema.Boolean),
+})
+export const SessionHookEntryResponse = Schema.Struct({
+  id: Schema.String,
+  event: HookEventParam,
+  matcher: Schema.optional(Schema.String),
+  hooks: Schema.Array(SessionHookCommandPayload),
+  once: Schema.optional(Schema.Boolean),
+})
+export type SessionHookAddPayload = typeof SessionHookAddPayload.Type
+
 export const SessionPaths = {
   list: root,
   status: `${root}/status`,
@@ -83,6 +115,8 @@ export const SessionPaths = {
   children: `${root}/:sessionID/children`,
   todo: `${root}/:sessionID/todo`,
   goal: `${root}/:sessionID/goal`,
+  hook: `${root}/:sessionID/hook`,
+  hookRemove: `${root}/:sessionID/hook/:hookID`,
   diff: `${root}/:sessionID/diff`,
   messages: `${root}/:sessionID/message`,
   message: `${root}/:sessionID/message/:messageID`,
@@ -177,6 +211,44 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.goal",
             summary: "Get session goal",
             description: "Retrieve the autonomous goal state for a session, if one is set.",
+          }),
+        ),
+        HttpApiEndpoint.post("hookAdd", SessionPaths.hook, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          payload: SessionHookAddPayload,
+          success: described(Schema.Struct({ id: Schema.String }), "Created hook entry id"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.hook.add",
+            summary: "Register a session-scoped hook",
+            description:
+              "Register a hook entry scoped to this session. The entry joins the same matcher/aggregation pipeline as on-disk hooks; once:true entries auto-remove after first execution. Storage is in-memory and is cleared on SessionEnd.",
+          }),
+        ),
+        HttpApiEndpoint.get("hookList", SessionPaths.hook, {
+          params: { sessionID: SessionID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Array(SessionHookEntryResponse), "Session hook entries"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.hook.list",
+            summary: "List session-scoped hooks",
+            description: "List all hook entries currently registered for this session.",
+          }),
+        ),
+        HttpApiEndpoint.delete("hookRemove", SessionPaths.hookRemove, {
+          params: { sessionID: SessionID, hookID: Schema.String },
+          query: WorkspaceRoutingQuery,
+          success: described(HttpApiSchema.NoContent, "Hook removed"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.hook.remove",
+            summary: "Remove a session-scoped hook",
+            description: "Remove a session hook entry by id. Idempotent — deleting a non-existent id succeeds.",
           }),
         ),
         HttpApiEndpoint.get("diff", SessionPaths.diff, {

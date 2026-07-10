@@ -53,6 +53,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { HookStartContext } from "@/hook/start-context"
 import { SettingsHook } from "@/hook/settings"
+import { HookRewakeLive } from "@/hook/rewake-live"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
 
@@ -91,6 +92,7 @@ export const AppLayer = Layer.mergeAll(
     SessionRevert.defaultLayer,
     SessionSummary.defaultLayer,
     SessionPrompt.defaultLayer,
+    HookRewakeLive.liveLayer,
     Instruction.defaultLayer,
     LLM.defaultLayer,
     LSP.defaultLayer,

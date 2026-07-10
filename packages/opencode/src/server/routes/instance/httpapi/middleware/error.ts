@@ -1,5 +1,6 @@
 import { NamedError } from "@opencode-ai/core/util/error"
 import { ConfigErrorV1 } from "@opencode-ai/core/v1/config/error"
+import { Provider } from "@/provider/provider"
 import { Cause, Effect } from "effect"
 import { HttpRouter, HttpServerError, HttpServerRespondable, HttpServerResponse } from "effect/unstable/http"
 
@@ -23,6 +24,14 @@ export const errorLayer = HttpRouter.middleware<{ handles: unknown }>()((effect)
         ConfigErrorV1.DirectoryTypoError.isInstance(error)
       ) {
         return Effect.succeed(HttpServerResponse.jsonUnsafe(error.toObject(), { status: 400 }))
+      }
+
+      // Degraded-state provider failures (e.g. offline with empty model catalog) must surface as
+      // named, actionable errors instead of the generic 500 defect path.
+      if (Provider.NoProvidersError.isInstance(error) || Provider.NoModelsError.isInstance(error)) {
+        return Effect.succeed(
+          HttpServerResponse.jsonUnsafe({ name: error._tag, data: { message: error.message } }, { status: 400 }),
+        )
       }
 
       const ref = `err_${crypto.randomUUID().slice(0, 8)}`

@@ -43,6 +43,7 @@ import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
+import { TuiLog } from "../util/log"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -557,7 +558,7 @@ export const {
           })
         })
         .catch(async (e) => {
-          console.error("tui bootstrap failed", {
+          TuiLog.write("error", "tui bootstrap failed", {
             error: e instanceof Error ? e.message : String(e),
             name: e instanceof Error ? e.name : undefined,
             stack: e instanceof Error ? e.stack : undefined,

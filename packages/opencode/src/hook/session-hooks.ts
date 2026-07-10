@@ -1,8 +1,10 @@
 /**
  * Session-scoped hook store (WP-5D).
  *
- * Holds hook entries that were dynamically attached to a single session
- * (e.g. injected by a Claude Code skill / agent frontmatter at runtime).
+ * Holds hook entries that were dynamically attached to a single session. The
+ * canonical producer is the HTTP API session-hook endpoints (POST/GET/DELETE
+ * under `/session/:id/hook`); anything that can speak HTTP — plugins, the TUI,
+ * external clients, tests — can register a hook for the session's lifetime.
  * These hooks live alongside the 6-layer settings file chain — `SettingsHook.trigger`
  * concatenates session entries into the matcher list so they participate in
  * the same matcher / aggregation pipeline as on-disk hooks.
@@ -10,10 +12,13 @@
  * Lifecycle:
  *   - `add(sessionID, entry)` — append; returns a uuid for later precise removal
  *   - `list(sessionID, event)` — query active entries for one event
+ *   - `listAll(sessionID)` — query all active entries for a session (HTTP GET)
  *   - `remove(sessionID, id)` — drop a single entry (used by `once: true` cleanup)
  *   - `clear(sessionID)` — drop the whole session bucket (call on session end)
  *
  * Uses `InstanceState` for per-directory isolation (mirrors `start-context.ts`).
+ * Storage is process-local memory — entries do NOT survive a restart; users
+ * wanting persistent hooks should use the on-disk hooks.json chain.
  */
 import { Context, Effect, Layer } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
@@ -27,11 +32,18 @@ import type { HookEvent, HookJSONOutput } from "./settings"
 // import cycle (settings.ts already depends on session-hooks for the trigger merge).
 export interface SessionHookCommand {
   type: "command" | "mcp" | "http" | "prompt" | "agent"
-  command: string
+  command?: string
+  /** Claude Code `type:"http"` endpoint. Legacy configs may still use `command`. */
+  url?: string
+  /** Claude Code `type:"prompt" | "agent"` prompt. Legacy configs may still use `command`. */
+  prompt?: string
+  headers?: Record<string, string>
   timeout?: number
   shell?: "bash" | "powershell"
   if?: string
+  /** Background execution — see HookCommand.async in settings.ts. */
   async?: boolean
+  /** Deliver async result to agent — see HookCommand.asyncRewake in settings.ts. */
   asyncRewake?: boolean
   options?: Record<string, unknown>
   __sourceDir?: string
@@ -55,6 +67,8 @@ export interface Interface {
   readonly add: (sessionID: SessionID, entry: SessionHookEntryInput) => Effect.Effect<string>
   readonly remove: (sessionID: SessionID, id: string) => Effect.Effect<void>
   readonly list: (sessionID: SessionID, event: HookEvent) => Effect.Effect<readonly SessionHookEntry[]>
+  /** All entries for a session across every event (backs the HTTP GET endpoint). */
+  readonly listAll: (sessionID: SessionID) => Effect.Effect<readonly SessionHookEntry[]>
   /**
    * O(1) existence probe — answers "does this session have any hook for this event?"
    * Used by WP-6A short-circuit in SettingsHook.trigger to skip the matcher pipeline
@@ -97,6 +111,11 @@ export const layer = Layer.effect(
       return arr.filter((e) => e.event === event) as readonly SessionHookEntry[]
     })
 
+    const listAll = Effect.fn("SessionHooks.listAll")(function* (sessionID: SessionID) {
+      const data = yield* InstanceState.get(state)
+      return (data.get(sessionID) ?? []) as readonly SessionHookEntry[]
+    })
+
     const hasForEvent = Effect.fn("SessionHooks.hasForEvent")(function* (sessionID: SessionID, event: HookEvent) {
       const data = yield* InstanceState.get(state)
       const arr = data.get(sessionID)
@@ -109,7 +128,7 @@ export const layer = Layer.effect(
       data.delete(sessionID)
     })
 
-    return Service.of({ add, remove, list, hasForEvent, clear })
+    return Service.of({ add, remove, list, listAll, hasForEvent, clear })
   }),
 )
 

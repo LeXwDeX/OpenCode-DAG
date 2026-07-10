@@ -1,6 +1,6 @@
 export * as GoalLoop from "./loop"
 
-import { Effect, Layer, Context, Stream, Scope } from "effect"
+import { Effect, Layer, Context, Option, Stream, Scope, Fiber, Cause } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -19,6 +19,29 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/GoalLoop") {}
+
+/**
+ * Test-only injection point for the judge LLM call (D5). When provided in the
+ * Effect context, `afterIdle` uses `call` instead of the production
+ * Provider → generateText path, so e2e tests can script judge verdicts
+ * (continue→done) with no network or Provider credentials. Production never
+ * provides it, so the Provider path is byte-for-byte unchanged.
+ */
+export type JudgeCallLLM = (opts: {
+  system: string
+  user: string
+  temperature: number
+  maxTokens: number
+  timeout: number
+}) => Effect.Effect<string, Error>
+
+export interface GoalLoopJudgeLLMInterface {
+  readonly call: JudgeCallLLM
+}
+
+export class GoalLoopJudgeLLM extends Context.Service<GoalLoopJudgeLLM, GoalLoopJudgeLLMInterface>()(
+  "@opencode/GoalLoop/JudgeLLM",
+) {}
 
 /**
  * Pure predicate: returns true when the most recent user message in `msgs`
@@ -47,6 +70,33 @@ export function shouldPreempt(
   return lastUserAt > lastAsstAt
 }
 
+/**
+ * Pure predicate for the zombie-goal freshness guard (D6). Returns true when a
+ * goal is "orphaned": active, has run zero continuations (turns_used === 0),
+ * was created more than FRESHNESS_THRESHOLD ago, and the initial kick never
+ * produced an assistant message (provider error, model refusal, empty response).
+ *
+ * Used by GoalLoop.afterIdle to convert the silent orphan state into a visible,
+ * recoverable pause. Without it, every subsequent afterIdle would abort at the
+ * `if (!lastAssistant) return` line and the goal would sit permanently "active"
+ * with no progress.
+ *
+ * `now` defaults to Date.now() for production; tests pass an explicit value for
+ * determinism.
+ */
+export function isStaleZombie(
+  state: { status: string; turns_used: number; created_at: number },
+  hasAssistant: boolean,
+  now: number = Date.now(),
+): boolean {
+  return (
+    state.status === "active" &&
+    Number(state.turns_used) === 0 &&
+    !hasAssistant &&
+    now - state.created_at > GoalPrompts.FRESHNESS_THRESHOLD
+  )
+}
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -65,10 +115,30 @@ export const layer = Layer.effect(
           Stream.runForEach((evt) =>
             Effect.gen(function* () {
               const sid = evt.data.sessionID
-              // v1.17.11: idle has no cause field; afterIdle handles
-              // abort detection via shouldPreempt (user message after cancel)
+              // D4 (fiber lifecycle): do NOT fork or register a fiber for
+              // sessions without an active goal. Without this pre-check the
+              // fibers Map grows once per idle event for every session that
+              // ever went idle — including ones that never set a goal. afterIdle
+              // re-checks goal state internally too; that internal check stays
+              // as a TOCTOU guard (goal could be cleared between this load and
+              // the fork). v1.17.11: idle has no cause field; afterIdle handles
+              // abort detection via shouldPreempt (user message after cancel).
+              const goalState = yield* goal.load(sid)
+              if (!goalState || goalState.status !== "active") return
               const fiber = yield* afterIdle(sid).pipe(Effect.ignore, Effect.forkIn(scope))
               yield* goal.registerLoopFiber(sid, fiber)
+              // D4 self-clean: when this afterIdle fiber completes naturally,
+              // remove it from the fibers Map IF it is still the registered one.
+              // A newer idle event may have already registered a fresh fiber
+              // (registerLoopFiber interrupts + overwrites the old one);
+              // clearLoopFiberIf's identity check avoids evicting the new fiber.
+              // The watcher never interrupts and completes right after its
+              // target, so it does not accumulate across idle events.
+              yield* Fiber.await(fiber).pipe(
+                Effect.flatMap(() => goal.clearLoopFiberIf(sid, fiber)),
+                Effect.ignore,
+                Effect.forkIn(scope),
+              )
             }).pipe(Effect.ignore),
           ),
           Effect.forkScoped,
@@ -81,6 +151,37 @@ export const layer = Layer.effect(
       const goalState = yield* goal.load(sessionID)
       if (!goalState || goalState.status !== "active") return
 
+      // Zombie-goal freshness guard (D6). If the goal is active but has run
+      // zero continuations and is older than FRESHNESS_THRESHOLD, the initial
+      // kick may have failed silently (provider error, model refusal, empty
+      // response). Without this guard every subsequent afterIdle aborts at the
+      // `if (!lastAssistant) return` line below, leaving the goal permanently
+      // "active" with no progress — a silent orphan. Convert that into a
+      // visible, recoverable pause so the user can /goal resume.
+      //
+      // The probe loads only 1 message (not the full 20) so we don't pay for
+      // the whole message window just to discover staleness; the stale path
+      // returns early so the limit:20 load below never runs when the guard
+      // fires. Uses pauseAndPublish (fiber-safe) — NOT goal.pause — because
+      // we ARE the loop fiber tracked in the fibers map (same self-interrupt
+      // hazard discipline as the done / shouldPreempt branches below).
+      if (
+        Number(goalState.turns_used) === 0 &&
+        Date.now() - goalState.created_at > GoalPrompts.FRESHNESS_THRESHOLD
+      ) {
+        const probeMsgs = yield* sessions.messages({ sessionID, limit: 1 })
+        const hasAssistant = probeMsgs.some((m) => m.info.role === "assistant")
+        if (isStaleZombie(goalState, hasAssistant)) {
+          yield* goal
+            .pauseAndPublish(
+              sessionID,
+              `initial kick produced no assistant response within ${GoalPrompts.FRESHNESS_THRESHOLD / 1000}s — likely provider error or model refusal. Use /goal resume to retry.`,
+            )
+            .pipe(Effect.ignore)
+          return
+        }
+      }
+
       const msgs = yield* sessions.messages({ sessionID, limit: 20 })
       const lastAssistant = [...msgs].reverse().find((m) => m.info.role === "assistant")
       if (!lastAssistant) return
@@ -91,26 +192,39 @@ export const layer = Layer.effect(
         .slice(-4000)
       if (!responseText) return
 
-      const callLLM = (opts: { system: string; user: string; temperature: number; maxTokens: number; timeout: number }) =>
-        Effect.gen(function* () {
-          const defaultM = yield* provider.defaultModel()
-          const model = yield* provider.getModel(defaultM.providerID, defaultM.modelID)
-          const language = yield* provider.getLanguage(model)
-          const result = yield* Effect.tryPromise({
-            try: (signal) =>
-              generateText({
-                model: language,
-                system: opts.system,
-                prompt: opts.user,
-                temperature: opts.temperature,
-                maxOutputTokens: opts.maxTokens,
-                abortSignal: signal,
-              }),
-            catch: (e) => new Error(`judge LLM call failed: ${e}`),
-          }).pipe(Effect.timeout(`${opts.timeout} seconds`))
-          if (!result) return ""
-          return result.text
-        })
+      // Judge LLM call: prefer the test-injected callable (D5) so e2e tests
+      // can script verdicts without Provider/network; otherwise build the
+      // production Provider → generateText path. The verdict logic below is
+      // unchanged — only the callLLM construction point moved.
+      const injected = Option.getOrUndefined(yield* Effect.serviceOption(GoalLoopJudgeLLM))
+      const callLLM: JudgeCallLLM =
+        injected?.call ??
+        ((opts) =>
+          Effect.gen(function* () {
+            const defaultM = yield* provider.defaultModel()
+            // Judge is a ~200-token JSON binary classification — prefer the
+            // provider's small/fast model (config `small_model`, plugin hint,
+            // or the built-in haiku/flash/nano priority list). Fall back to
+            // the default model when no small model is resolvable, keeping
+            // the prior behavior byte-for-byte for those providers.
+            const small = yield* provider.getSmallModel(defaultM.providerID)
+            const model = small ?? (yield* provider.getModel(defaultM.providerID, defaultM.modelID))
+            const language = yield* provider.getLanguage(model)
+            const result = yield* Effect.tryPromise({
+              try: (signal) =>
+                generateText({
+                  model: language,
+                  system: opts.system,
+                  prompt: opts.user,
+                  temperature: opts.temperature,
+                  maxOutputTokens: opts.maxTokens,
+                  abortSignal: signal,
+                }),
+              catch: (e) => new Error(`judge LLM call failed: ${e}`),
+            }).pipe(Effect.timeout(`${opts.timeout} seconds`))
+            if (!result) return ""
+            return result.text
+          }))
 
       const verdict = yield* GoalJudge.run(
         goalState.goal,
@@ -131,19 +245,23 @@ export const layer = Layer.effect(
         // how /goal clear behaves). This is what makes goal completion
         // not require a manual /goal clear afterwards.
         if (verdict.verdict === "done") {
+          // Run the terminal event sequence FIRST (F1): publish(done) →
+          // delete → publish(cleared) is the contract SSE/TUI consumers
+          // rely on, so it must complete before any other effect that could
+          // race the loop fiber. deleteAndPublishDone is uninterruptible and
+          // fiber-safe (no clearFiber), so this ordering is pure
+          // defense-in-depth — the completion message text is computed from
+          // updateResult.message (pre-deletion state) and is unaffected by
+          // running after the delete. The noReply path returns before any
+          // status transition today, but completing the terminal sequence
+          // first makes the contract structurally enforced rather than
+          // dependent on that noReply implementation detail.
+          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
           yield* promptSvc.prompt({
             sessionID,
             noReply: true,
             parts: [{ type: "text", text: updateResult.message }],
           }).pipe(Effect.ignore)
-          // Use deleteAndPublishDone (NOT goal.clear) because we ARE the
-          // loop fiber: goal.clear() internally calls clearFiber which
-          // would interrupt ourselves before events.publish(GoalEvent.Cleared)
-          // runs — the .pipe(Effect.ignore) would silently swallow the
-          // self-interrupt and goal.cleared would never reach SSE/TUI.
-          // deleteAndPublishDone only touches DB + event bus, never the
-          // fiber map, so it is safe to call from inside the loop fiber.
-          yield* goal.deleteAndPublishDone(sessionID, verdict.reason).pipe(Effect.ignore)
         } else {
           // Auto-pause branch: updateAfterJudge paused the goal due to
           // judge-parse-failure or budget exhaustion (verdict.verdict is
@@ -185,23 +303,49 @@ export const layer = Layer.effect(
 
       const reloadedState = yield* goal.load(sessionID)
       if (!reloadedState || reloadedState.status !== "active") return
-      const continuationText = GoalPrompts.renderContinuation(reloadedState.goal, reloadedState.subgoals ?? [])
 
-      // Surface the per-turn progress indicator visibly (e.g.
-      // "↻ 继续推进目标（2/10）：…"). updateAfterJudge computed this message;
-      // emit it as a noReply non-synthetic part so it renders in the transcript
-      // without spawning another agent turn. The continuation prompt below
-      // (ignored) is what actually drives the next loop iteration.
-      yield* promptSvc.prompt({
-        sessionID,
-        noReply: true,
-        parts: [{ type: "text", text: updateResult.message }],
-      }).pipe(Effect.ignore)
-
-      yield* promptSvc.prompt({
-        sessionID,
-        parts: [{ type: "text", text: continuationText, ignored: true }],
+      // Single merged continuation injection (D4.2). This replaces the former
+      // two-call sequence (a `noReply` progress line + an `ignored:true`
+      // continuation). The merged prompt carries goal text, subgoals, the
+      // turns/budget line, and the last judge reason, plus the autonomous-mode
+      // frame — and it is BOTH the user-visible per-turn progress line AND the
+      // prompt that drives the next agent turn.
+      //
+      // It is deliberately a plain text part: no `noReply` (so it spawns the
+      // next agent turn) and no `ignored` (so it renders in the transcript AND
+      // reaches the model — `ignored:true` text parts are filtered out of model
+      // messages in MessageV2.toModelMessagesEffect). Driving + visibility +
+      // model-reachability are all required by D4.2.
+      const continuationText = GoalPrompts.renderContinuation({
+        goal: reloadedState.goal,
+        subgoals: reloadedState.subgoals ?? [],
+        turnsUsed: Number(reloadedState.turns_used),
+        maxTurns: Number(reloadedState.max_turns),
+        lastJudgeReason: reloadedState.last_reason,
       })
+
+      // Continuation dispatch can fail (provider fault, session write error,
+      // …). Previously the error escaped to the fork-point Effect.ignore and
+      // was swallowed, leaving the goal silently `active` with no idle event
+      // to drive the next turn — a permanent, invisible stall. Catch the full
+      // cause (recoverable failures + defects) and transition to a recoverable
+      // paused state via the fiber-safe pauseAndPublish (goal.pause would
+      // clearFiber — us — mid-publish; see the preempt branches above).
+      yield* promptSvc
+        .prompt({
+          sessionID,
+          parts: [{ type: "text", text: continuationText }],
+        })
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.gen(function* () {
+              yield* Effect.logWarning("goal continuation dispatch failed", { error: Cause.pretty(cause) })
+              yield* goal.pauseAndPublish(sessionID, `continuation dispatch failed: ${Cause.pretty(cause)}`).pipe(
+                Effect.ignore,
+              )
+            }),
+          ),
+        )
 
       // NOTE: We deliberately DO NOT call goal.clearLoopFiber here. The
       // promptSvc.prompt above triggers a fresh agent loop, which when it

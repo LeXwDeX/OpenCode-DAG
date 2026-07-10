@@ -2,9 +2,10 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { httpClient } from "@opencode-ai/core/effect/layer-node-platform"
 import path from "path"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
-import { Effect, Layer, Context } from "effect"
+import { Effect, Layer, Context, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { Config } from "@/config/config"
+import { SettingsHook } from "@/hook/settings"
 import { InstanceState } from "@/effect/instance-state"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Flag } from "@opencode-ai/core/flag/flag"
@@ -56,6 +57,7 @@ export const layer: Layer.Layer<
     const fs = yield* FSUtil.Service
     const global = yield* Global.Service
     const flags = yield* RuntimeFlags.Service
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
     const globalFiles = [
       path.join(global.config, "AGENTS.md"),
@@ -72,6 +74,8 @@ export const layer: Layer.Layer<
         Effect.succeed({
           // Track which instruction files have already been attached for a given assistant message.
           claims: new Map<MessageID, Set<string>>(),
+          // Instruction files already announced via the InstructionsLoaded hook (once per instance).
+          announced: new Set<string>(),
         }),
       ),
     )
@@ -161,6 +165,24 @@ export const layer: Layer.Layer<
 
       const files = yield* Effect.forEach(Array.from(paths), read, { concurrency: 8 })
       const remote = yield* Effect.forEach(urls, fetch, { concurrency: 4 })
+
+      // SettingsHook: InstructionsLoaded — once per instruction file per instance,
+      // content truncated to 32KB to bound hook stdin size.
+      if (settingsHook) {
+        const s = yield* InstanceState.get(state)
+        const loaded = Array.from(paths).flatMap((item, i) => (files[i] ? [{ path: item, content: files[i] }] : []))
+        for (const file of loaded) {
+          if (s.announced.has(file.path)) continue
+          s.announced.add(file.path)
+          const ilResult = yield* settingsHook
+            .trigger(
+              { event: "InstructionsLoaded", path: file.path, content: file.content.slice(0, 32 * 1024) },
+              { sessionID: "", transcriptPath: "" },
+            )
+            .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })))
+          yield* SettingsHook.landSystemMessages(ilResult, { sessionID: "" })
+        }
+      }
 
       return [
         ...Array.from(paths).flatMap((item, i) => (files[i] ? [`Instructions from: ${item}\n${files[i]}`] : [])),

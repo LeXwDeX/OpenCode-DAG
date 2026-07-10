@@ -1,4 +1,4 @@
-import { expect, mock, beforeEach } from "bun:test"
+import { expect, mock, beforeEach, afterAll } from "bun:test"
 import { EventEmitter } from "events"
 import { Deferred, Effect, Layer, Option } from "effect"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
@@ -111,6 +111,13 @@ beforeEach(() => {
   openCalledWith = undefined
   openDeferred = undefined
   transportCalls.length = 0
+})
+
+afterAll(() => {
+  // Bun's module mocks are process-global across the full test run. Restore the
+  // MCP SDK Client mock so later real-transport tests receive the real Client
+  // (not this reduced MockClient, which intentionally lacks callTool()).
+  mock.restore()
 })
 
 // Import modules after mocking

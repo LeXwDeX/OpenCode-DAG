@@ -1,5 +1,5 @@
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer, Option } from "effect"
 
 import { InstanceState } from "@/effect/instance-state"
 
@@ -12,7 +12,6 @@ import PROMPT_KIMI from "./prompt/kimi.txt"
 
 import PROMPT_CODEX from "./prompt/codex.txt"
 import PROMPT_TRINITY from "./prompt/trinity.txt"
-import PROMPT_HOOKS from "./prompt/hooks.txt"
 import PROMPT_GOAL from "./prompt/goal.txt"
 import type { Provider } from "@/provider/provider"
 import type { Agent } from "@/agent/agent"
@@ -24,6 +23,10 @@ import { LocationServiceMap } from "@opencode-ai/core/location-layer"
 import { Reference } from "@opencode-ai/core/reference"
 import { MCP } from "@/mcp"
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
+import { Goal } from "@/goal/goal"
+import { GoalPrompts } from "@/goal/prompts"
+import { SettingsHook } from "@/hook/settings"
+import type { SessionID } from "@/session/schema"
 
 export function provider(model: Provider.Model) {
   if (model.api.id.includes("gpt-4") || model.api.id.includes("o1") || model.api.id.includes("o3"))
@@ -45,8 +48,8 @@ export interface Interface {
   readonly environment: (model: Provider.Model) => Effect.Effect<string[]>
   readonly skills: (agent: Agent.Info) => Effect.Effect<string | undefined>
   readonly mcp: (agent: Agent.Info, permission?: PermissionV1.Ruleset) => Effect.Effect<string | undefined>
+  readonly goal: (sessionID: SessionID) => Effect.Effect<string[]>
   readonly hooks: () => Effect.Effect<string[]>
-  readonly goal: () => Effect.Effect<string[]>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SystemPrompt") {}
@@ -57,6 +60,13 @@ export const layer = Layer.effect(
     const skill = yield* Skill.Service
     const mcp = yield* MCP.Service
     const locations = yield* LocationServiceMap
+    // Goal.Service is resolved lazily (serviceOption) rather than declared as a
+    // hard construction dependency, mirroring src/session/prompt.ts and
+    // src/tool/goal.ts. Keeping it optional lets the system prompt degrade to a
+    // terse "no active goal" note in runtimes that omit Goal (some headless / test
+    // entry points), and avoids dragging Goal's transitive deps into every
+    // SystemPrompt consumer.
+    const goalSvc = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
 
     return Service.of({
       environment: Effect.fn("SystemPrompt.environment")(function* (model: Provider.Model) {
@@ -129,12 +139,37 @@ export const layer = Layer.effect(
         ].join("\n")
       }),
 
-      hooks: Effect.fn("SystemPrompt.hooks")(function* () {
-        return [PROMPT_HOOKS]
+      goal: Effect.fn("SystemPrompt.goal")(function* (sessionID: SessionID) {
+        // No Goal service wired into this entry point → degrade to a terse note.
+        if (!goalSvc) return ["No autonomous goal is active for this session."]
+        const state = yield* goalSvc.load(sessionID)
+        // Only active/paused goals carry a live-state block. `done` is transient
+        // (auto-cleared) and treated the same as "no goal" here.
+        if (!state || (state.status !== "active" && state.status !== "paused"))
+          return ["No autonomous goal is active for this session."]
+        // Active/paused: the trimmed static mechanism + the live-state block.
+        // The mechanism is intentionally NOT injected when no goal is active, to
+        // avoid prompt bloat (spec: no-active-goal-injected-as-terse-note).
+        return [PROMPT_GOAL, GoalPrompts.renderGoalSystemBlock(state)]
       }),
 
-      goal: Effect.fn("SystemPrompt.goal")(function* () {
-        return [PROMPT_GOAL]
+      // Active Hooks block — dynamic, mirrors goal's economy: no hooks → empty
+      // array (no header, no placeholder). SettingsHook is resolved at request
+      // time via serviceOption (per tool-service-resolution spec) so headless /
+      // test entry points that omit the heavyweight service degrade cleanly.
+      hooks: Effect.fn("SystemPrompt.hooks")(function* () {
+        const hookSvc = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
+        if (!hookSvc) return []
+        const hooks = yield* hookSvc.list()
+        if (hooks.length === 0) return []
+        const MAX = 20
+        const shown = hooks.slice(0, MAX)
+        const lines = [
+          "## Active Hooks",
+          ...shown.map((h) => `- ${h.event} [${h.scope}/${h.type}] ${h.descriptor}`),
+        ]
+        if (hooks.length > MAX) lines.push(`… and ${hooks.length - MAX} more (see hooks.json)`)
+        return [lines.join("\n")]
       }),
     })
   }),

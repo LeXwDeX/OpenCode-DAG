@@ -45,7 +45,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionMessageID } from "@opencode-ai/schema/session-message-id"
 import { Goal } from "@/goal/goal"
-import * as PostToolBatch from "@/hook/extensions/post-tool-batch"
+import { landSystemMessages } from "@/hook/trigger-result"
 
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
 
@@ -497,8 +497,20 @@ export const layer: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
     // Goal cleanup is optional — Session must not require Goal at construction
     // (that would force every Session.defaultLayer consumer to provide Goal's
-    // transitive deps). Resolved lazily via serviceOption, like SettingsHook.
+    // transitive deps). Resolved lazily via serviceOption.
     const goalOpt = yield* Effect.serviceOption(Goal.Service)
+    // SettingsHook (for the SessionEnd trigger in remove()) is likewise optional.
+    // It is resolved HERE, at construction time, because that is the only point
+    // at which a caller-provided SettingsHook mock/layer is in this layer's
+    // context (it is consumed by construction and not re-exposed in the runtime
+    // output context). The tag is obtained via a DEFERRED dynamic import rather
+    // than a top-level `import { SettingsHook }`: settings.ts pulls in
+    // Provider → Plugin → Session, so a static import closes a load-order cycle
+    // that surfaces as a TDZ ReferenceError when test entries load goal/hook
+    // modules. By construction time the static module graph has settled, so the
+    // deferred import resolves to the cached module instantly.
+    const { SettingsHook } = yield* Effect.promise(() => import("@/hook/settings"))
+    const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
 
     const createNext = Effect.fn("Session.createNext")(function* (input: {
       id?: SessionID
@@ -624,12 +636,18 @@ export const layer: Layer.Layer<
         }
 
         yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
+        // SettingsHook: SessionEnd fires before session-scoped hook state is cleared
+        // (the trigger implementation clears seen-cache and session hooks after execution).
+        if (settingsHook) {
+          const seResult = yield* settingsHook
+            .trigger({ event: "SessionEnd", reason: "delete" }, { sessionID, transcriptPath: "" })
+            .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] })))
+          yield* landSystemMessages(seResult, { sessionID })
+        }
         // Cleanup goal state (only when Goal service is available in context)
         if (goalOpt._tag === "Some") {
           yield* goalOpt.value.clear(sessionID).pipe(Effect.catchCause(() => Effect.void))
         }
-        // Cleanup post-tool-batch tracking
-        PostToolBatch.resetBatch(sessionID)
         yield* events.remove(sessionID)
       } catch (error) {
         yield* Effect.logError("failed to remove session", { sessionID, error })

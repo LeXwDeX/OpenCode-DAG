@@ -2,14 +2,17 @@
 # 🧪 CI · Test
 # ----------------------------------------------------------------------------
 # Purpose : Run unit + Playwright e2e tests across Linux & Windows
-# Trigger : Push to `dev` (CI gate before main) + manual workflow_dispatch
+# Trigger : Push to `main`/`dev`, PRs targeting `main`, manual dispatch
 # Jobs    : unit  — `bun turbo test` on linux only (windows dropped — see
 #                    unit-tests matrix comment; free windows-latest runners
 #                    can't fit the suite in a reasonable CI budget)
 #           e2e   — Playwright chromium on linux + windows (matrix)
-# Gate    : MUST pass before merging dev → main (per AGENTS.md Git Workflow 铁律)
-# Notes   : `cancel-in-progress: false` — every dev push gets a full run
-#           No trigger on feat/* (frequent changes) or main (release-only).
+# Gate    : Required status check on the `main` ruleset — full suite gates
+#           dev → main PRs. Pushes to `dev` also get a full run (dev is the
+#           integration/testing branch), but feat/fix → dev PRs are gated by
+#           typecheck only (see ci-typecheck.yml) to keep CI budget sane.
+# Notes   : `cancel-in-progress: false` — every main/dev push gets a full run
+#           No trigger on feat/* or fix/* (frequent changes).
 # ============================================================================
 
 name: 🧪 CI · Test
@@ -17,7 +20,11 @@ name: 🧪 CI · Test
 on:
   push:
     branches:
+      - main
       - dev
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -63,11 +70,22 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          # ci-typecheck.yml's Linux job is the designated Linux cache
+          # saver (runs on every push, fast, low collision risk) — this job
+          # only restores, to avoid racing on the same {OS}-bun-{hash} key.
+          save-cache: false
 
       - name: Configure Git Identity
         run: |
           git config --global user.email "bot@opencode.ai"
           git config --global user.name "opencode"
+
+      - name: Install ripgrep
+        # tool.glob tests hit ripgrep; without the system binary, binary.ts
+        # downloads rg from GitHub releases every run (temp XDG per preload),
+        # gambling on network stability — ECONNRESET fails the test.
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
 
       - name: Cache Turbo
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -131,6 +149,11 @@ jobs:
 
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          # Only Windows saves (sole Windows job). Linux e2e skips —
+          # unit-tests (linux) is the single Linux cache saver, avoiding
+          # intra-run cache key collision on {OS}-bun-{hash}.
+          save-cache: ${{ matrix.settings.name == 'windows' }}
 
       - name: Read Playwright version
         id: playwright-version

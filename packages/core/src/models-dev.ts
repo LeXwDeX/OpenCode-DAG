@@ -1,5 +1,5 @@
 import path from "path"
-import { Context, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
+import { Cause, Context, Duration, Effect, Layer, Option, Schedule, Schema } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http"
 import { ModelsDev } from "@opencode-ai/schema/models-dev"
 import { Global } from "./global"
@@ -142,6 +142,14 @@ export const layer = Layer.effect(
     )
     const ttl = Duration.minutes(5)
     const lockKey = `models-dev:${filepath}`
+    let fetchFailed = false
+    let emptyFallback = false
+
+    const publishFetchFailed = Effect.fn("ModelsDev.publishFetchFailed")(function* () {
+      if (fetchFailed) return
+      fetchFailed = true
+      yield* events.publish(Event.FetchFailed, { source })
+    })
 
     const fresh = Effect.fnUntraced(function* () {
       const stat = yield* fs.stat(filepath).pipe(Effect.catch(() => Effect.succeed(undefined)))
@@ -173,9 +181,11 @@ export const layer = Layer.effect(
       Effect.map((v) => v as Record<string, Provider> | undefined),
     )
 
-    const loadSnapshot = Effect.sync(() =>
-      typeof OPENCODE_MODELS_DEV === "undefined" ? undefined : OPENCODE_MODELS_DEV,
-    )
+    const loadSnapshot = Effect.sync(() => {
+      if (typeof OPENCODE_MODELS_DEV === "undefined") return undefined
+      if (Object.keys(OPENCODE_MODELS_DEV).length === 0) return undefined
+      return OPENCODE_MODELS_DEV
+    })
 
     const fetchAndWrite = Effect.fn("ModelsDev.fetchAndWrite")(function* () {
       const text = yield* fetchApi()
@@ -204,7 +214,20 @@ export const layer = Layer.effect(
           yield* Flock.effect(lockKey)
           return yield* fetchAndWrite()
         }),
+      ).pipe(
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logError("Failed to fetch models.dev", { cause: cause }).pipe(
+              Effect.andThen(publishFetchFailed()),
+              Effect.as(undefined),
+            ),
+        ),
       )
+      if (!text) {
+        emptyFallback = true
+        return {}
+      }
       return JSON.parse(text) as Record<string, Provider>
     }).pipe(Effect.withSpan("ModelsDev.populate"), Effect.orDie)
 
@@ -221,11 +244,19 @@ export const layer = Layer.effect(
           // our outer check and lock acquisition.
           if (!force && (yield* fresh())) return
           yield* fetchAndWrite()
+          fetchFailed = false
+          emptyFallback = false
           yield* invalidate
           yield* events.publish(Event.Refreshed, {})
         }),
       ).pipe(
-        Effect.tapCause((cause) => Effect.logError("Failed to fetch models.dev", { cause: cause })),
+        Effect.catchCauseIf(
+          (cause) => !Cause.hasInterruptsOnly(cause),
+          (cause) =>
+            Effect.logError("Failed to fetch models.dev", { cause: cause }).pipe(
+              Effect.andThen(emptyFallback ? publishFetchFailed() : Effect.void),
+            ),
+        ),
         Effect.ignore,
       )
     })

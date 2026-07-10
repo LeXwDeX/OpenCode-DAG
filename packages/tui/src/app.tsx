@@ -83,6 +83,7 @@ import * as TuiAudio from "./audio"
 import { win32DisableProcessedInput, win32FlushInputBuffer } from "./terminal-win32"
 import { destroyRenderer } from "./util/renderer"
 import { cliErrorMessage, errorFormat } from "./util/error"
+import { TuiLog } from "./util/log"
 
 const appGlobalBindingCommands = [
   "session.list",
@@ -182,6 +183,10 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
   const exit = { epilogue: undefined as string | undefined, reason: undefined as unknown }
   const result = yield* Effect.scoped(
     Effect.gen(function* () {
+      yield* Effect.acquireRelease(
+        Effect.sync(() => TuiLog.installConsoleRedirect()),
+        (restoreConsole) => Effect.sync(restoreConsole),
+      )
       const renderer = yield* Effect.acquireRelease(
         Effect.tryPromise(() =>
           createCliRenderer({
@@ -214,7 +219,7 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
           try {
             await input.pluginHost.dispose()
           } catch (error) {
-            console.error("Failed to dispose TUI plugins", error)
+            TuiLog.write("error", "Failed to dispose TUI plugins", error)
           }
         }),
       )
@@ -403,7 +408,7 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
       dispose: () => attention.dispose(),
     })
     .catch((error) => {
-      console.error("Failed to load TUI plugins", error)
+      TuiLog.write("error", "Failed to load TUI plugins", error)
     })
     .finally(() => {
       setReady(true)
@@ -999,8 +1004,17 @@ function App(props: { onSnapshot?: () => Promise<string[]>; pluginHost: TuiPlugi
     })
   })
 
+  event.on("models-dev.fetch_failed", (evt) => {
+    toast.show({
+      variant: "warning",
+      title: "Model catalog unavailable",
+      message: `${evt.properties.source} is unreachable. Using cached or configured providers only. See ${TuiLog.logFilePath()} for details.`,
+      duration: 8000,
+    })
+  })
+
   event.on("installation.update-available", async (evt) => {
-    console.log("installation.update-available", evt)
+    TuiLog.write("log", "installation.update-available", evt)
     const version = evt.properties.version
 
     const skipped = kv.get("skipped_version")

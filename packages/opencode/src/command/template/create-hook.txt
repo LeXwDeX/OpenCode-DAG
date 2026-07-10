@@ -1,0 +1,146 @@
+---
+description: Create a new hook interactively and write it to the correct hooks.json layer
+---
+
+# Create Hook
+
+This command guides interactive authoring of a **single new hook entry** into the correct `hooks.json` file. It merge-appends (never overwrites) and validates the event name before writing.
+
+## Prerequisites
+
+Load the `configure-hooks` skill first — it documents the canonical 27-event list, the 5 hook types, and the `hooks.json` format. Reference it instead of guessing event names or field shapes.
+
+## Process
+
+### 1. Gather inputs interactively
+
+Ask the user for each field, one at a time:
+
+**Event** — one of the 26 valid events (see the `configure-hooks` skill for the full list). Tool lifecycle: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`. Permission: `PermissionRequest`, `PermissionDenied`. Session: `Setup`, `SessionStart`, `SessionEnd`, `Stop`, `StopFailure`. Subagents: `SubagentStart`, `SubagentStop`. Prompt/compaction: `UserPromptSubmit`, `PreCompact`, `PostCompact`. Tasks: `TaskCreated`, `TaskCompleted`. MCP elicitation: `Elicitation`, `ElicitationResult`. Other: `Notification`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`, `InstructionsLoaded`, `CwdChanged`, `FileChanged`.
+
+**Reject invalid event names before doing anything else** — show the valid list and re-ask. Do NOT write the file for an unknown event.
+
+**Hook type** — `command` | `mcp` | `http` | `prompt` | `agent`. Ask which action the hook should perform:
+
+- `command` — run a shell command
+- `mcp` — invoke an MCP tool (`mcp__<server>__<tool>`)
+- `http` — POST the event envelope to a URL
+- `prompt` — run an LLM call with structured output
+- `agent` — run an autonomous sub-agent loop
+
+**Action field** (depends on type):
+
+- `command` → the shell command string
+- `mcp` → the tool name in `mcp__<server>__<tool>` format
+- `http` → the endpoint URL
+- `prompt` / `agent` → the prompt / goal text
+
+**Matcher** (only for tool-bound events: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`):
+
+- Empty / omitted / `*` — matches all tools
+- `Bash` — exact tool name
+- `Bash|Edit|Write` — pipe-separated list
+- Any other string — treated as a regex
+
+For non-tool events, omit the matcher entirely.
+
+**Optional fields** — ask if the user wants to set any:
+
+- `timeout` — seconds before the hook is killed (default 60)
+- `statusMessage` — short label shown in the UI while the hook runs
+
+**Scope** — `project` or `global`:
+
+- `project` → `.opencode/hooks.json` in the current project (hot-reloads in ~2s)
+- `global` → `~/.config/opencode/hooks.json` (requires restart to take effect)
+
+### 2. Build the JSON entry
+
+Construct the hook entry matching the `hooks.json` format. The event key maps to an array of matcher blocks; each block has an optional `matcher` and a `hooks` array:
+
+```json
+{
+  "PreToolUse": [
+    {
+      "matcher": "Bash",
+      "hooks": [
+        { "type": "command", "command": "echo 'hello from hook'", "timeout": 10 }
+      ]
+    }
+  ]
+}
+```
+
+For non-tool events, omit the `matcher` field:
+
+```json
+{
+  "Stop": [
+    {
+      "hooks": [
+        { "type": "command", "command": "echo 'session stopped'" }
+      ]
+    }
+  ]
+}
+```
+
+### 3. Confirm with the user
+
+Show the complete JSON entry (including the event name, matcher block, and hook object) and ask for confirmation before writing. If the user wants changes, edit and re-show.
+
+### 4. Write to hooks.json (merge-append)
+
+Read the target `hooks.json` first:
+
+- **Project scope**: `${PROJECT_DIR}/.opencode/hooks.json`
+- **Global scope**: `~/.config/opencode/hooks.json`
+
+Then:
+
+1. If the file does not exist, create it (create the `.opencode/` directory for project scope if needed).
+2. If the file exists, parse it and **merge-append** the new entry:
+   - If the event key already exists, append the new matcher block to the existing array (do NOT replace existing entries).
+   - If the event key does not exist, add it with the new matcher block as the only element.
+   - Preserve all existing entries and any unknown fields (e.g. `$schema`, `version`) — only touch the event key you are adding to.
+3. Write the merged JSON back with 2-space indentation.
+
+Never overwrite the entire file. Never delete existing hooks.
+
+### 5. Verify the write
+
+After writing, re-read the file and JSON-parse it to confirm validity:
+
+- If the parse succeeds, report success.
+- If the parse fails, report the error and ask the user to check the file manually.
+
+### 6. Report hot-reload semantics
+
+- **Project scope**: "The hook will hot-reload within ~2 seconds — it will be active on the next session turn."
+- **Global scope**: "Global hooks load at startup. Restart opencode for this hook to take effect."
+
+Point the user at the **Active Hooks** block in the system prompt (visible on the next turn for project-scoped hooks) to confirm the hook is live.
+
+## Example session
+
+```
+User: /create-hook
+Agent: Which event should this hook fire on? (see the configure-hooks skill for all 27 events)
+User: PreToolUse
+Agent: What type of hook? command / mcp / http / prompt / agent
+User: command
+Agent: What shell command should run?
+User: ./scripts/check.sh
+Agent: Matcher (which tools should trigger this)? Empty = all tools.
+User: Bash
+Agent: Project or global scope? (project hot-reloads in ~2s; global requires restart)
+User: project
+
+Here is the entry I will write to .opencode/hooks.json:
+{ "PreToolUse": [{ "matcher": "Bash", "hooks": [{ "type": "command", "command": "./scripts/check.sh" }] }] }
+Proceed? (y/n)
+User: y
+
+✓ Written to .opencode/hooks.json (merge-appended alongside existing hooks).
+The hook will hot-reload within ~2 seconds — it will be active on the next session turn.
+```

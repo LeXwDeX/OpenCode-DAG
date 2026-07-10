@@ -3,6 +3,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Provider } from "@/provider/provider"
 import { ProviderTransform } from "@/provider/transform"
 import { MCP } from "@/mcp"
+import { setActiveElicitationSession } from "@/mcp/elicitation"
 import { Permission } from "@/permission"
 import { Tool } from "@/tool/tool"
 import { ToolJsonSchema } from "@/tool/json-schema"
@@ -12,6 +13,7 @@ import { Truncate } from "@/tool/truncate"
 import { Plugin } from "@/plugin"
 import type { TaskPromptOps } from "@/tool/task"
 import { SettingsHook, type TriggerResult } from "@/hook/settings"
+import { applyPreHookDecision, classifyPermissionAsk } from "@/hook/pre-hook-decision"
 import { type Tool as AITool, tool, jsonSchema, type ToolExecutionOptions, asSchema } from "ai"
 import { Effect } from "effect"
 import * as Option from "effect/Option"
@@ -20,6 +22,7 @@ import { Session } from "./session"
 import { SessionProcessor } from "./processor"
 import { PartID } from "./schema"
 import { EffectBridge } from "@/effect/bridge"
+import { SessionContext } from "@/effect/session-context"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { isRecord } from "@/util/record"
@@ -102,8 +105,11 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       inputSchema: jsonSchema(schema),
       execute(args, options) {
         return run.promise(
-          Effect.gen(function* () {
-            const ctx = context(args, options)
+          // Set the active session for server-initiated MCP reverse requests
+          // (elicitation) so the handler can route the Question to this session.
+          SessionContext.run(context(args, options).sessionID, () =>
+            Effect.gen(function* () {
+              const ctx = context(args, options)
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
@@ -118,13 +124,47 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
                 .pipe(Effect.catch(() => Effect.succeed<TriggerResult>({ additionalContexts: [], systemMessages: [] })))
-              if (preResult.permissionDecision === "deny" || preResult.blocked) {
-                const reason = preResult.permissionDecisionReason ?? preResult.blocked?.reason ?? "Denied by PreToolUse hook"
-                return { output: `[Tool denied by hook] ${reason}`, attachments: [], metadata: { hookDenied: true } } as any
+              yield* SettingsHook.landSystemMessages(preResult, { sessionID: ctx.sessionID })
+              const decision = applyPreHookDecision(toRecord(args), preResult)
+              if (decision.deniedReason) {
+                return { output: `[Tool denied by hook] ${decision.deniedReason}`, attachments: [], metadata: { hookDenied: true } } as any
+              }
+              if (decision.stopReason) {
+                return { output: `[Hook stopped] ${decision.stopReason}`, attachments: [], metadata: { hookStopped: true } } as any
+              }
+              // permissionDecision:"ask" — invoke the confirmation dialog. We call
+              // permission.ask directly (NOT the orDie-piped ctx.ask) and classify the
+              // outcome: typed rejections become a denied result, while interrupts
+              // (session abort mid-dialog) and defects propagate instead of being
+              // masked as a denial.
+              if (preResult.permissionDecision === "ask") {
+                const askReason = preResult.permissionDecisionReason
+                const verdict = yield* permission
+                  .ask({
+                    permission: item.id,
+                    sessionID: ctx.sessionID,
+                    patterns: [item.id],
+                    always: [],
+                    metadata: { hookAsk: true, ...(askReason ? { reason: askReason } : {}) },
+                    tool: { messageID: input.processor.message.id, callID: options.toolCallId },
+                    ruleset: [],
+                  })
+                  .pipe(Effect.exit)
+                const outcome = classifyPermissionAsk(verdict)
+                if (outcome !== "approved" && outcome !== "denied") return yield* Effect.failCause(outcome.propagate as never)
+                if (outcome === "denied") {
+                  const reason = askReason ?? "Denied by user in hook confirmation"
+                  return { output: `[Tool denied by hook] ${reason}`, attachments: [], metadata: { hookDenied: true } } as any
+                }
               }
               preContexts = preResult.additionalContexts ?? []
+              // effectiveArgs reflects any PreToolUse updatedInput rewrite (shallow merge).
+              args = decision.effectiveArgs
             }
-            const result = yield* item.execute(args, ctx)
+            const result = yield* Effect.suspend(() => {
+              const cleanup = setActiveElicitationSession(ctx.sessionID)
+              return item.execute(args, ctx).pipe(Effect.ensuring(Effect.sync(cleanup)))
+            })
             const output = {
               ...result,
               attachments: result.attachments?.map((attachment) => ({
@@ -152,19 +192,27 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
                 .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [] as string[] } as any)))
+              yield* SettingsHook.landSystemMessages(postResult as TriggerResult, { sessionID: ctx.sessionID })
               // Inject additionalContext into tool output so model sees it
               if ((postResult as any).additionalContexts?.length) {
                 output.output += "\n\n" + (postResult as any).additionalContexts.join("\n")
               }
+              // PostToolUse preventContinuation: tool already executed, so annotate
+              // the output rather than skipping. Soft signal, mirrors CC semantics.
+              if ((postResult as any).preventContinuation) {
+                const stopReason = (postResult as any).stopReason ?? "Hook requested stop"
+                output.output += `\n\n[Hook stopped] ${stopReason}`
+              }
             }
             // SettingsHook FileChanged for file-modifying tools
             if (settingsHook && FILE_CHANGING_TOOLS.has(item.id)) {
-              yield* settingsHook
+              const fileResult = yield* settingsHook
                 .trigger(
                   { event: "FileChanged", path: (toRecord(args))["file_path"] ?? (toRecord(args))["path"], changeType: item.id } as any,
                   { sessionID: ctx.sessionID, transcriptPath: "" },
                 )
-                .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
+                .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+              yield* SettingsHook.landSystemMessages(fileResult, { sessionID: ctx.sessionID })
             }
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId, output)
@@ -173,20 +221,22 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           }).pipe(
             Effect.catch((error: unknown) =>
               Effect.gen(function* () {
-                // SettingsHook PostToolUseFailure
-                if (settingsHook) {
-                  yield* settingsHook
-                    .trigger(
-                      { event: "PostToolUseFailure", toolName: item.id, toolInput: toRecord(args), error: String(error), toolUseID: options.toolCallId } as any,
-                      { sessionID: input.session.id, transcriptPath: "" },
-                    )
-                    .pipe(Effect.catch(() => Effect.succeed(undefined as any)))
-                }
+              // SettingsHook PostToolUseFailure
+              if (settingsHook) {
+                const failResult = yield* settingsHook
+                  .trigger(
+                    { event: "PostToolUseFailure", toolName: item.id, toolInput: toRecord(args), error: String(error), toolUseID: options.toolCallId } as any,
+                    { sessionID: input.session.id, transcriptPath: "" },
+                  )
+                  .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [], systemMessages: [] } as TriggerResult)))
+                yield* SettingsHook.landSystemMessages(failResult, { sessionID: input.session.id })
+              }
                 return yield* Effect.fail(error)
               }),
             ),
           ),
-        )
+        ),
+      )
       },
     })
   }
@@ -467,16 +517,46 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 { event: "PreToolUse", toolName: key, toolInput: toRecord(args), toolUseID: opts.toolCallId },
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
-              .pipe(Effect.catch(() => Effect.succeed<TriggerResult>({ additionalContexts: [], systemMessages: [] })))
-            if (preResult.permissionDecision === "deny" || preResult.blocked) {
-              const reason = preResult.permissionDecisionReason ?? preResult.blocked?.reason ?? "Denied by PreToolUse hook"
-              return { content: [{ type: "text", text: `[Tool denied by hook] ${reason}` }] } as any
+                .pipe(Effect.catch(() => Effect.succeed<TriggerResult>({ additionalContexts: [], systemMessages: [] })))
+              yield* SettingsHook.landSystemMessages(preResult, { sessionID: ctx.sessionID })
+              const decision = applyPreHookDecision(toRecord(args), preResult)
+              if (decision.deniedReason) {
+                return { content: [{ type: "text", text: `[Tool denied by hook] ${decision.deniedReason}` }] } as any
+              }
+            if (decision.stopReason) {
+              return { content: [{ type: "text", text: `[Hook stopped] ${decision.stopReason}` }] } as any
+            }
+            // permissionDecision:"ask" — confirmation dialog (see native path note:
+            // typed rejections deny; interrupts/defects propagate).
+            if (preResult.permissionDecision === "ask") {
+              const askReason = preResult.permissionDecisionReason
+              const verdict = yield* permission
+                .ask({
+                  permission: key,
+                  sessionID: ctx.sessionID,
+                  patterns: [key],
+                  always: [],
+                  metadata: { hookAsk: true, ...(askReason ? { reason: askReason } : {}) },
+                  tool: { messageID: input.processor.message.id, callID: opts.toolCallId },
+                  ruleset: [],
+                })
+                .pipe(Effect.exit)
+              const outcome = classifyPermissionAsk(verdict)
+              if (outcome !== "approved" && outcome !== "denied") return yield* Effect.failCause(outcome.propagate as never)
+              if (outcome === "denied") {
+                const reason = askReason ?? "Denied by user in hook confirmation"
+                return { content: [{ type: "text", text: `[Tool denied by hook] ${reason}` }] } as any
+              }
             }
             preContexts = preResult.additionalContexts ?? []
+            args = decision.effectiveArgs
           }
           const result: Awaited<ReturnType<NonNullable<typeof execute>>> = yield* Effect.gen(function* () {
             yield* ctx.ask({ permission: key, metadata: {}, patterns: ["*"], always: ["*"] })
-            return yield* Effect.promise(() => execute(args, opts))
+            return yield* Effect.suspend(() => {
+              const cleanup = setActiveElicitationSession(ctx.sessionID)
+              return Effect.promise(() => execute(args, opts)).pipe(Effect.ensuring(Effect.sync(cleanup)))
+            })
           }).pipe(
             Effect.withSpan("Tool.execute", {
               attributes: {
@@ -563,8 +643,14 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
                 { sessionID: ctx.sessionID, transcriptPath: "" },
               )
               .pipe(Effect.catch(() => Effect.succeed({ additionalContexts: [] as string[] } as any)))
+            yield* SettingsHook.landSystemMessages(postResult as TriggerResult, { sessionID: ctx.sessionID })
             if ((postResult as any).additionalContexts?.length) {
               output.output += "\n\n" + (postResult as any).additionalContexts.join("\n")
+            }
+            // PostToolUse preventContinuation: annotate output (tool already ran).
+            if ((postResult as any).preventContinuation) {
+              const stopReason = (postResult as any).stopReason ?? "Hook requested stop"
+              output.output += `\n\n[Hook stopped] ${stopReason}`
             }
           }
           if (opts.abortSignal?.aborted) {
