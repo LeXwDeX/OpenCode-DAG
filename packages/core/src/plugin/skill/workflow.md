@@ -1,0 +1,313 @@
+<!--
+  Built-in skill. Name and description are registered in code at
+  packages/core/src/plugin/skill.ts (WorkflowDescription).
+  The body below becomes the skill's content.
+-->
+
+# Workflow Orchestration
+
+The `workflow` tool orchestrates heavy tasks as dependency-graph multi-agent workflows. Each node runs as a real child session with its own agent, tools, and optionally its own model. This skill covers when to start a workflow, how to structure it, and how to adapt it at runtime.
+
+## When to start a workflow
+
+A task needs a workflow when ANY of these hold:
+
+- **Staged**: clear phase boundaries where later phases depend on earlier outputs (explore → plan → implement → verify).
+- **Parallelizable**: ≥3 independent sub-units can execute concurrently (same fix across 5 packages).
+- **Quality gate**: intermediate output must pass review before downstream work begins (architecture review before implementation).
+- **Multi-model**: different phases have different cognitive demands and benefit from different models (expensive model for planning, fast model for mechanical edits).
+
+If a task fits in one context window and has no inter-step dependencies, use the `task` tool instead. For trivial work, use direct tools.
+
+## Orchestration Lifecycle
+
+Heavy tasks follow a meta-workflow: multiple workflows chained together, each producing a decision that shapes the next. The lifecycle is not a rigid template — assess the task and enter at the phase that matches its current state.
+
+### Phase 1 — Explore + Brainstorm
+
+Goal: fill in design gaps and understand the project architecture before committing to execution.
+
+When the task description is underspecified, the architecture is unfamiliar, or multiple solution approaches exist, start here. A single workflow runs diverge-converge (multiple generators propose approaches) in parallel with exploration nodes (code-explore, test-explore, config-explore) that map the codebase. The workflow outputs a completed design + architecture inventory.
+
+```yaml
+nodes:
+  - id: explore-code
+    worker_type: explore
+    prompt_template: { id: code-explore }
+    required: true
+
+  - id: explore-tests
+    worker_type: explore
+    prompt_template: { id: test-explore }
+
+  - id: gen-approach-a
+    worker_type: general
+    depends_on: [explore-code]
+    prompt_template: { inline: "Propose an approach based on findings." }
+
+  - id: gen-approach-b
+    worker_type: general
+    depends_on: [explore-code]
+    prompt_template: { inline: "Propose an alternative approach based on findings." }
+
+  - id: converge-design
+    worker_type: general
+    depends_on: [explore-code, explore-tests, gen-approach-a, gen-approach-b]
+    required: true
+    prompt_template: { id: plan }
+```
+
+### Phase 2 — Design Review Gate
+
+Goal: validate the design before execution begins.
+
+A short workflow (or a single gate node) reviews the Phase 1 output. If the design is rejected, replan Phase 1 with adjusted direction. If accepted, proceed to execution.
+
+```yaml
+nodes:
+  - id: arch-gate
+    worker_type: general
+    depends_on: []  # receives design from Phase 1 output
+    required: true
+    model: { modelID: "<strong-model>", providerID: "<provider>" }
+    prompt_template: { id: arch-gate }
+```
+
+Gate failure cancels the workflow automatically (required: true). Replan by starting a new Phase 1 workflow with the gate's feedback incorporated.
+
+### Phase 3 — Parallel Execution
+
+Goal: implement across independent modules concurrently.
+
+The design from Phase 2 is decomposed into module-level nodes. Each module is a worker node. Modules with no dependencies between them run concurrently (fan-out). A required assembler node collects results.
+
+```yaml
+nodes:
+  - id: module-auth
+    worker_type: build
+    prompt_template: { id: implement }
+    required: true
+
+  - id: module-server
+    worker_type: build
+    prompt_template: { id: implement }
+    required: true
+
+  - id: module-cli
+    worker_type: build
+    prompt_template: { id: implement }
+
+  - id: assemble
+    worker_type: build
+    depends_on: [module-auth, module-server, module-cli]
+    required: true
+    prompt_template: { id: patcher-assemble }
+```
+
+### Phase 4 — Audit + Merge
+
+Goal: verify integration, merge results, update progress tracking.
+
+A workflow runs review nodes (adversarial review pattern) on the assembled output, then a final auditor confirms completeness. Progress tracking (todowrite, OpenSpec tasks, or project board) is updated to reflect what shipped.
+
+### Phase 5 — Expansion Decision
+
+After Phase 4, assess whether the task is complete or needs another cycle:
+
+- **Iterate**: gaps found in audit → start a new Phase 1 or Phase 3 workflow targeting the gaps.
+- **Extend**: new work discovered during execution → `extend` the Phase 3 workflow with additional parallel nodes.
+- **Complete**: all modules shipped, audit passed → `control(complete)` on remaining workflows, task done.
+
+### Lifecycle Summary
+
+```
+Phase 1 (explore + brainstorm)
+    ↓ design output
+Phase 2 (review gate)
+    ↓ pass / fail → replan Phase 1
+Phase 3 (parallel execution)
+    ↓ module outputs
+Phase 4 (audit + merge + progress update)
+    ↓
+Phase 5 (expand? iterate? complete?)
+    ↓ iterate → back to Phase 1 or 3
+    ↓ complete → done
+```
+
+Not every task needs all five phases. A well-specified task may skip directly to Phase 3. A task with a clear design but uncertain scope may start at Phase 2. The lifecycle is a decision tree, not a pipeline.
+
+## Collaboration Patterns
+
+Four structural patterns cover the common cases. Real workflows often combine them.
+
+### 1. Staged Pipeline with Gate
+
+Sequential phases where each depends on the previous. Insert a gate node between phases to block downstream execution until quality is confirmed.
+
+```yaml
+nodes:
+  - id: explore
+    worker_type: explore
+    prompt_template: { id: code-explore, input: { target: "auth module" } }
+    required: true
+
+  - id: gate
+    worker_type: general
+    depends_on: [explore]
+    required: true
+    prompt_template:
+      inline: "Review these findings. Output PASS or FAIL with reasons: {{findings}}"
+      input: { findings: "from explore" }
+
+  - id: implement
+    worker_type: build
+    depends_on: [gate]
+    prompt_template:
+      inline: "Implement based on approved findings."
+```
+
+The gate node is `required: true`. If it fails, the scheduler cancels the workflow instead of spawning `implement` — this is automatic. Design gate prompts to output a clear pass/fail signal.
+
+### 2. Parallel Fan-out
+
+One preparatory node feeds N independent worker nodes, which fan back into a single assembler.
+
+```yaml
+nodes:
+  - id: discover
+    worker_type: explore
+    prompt_template: { inline: "List all packages that need the API migration." }
+    required: true
+
+  - id: migrate-auth
+    worker_type: build
+    depends_on: [discover]
+    prompt_template: { inline: "Migrate the auth package to the new API." }
+
+  - id: migrate-server
+    worker_type: build
+    depends_on: [discover]
+    prompt_template: { inline: "Migrate the server package to the new API." }
+
+  - id: migrate-cli
+    worker_type: build
+    depends_on: [discover]
+    prompt_template: { inline: "Migrate the CLI package to the new API." }
+
+  - id: assemble
+    worker_type: build
+    depends_on: [migrate-auth, migrate-server, migrate-cli]
+    prompt_template: { inline: "Run integration tests and assemble a summary." }
+```
+
+`migrate-*` nodes execute concurrently (bounded by `max_concurrency`). `assemble` waits until all three complete. Non-required worker nodes that fail do not cancel the workflow — `assemble` still runs and can report which migrations failed.
+
+### 3. Adversarial Review
+
+Multiple reviewer nodes with different perspectives examine the same artifact. A final arbiter synthesizes their verdicts.
+
+```yaml
+nodes:
+  - id: implement
+    worker_type: build
+    prompt_template: { id: implement }
+    required: true
+
+  - id: review-arch
+    worker_type: general
+    depends_on: [implement]
+    model: { modelID: "gpt-4o", providerID: "openai" }
+    prompt_template: { id: review-arch }
+
+  - id: review-logic
+    worker_type: general
+    depends_on: [implement]
+    prompt_template: { id: review-logic }
+
+  - id: review-style
+    worker_type: general
+    depends_on: [implement]
+    model: { modelID: "claude-sonnet", providerID: "anthropic" }
+    prompt_template: { id: review-style }
+
+  - id: arbitrate
+    worker_type: general
+    depends_on: [review-arch, review-logic, review-style]
+    required: true
+    prompt_template:
+      inline: "Three reviewers produced verdicts. Synthesize a final decision: ACCEPT, REJECT, or REVISE with specific actions."
+```
+
+Reviewer nodes use different models to avoid single-model blind spots. The arbiter is `required: true` — its failure signals that the artifact could not be confidently accepted.
+
+### 4. Diverge-Converge (Brainstorm)
+
+Multiple independent generators produce candidate solutions; a converger selects and refines.
+
+```yaml
+nodes:
+  - id: gen-a
+    worker_type: general
+    prompt_template:
+      inline: "Propose a solution for X using approach: microservices."
+
+  - id: gen-b
+    worker_type: general
+    prompt_template:
+      inline: "Propose a solution for X using approach: modular monolith."
+
+  - id: gen-c
+    worker_type: general
+    prompt_template:
+      inline: "Propose a solution for X using approach: event-driven."
+
+  - id: converge
+    worker_type: general
+    depends_on: [gen-a, gen-b, gen-c]
+    required: true
+    prompt_template:
+      inline: "Three approaches were proposed. Compare trade-offs and select the best fit for the constraints."
+```
+
+## Adaptive Replanning
+
+Workflows are not static. After creating a workflow, use `extend` and `control(replan)` to adapt based on observed results:
+
+- **Scale up**: a node reports the work is larger than expected → `extend` with additional parallel nodes to split the load.
+- **Cut short**: a node proves the remaining work is unnecessary → `control(complete)` to early-complete and skip pending nodes.
+- **Redirect**: a gate or review reveals a wrong direction → `control(replan)` with `restart: true` on the affected nodes and `cancel: true` on their downstream dependents.
+
+Node outputs are reported back on completion. When a report suggests the task decomposition was wrong, replan rather than letting the original graph run to completion.
+
+## Model Assignment Strategy
+
+Each node MAY specify `model: { modelID, providerID }` to pin a specific model. If omitted, the node uses its agent's default model.
+
+- Expensive models for planning, review, and arbitration — high-stakes decisions where reasoning quality matters.
+- Fast models for mechanical implementation — well-specified edits where speed and cost matter.
+- Diverse models in adversarial review — reduces single-model blind spots.
+
+## Prompt Templates
+
+Templates are read-only prompt fragments under `.opencode/dag-prompts/*.md`. Reference them by ID; they are read on spawn. Available templates:
+
+- `code-explore`: Search codebase structure, output file paths + responsibilities
+- `test-explore`: Search test structure, output coverage gaps
+- `config-explore`: Search config/deploy files, output config inventory
+- `arch-gate`: Review architecture constraints and approve direction
+- `implement`: Implement per specification
+- `verify`: Verify completeness and compatibility
+- `plan`: Synthesize findings into a structured plan
+- `review-arch`: Review from architecture perspective
+- `review-logic`: Review from logic correctness perspective
+- `review-style`: Review from code style perspective
+- `patcher-assemble`: Assemble clean patch from completed work
+- `integration-test`: Run integration tests and report
+
+For ad-hoc prompts, use `prompt_template: { inline: "...", input: {...} }`. Inline templates support `{{var}}` interpolation from `input`.
+
+## Design Principles
+
+- Each node is a real child session with its own message history, tools, and context window. There is no shared memory between nodes — data flows only through `depends_on` and `input_mapping`.
+- `required: true` means failure cancels the entire workflow. Use it for nodes whose output is indispensable (gates, core implementation). Omit it for nodes whose failure is recoverable.
+- Layers are computed automatically from `depends_on`. Nodes in the same layer execute concurrently up to `max_concurrency`. Do not try to control execution order beyond declaring dependencies.

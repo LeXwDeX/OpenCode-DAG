@@ -1,5 +1,5 @@
 import * as Tool from "./tool"
-import DESCRIPTION from "./workflow.txt"
+import DESCRIPTION from "./workflow.md"
 import { Effect, Option, Schema } from "effect"
 import { Dag } from "@/dag/dag"
 import type { NodeConfig, WorkflowConfig } from "@/dag/dag"
