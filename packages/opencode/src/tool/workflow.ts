@@ -34,6 +34,7 @@ const NodeSchema = Schema.Struct({
   model: Schema.optional(Schema.Struct({ modelID: Schema.String, providerID: Schema.String })),
   restart: Schema.optional(Schema.Boolean),
   cancel: Schema.optional(Schema.Boolean),
+  output_schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 })
 
 const WorkflowGraphSchema = Schema.Struct({

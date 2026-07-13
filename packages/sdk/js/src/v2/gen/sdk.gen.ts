@@ -5369,6 +5369,7 @@ export class Dag extends HeyApiClient {
       directory?: string
       workspace?: string
       operation?: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
+      fragment?: unknown
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -5380,6 +5381,7 @@ export class Dag extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "operation" },
+            { in: "body", key: "fragment" },
           ],
         },
       ],

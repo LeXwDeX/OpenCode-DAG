@@ -56,6 +56,9 @@ import { SettingsHook } from "@/hook/settings"
 import { HookRewakeLive } from "@/hook/rewake-live"
 import { Goal } from "@/goal/goal"
 import { GoalLoop } from "@/goal/loop"
+import { Dag } from "@/dag/dag"
+import { DagStore } from "@opencode-ai/core/dag/store"
+import { DagLoop } from "@/dag/runtime/loop"
 
 export const AppLayer = Layer.mergeAll(
   Layer.mergeAll(
@@ -85,6 +88,8 @@ export const AppLayer = Layer.mergeAll(
     RuntimeFlags.defaultLayer,
     EventV2Bridge.defaultLayer,
     SessionRunState.defaultLayer,
+    DagStore.defaultLayer,
+    Dag.defaultLayer,
   ),
   Layer.mergeAll(
     SessionProcessor.defaultLayer,
@@ -123,6 +128,7 @@ export const AppLayer = Layer.mergeAll(
   // context rather than from isolated sub-contexts that can't satisfy the full
   // transitive chain.
   Layer.provideMerge(GoalLoop.defaultLayer),
+  Layer.provideMerge(DagLoop.defaultLayer),
   Layer.provideMerge(SettingsHook.defaultLayer),
 )
 

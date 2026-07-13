@@ -169,7 +169,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(DagEvent.NodeRestarted, (event) =>
       updateNode(
         event.data.nodeID,
-        { status: "running", child_session_id: event.data.childSessionID },
+        { status: "pending", child_session_id: null },
         event.durable!.seq,
         event.data.timestamp,
       ),

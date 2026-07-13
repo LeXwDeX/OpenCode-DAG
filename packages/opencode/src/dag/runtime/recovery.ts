@@ -13,18 +13,10 @@
 
 import { Effect } from "effect"
 import { Dag } from "../dag"
+import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
 import type { DagStore } from "@opencode-ai/core/dag/store"
 
-/**
- * Reconcile a workflow's running nodes against their backing child sessions.
- *
- * For each node in `running` state:
- * - If the child session is complete → mark node completed
- * - If the child session failed → mark node failed
- * - If the child session is still alive → leave as running
- *
- * This is a no-op for workflows with no running nodes.
- */
 export function reconcileWorkflow(
   dagID: string,
   checkSessionStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
@@ -36,10 +28,9 @@ export function reconcileWorkflow(
     let leftRunning = 0
 
     for (const node of nodes) {
-      if (node.status !== "running") continue
+      if (node.status !== "running" && node.status !== "pending") continue
       if (!node.childSessionId) {
-        // No child session recorded — the node was running but never spawned
-        yield* dag.nodeFailed(dagID, node.id, "node was running but had no child session on recovery", "exec_failed")
+        yield* dag.nodeFailed(dagID, node.id, node.status === "pending" ? "node was pending but never started" : "node was running but had no child session on recovery", "exec_failed")
         reconciled++
         continue
       }
@@ -49,17 +40,39 @@ export function reconcileWorkflow(
       )
 
       if (sessionStatus === "completed") {
+        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         yield* dag.nodeCompleted(dagID, node.id, undefined)
         reconciled++
       } else if (sessionStatus === "failed") {
+        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
-        // active or unknown — leave as running, the scheduling loop will pick it up
+        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         leftRunning++
       }
     }
 
     return { reconciled, leftRunning }
   })
+}
+
+export function makeSessionStatusChecker(
+  sessions: Session.Interface,
+): (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error> {
+  return (childSessionID) =>
+    Effect.gen(function* () {
+      const info = yield* sessions.get(SessionID.make(childSessionID)).pipe(
+        Effect.catch(() => Effect.succeed(undefined)),
+      )
+      if (!info) return "unknown" as const
+      const msgs = yield* sessions.messages({ sessionID: SessionID.make(childSessionID), limit: 1 }).pipe(
+        Effect.catch(() => Effect.succeed([] as never)),
+      )
+      if (msgs.length === 0) return "active" as const
+      const last = msgs[msgs.length - 1]
+      if (last.info.role === "assistant" && last.info.finish === "stop") return "completed" as const
+      if (last.info.role === "assistant" && last.info.finish === "error") return "failed" as const
+      return "active" as const
+    })
 }

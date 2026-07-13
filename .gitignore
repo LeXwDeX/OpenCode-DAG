@@ -36,7 +36,7 @@ tsconfig.tsbuildinfo
 **/.opencode/settings.json
 
 # OpenSpec artifacts (local-only, not tracked)
-/openspec/
+openspec/
 .opencode/commands/
 .opencode/skills/
 

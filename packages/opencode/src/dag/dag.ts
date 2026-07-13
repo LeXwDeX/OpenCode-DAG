@@ -9,6 +9,14 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { validateRequiredNodes } from "@opencode-ai/core/dag/core/required-validator"
 import { planReplan } from "@opencode-ai/core/dag/core/replan"
+import {
+  getValidNextWorkflowStatuses,
+  getValidNextNodeStatuses,
+  isWorkflowTerminalStatus,
+  InvalidTransitionError,
+  WorkflowStatus,
+  NodeStatus,
+} from "@opencode-ai/core/dag/core/types"
 
 // Re-export domain types
 export const ID = DagEvent.DagID
@@ -31,6 +39,7 @@ export interface NodeConfig {
   model?: { modelID: string; providerID: string }
   restart?: boolean
   cancel?: boolean
+  output_schema?: Record<string, unknown>
 }
 
 export interface WorkflowConfig {
@@ -75,6 +84,24 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const store = yield* DagStore.Service
 
+    const guardWorkflow = Effect.fn("Dag.guardWorkflow")(function* (dagID: string, target: WorkflowStatus) {
+      const wf = yield* store.getWorkflow(dagID).pipe(Effect.orDie)
+      if (!wf) return yield* Effect.fail(new Error(`Workflow not found: ${dagID}`))
+      const current = wf.status as WorkflowStatus
+      if (!getValidNextWorkflowStatuses(current).includes(target)) {
+        return yield* Effect.fail(new InvalidTransitionError(dagID, current, target))
+      }
+    })
+
+    const guardNode = Effect.fn("Dag.guardNode")(function* (nodeID: string, target: NodeStatus) {
+      const node = yield* store.getNode(nodeID).pipe(Effect.orDie)
+      if (!node) return yield* Effect.fail(new Error(`Node not found: ${nodeID}`))
+      const current = node.status as NodeStatus
+      if (!getValidNextNodeStatuses(current).includes(target)) {
+        return yield* Effect.fail(new InvalidTransitionError(nodeID, current, target))
+      }
+    })
+
     const create = Effect.fn("Dag.create")(function* (input: {
       projectID: string
       sessionID: string
@@ -115,15 +142,19 @@ export const layer = Layer.effect(
     })
 
     const pause = Effect.fn("Dag.pause")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.PAUSED)
       yield* events.publish(DagEvent.WorkflowPaused, { dagID: dagID as ID, timestamp: yield* DateTime.now })
     })
     const resume = Effect.fn("Dag.resume")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.RUNNING)
       yield* events.publish(DagEvent.WorkflowResumed, { dagID: dagID as ID, timestamp: yield* DateTime.now })
     })
     const cancel = Effect.fn("Dag.cancel")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.CANCELLED)
       yield* events.publish(DagEvent.WorkflowCancelled, { dagID: dagID as ID, timestamp: yield* DateTime.now })
     })
     const complete = Effect.fn("Dag.complete")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.COMPLETED)
       const nodes = yield* store.getNodes(dagID)
       for (const node of nodes) {
         if (node.status === "pending" || node.status === "queued") {
@@ -145,15 +176,8 @@ export const layer = Layer.effect(
         { nodes: fragment.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, restart: n.restart, cancel: n.cancel })) },
       )
       if (plan.errors.length > 0) return yield* Effect.fail(new Error(`Replan rejected: ${plan.errors.join("; ")}`))
-      yield* events.publish(DagEvent.WorkflowReplanned, {
-        dagID: dagID as ID,
-        added: plan.add.length as never,
-        removed: plan.cancel.length as never,
-        replaced: plan.replace.length as never,
-        restarted: plan.restart.length as never,
-        timestamp: yield* DateTime.now,
-      })
       const fragmentById = new Map(fragment.nodes.map((n) => [n.id, n]))
+      const nodeById = new Map(nodes.map((n) => [n.id, n]))
       for (const id of plan.add) {
         const node = fragmentById.get(id)!
         yield* events.publish(DagEvent.NodeRegistered, {
@@ -167,25 +191,54 @@ export const layer = Layer.effect(
           timestamp: yield* DateTime.now,
         })
       }
+      for (const id of plan.cancel) {
+        yield* events.publish(DagEvent.NodeCancelled, {
+          dagID: dagID as ID,
+          nodeID: id as never,
+          timestamp: yield* DateTime.now,
+        })
+      }
+      for (const id of plan.restart) {
+        yield* events.publish(DagEvent.NodeRestarted, {
+          dagID: dagID as ID,
+          nodeID: id as never,
+          childSessionID: (nodeById.get(id)?.childSessionId ?? "") as never,
+          timestamp: yield* DateTime.now,
+        })
+      }
+      yield* events.publish(DagEvent.WorkflowReplanned, {
+        dagID: dagID as ID,
+        added: plan.add.length as never,
+        removed: plan.cancel.length as never,
+        replaced: plan.replace.length as never,
+        restarted: plan.restart.length as never,
+        timestamp: yield* DateTime.now,
+      })
       return { cancel: plan.cancel, restart: plan.restart, replace: plan.replace, add: plan.add, ignore: plan.ignore }
     })
 
     const nodeStarted = Effect.fn("Dag.nodeStarted")(function* (dagID: string, nodeID: string, childSessionID: string) {
+      yield* guardNode(nodeID, NodeStatus.RUNNING)
       yield* events.publish(DagEvent.NodeStarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
     })
     const nodeCompleted = Effect.fn("Dag.nodeCompleted")(function* (dagID: string, nodeID: string, output: unknown) {
+      yield* guardNode(nodeID, NodeStatus.COMPLETED)
       yield* events.publish(DagEvent.NodeCompleted, { dagID: dagID as ID, nodeID: nodeID as never, output, durationMs: 0 as never, timestamp: yield* DateTime.now })
     })
     const nodeFailed = Effect.fn("Dag.nodeFailed")(function* (dagID: string, nodeID: string, reason: string, trigger: string) {
+      yield* guardNode(nodeID, NodeStatus.FAILED)
       yield* events.publish(DagEvent.NodeFailed, { dagID: dagID as ID, nodeID: nodeID as never, reason, trigger: trigger as never, timestamp: yield* DateTime.now })
     })
     const nodeSkipped = Effect.fn("Dag.nodeSkipped")(function* (dagID: string, nodeID: string, reason: string) {
+      yield* guardNode(nodeID, NodeStatus.SKIPPED)
       yield* events.publish(DagEvent.NodeSkipped, { dagID: dagID as ID, nodeID: nodeID as never, reason: reason as never, timestamp: yield* DateTime.now })
     })
     const nodeCancelled = Effect.fn("Dag.nodeCancelled")(function* (dagID: string, nodeID: string) {
+      yield* guardNode(nodeID, NodeStatus.SKIPPED)
       yield* events.publish(DagEvent.NodeCancelled, { dagID: dagID as ID, nodeID: nodeID as never, timestamp: yield* DateTime.now })
     })
     const nodeRestarted = Effect.fn("Dag.nodeRestarted")(function* (dagID: string, nodeID: string, childSessionID: string) {
+      yield* guardNode(nodeID, NodeStatus.PENDING)
       yield* events.publish(DagEvent.NodeRestarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
     })
 

@@ -35,26 +35,21 @@ export function evaluateCondition(
 ): boolean {
   if (!condition || condition.trim() === "") return true
 
-  try {
-    // Simple expression evaluator: supports `path.op.value OP rhs`
-    const match = condition.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/)
-    if (!match) return true // unrecognized syntax → fail-open
+  const match = condition.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/)
+  if (!match) return true
 
-    const [, lhsRaw, op, rhsRaw] = match
-    const lhs = resolvePath(lhsRaw.trim(), outputs)
-    const rhs = parseValue(rhsRaw.trim())
+  const [, lhsRaw, op, rhsRaw] = match
+  const lhs = resolvePath(lhsRaw.trim(), outputs)
+  const rhs = parseValue(rhsRaw.trim())
 
-    switch (op) {
-      case "==": return lhs === rhs
-      case "!=": return lhs !== rhs
-      case ">": return (lhs as number) > (rhs as number)
-      case "<": return (lhs as number) < (rhs as number)
-      case ">=": return (lhs as number) >= (rhs as number)
-      case "<=": return (lhs as number) <= (rhs as number)
-      default: return true
-    }
-  } catch {
-    return true // evaluation error → fail-open
+  switch (op) {
+    case "==": return lhs === rhs
+    case "!=": return lhs !== rhs
+    case ">": return (lhs as number) > (rhs as number)
+    case "<": return (lhs as number) < (rhs as number)
+    case ">=": return (lhs as number) >= (rhs as number)
+    case "<=": return (lhs as number) <= (rhs as number)
+    default: return true
   }
 }
 

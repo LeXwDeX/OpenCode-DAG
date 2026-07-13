@@ -25,6 +25,11 @@ import {
 } from "@opencode-ai/core/dag/core/transitions"
 import { FallbackTrigger } from "@opencode-ai/core/dag/core/types"
 import { validateRequiredNodes } from "@opencode-ai/core/dag/core/required-validator"
+import {
+  buildGraph,
+  type SchedulingNode,
+  WorkflowRuntime,
+} from "@opencode-ai/core/dag/core/scheduling"
 
 describe("DependencyGraph", () => {
   it("adds nodes and edges", () => {
@@ -202,13 +207,13 @@ describe("iron laws (transition tables)", () => {
 
   it("getValidNextNodeStatuses: PENDING → QUEUED/RUNNING/SKIPPED", () => {
     expect(getValidNextNodeStatuses(NodeStatus.PENDING).sort()).toEqual(
-      [NodeStatus.QUEUED, NodeStatus.RUNNING, NodeStatus.SKIPPED].sort(),
+      [NodeStatus.QUEUED, NodeStatus.RUNNING, NodeStatus.SKIPPED, NodeStatus.FAILED].sort(),
     )
   })
 
   it("getValidNextNodeStatuses: terminal returns empty (irreversible)", () => {
     expect(getValidNextNodeStatuses(NodeStatus.COMPLETED)).toEqual([])
-    expect(getValidNextNodeStatuses(NodeStatus.FAILED)).toEqual([NodeStatus.RUNNING, NodeStatus.ABORTED])
+    expect(getValidNextNodeStatuses(NodeStatus.FAILED)).toEqual([NodeStatus.RUNNING, NodeStatus.ABORTED, NodeStatus.PENDING])
   })
 
   it("getValidNextWorkflowStatuses: RUNNING → PAUSED/COMPLETED/FAILED/CANCELLED", () => {
@@ -467,5 +472,186 @@ describe("computeOrphanCascade", () => {
     g.addEdge("c", "d")
     const orphans = computeOrphanCascade(g, ["a"])
     expect(orphans).toContain("c")
+  })
+})
+
+describe("buildGraph", () => {
+  it("builds a graph from SchedulingNode list", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: [], status: "pending", required: false },
+      { id: "b", dependsOn: ["a"], status: "pending", required: false },
+    ]
+    const g = buildGraph(nodes)
+    expect(g.hasNode("a")).toBe(true)
+    expect(g.hasNode("b")).toBe(true)
+    expect(g.hasEdge("b", "a")).toBe(true)
+  })
+
+  it("ignores dependency edges to unknown nodes", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: ["ghost"], status: "pending", required: false },
+    ]
+    const g = buildGraph(nodes)
+    expect(g.hasNode("a")).toBe(true)
+    expect(g.getDependencies("a")).toEqual([])
+  })
+})
+
+describe("WorkflowRuntime", () => {
+  const linearNodes = (statuses: Record<string, SchedulingNode["status"]> = {}): SchedulingNode[] => [
+    { id: "a", dependsOn: [], status: statuses["a"] ?? "pending", required: false },
+    { id: "b", dependsOn: ["a"], status: statuses["b"] ?? "pending", required: false },
+    { id: "c", dependsOn: ["b"], status: statuses["c"] ?? "pending", required: false },
+  ]
+
+  it("markSatisfied unblocks dependents", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    expect(rt.getReadyNodes()).toEqual(["a"])
+    rt.markSatisfied("a")
+    expect(rt.getReadyNodes()).toEqual(["b"])
+    rt.markSatisfied("b")
+    expect(rt.getReadyNodes()).toEqual(["c"])
+  })
+
+  it("markUnsatisfied blocks dependents", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    expect(rt.getReadyNodes()).toEqual(["a"])
+    rt.markUnsatisfied("a")
+    expect(rt.getReadyNodes()).toEqual([])
+  })
+
+  it("markRunning excludes a node from getReadyNodes", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    const ready = rt.getReadyNodes()
+    expect(ready).toEqual(["a"])
+    rt.markRunning("a")
+    expect(rt.getReadyNodes()).toEqual([])
+  })
+
+  it("markSatisfied removes node from running", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    rt.markRunning("a")
+    rt.markSatisfied("a")
+    expect(rt.getReadyNodes()).toEqual(["b"])
+  })
+
+  it("isComplete when all nodes are terminal", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    expect(rt.isComplete()).toBe(false)
+    rt.markSatisfied("a")
+    expect(rt.isComplete()).toBe(false)
+    rt.markSatisfied("b")
+    expect(rt.isComplete()).toBe(false)
+    rt.markSatisfied("c")
+    expect(rt.isComplete()).toBe(true)
+  })
+
+  it("isComplete with mixed satisfied and unsatisfied", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    rt.markSatisfied("a")
+    rt.markUnsatisfied("b")
+    expect(rt.isComplete()).toBe(true)
+    expect(rt.hasRequiredFailure()).toBe(false)
+  })
+
+  it("hasRequiredFailure detects required node failure", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: [], status: "pending", required: true },
+      { id: "b", dependsOn: [], status: "pending", required: false },
+    ]
+    const rt = new WorkflowRuntime(nodes, 4)
+    expect(rt.hasRequiredFailure()).toBe(false)
+    rt.markUnsatisfied("b")
+    expect(rt.hasRequiredFailure()).toBe(false)
+    rt.markUnsatisfied("a")
+    expect(rt.hasRequiredFailure()).toBe(true)
+  })
+
+  it("hasRequiredFailure is false when non-required node fails", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: [], status: "pending", required: false },
+    ]
+    const rt = new WorkflowRuntime(nodes, 4)
+    rt.markUnsatisfied("a")
+    expect(rt.hasRequiredFailure()).toBe(false)
+  })
+
+  it("rebuildGraph reflects new topology", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    rt.markSatisfied("a")
+    rt.markSatisfied("b")
+    const newNodes: SchedulingNode[] = [
+      { id: "x", dependsOn: [], status: "pending", required: false },
+      { id: "y", dependsOn: ["x"], status: "pending", required: false },
+    ]
+    rt.rebuildGraph(newNodes)
+    expect(rt.getReadyNodes()).toEqual(["x"])
+    expect(rt.isComplete()).toBe(false)
+  })
+
+  it("rebuildGraph re-seeds from node statuses", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    rt.markSatisfied("a")
+    rt.rebuildGraph(linearNodes({ a: "satisfied" }))
+    expect(rt.getReadyNodes()).toEqual(["b"])
+  })
+
+  it("paused state suppresses getReadyNodes", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    expect(rt.getReadyNodes()).toEqual(["a"])
+    rt.setPaused(true)
+    expect(rt.isPaused()).toBe(true)
+    expect(rt.getReadyNodes()).toEqual([])
+    rt.setPaused(false)
+    expect(rt.isPaused()).toBe(false)
+    expect(rt.getReadyNodes()).toEqual(["a"])
+  })
+
+  it("constructor seeds from satisfied node statuses", () => {
+    const rt = new WorkflowRuntime(linearNodes({ a: "satisfied" }), 4)
+    expect(rt.getReadyNodes()).toEqual(["b"])
+  })
+
+  it("constructor seeds from unsatisfied node statuses", () => {
+    const rt = new WorkflowRuntime(linearNodes({ a: "unsatisfied" }), 4)
+    expect(rt.getReadyNodes()).toEqual([])
+    expect(rt.isComplete()).toBe(true)
+    expect(rt.hasRequiredFailure()).toBe(false)
+  })
+
+  it("diamond dependency — all deps must be satisfied", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: [], status: "pending", required: false },
+      { id: "b", dependsOn: ["a"], status: "pending", required: false },
+      { id: "c", dependsOn: ["a"], status: "pending", required: false },
+      { id: "d", dependsOn: ["b", "c"], status: "pending", required: false },
+    ]
+    const rt = new WorkflowRuntime(nodes, 4)
+    expect(rt.getReadyNodes()).toEqual(["a"])
+    rt.markSatisfied("a")
+    expect(rt.getReadyNodes().sort()).toEqual(["b", "c"])
+    rt.markSatisfied("b")
+    expect(rt.getReadyNodes()).toEqual(["c"])
+    rt.markSatisfied("c")
+    expect(rt.getReadyNodes()).toEqual(["d"])
+  })
+
+  it("markUnsatisfied cascades to transitive dependents", () => {
+    const rt = new WorkflowRuntime(linearNodes(), 4)
+    rt.markUnsatisfied("a")
+    expect(rt.isComplete()).toBe(true)
+    expect(rt.getReadyNodes()).toEqual([])
+  })
+
+  it("markUnsatisfied cascade respects already-satisfied nodes", () => {
+    const nodes: SchedulingNode[] = [
+      { id: "a", dependsOn: [], status: "pending", required: false },
+      { id: "b", dependsOn: ["a"], status: "pending", required: false },
+      { id: "c", dependsOn: [], status: "pending", required: false },
+    ]
+    const rt = new WorkflowRuntime(nodes, 4)
+    rt.markSatisfied("c")
+    rt.markUnsatisfied("a")
+    expect(rt.isComplete()).toBe(true)
   })
 })

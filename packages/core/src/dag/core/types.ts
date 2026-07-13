@@ -154,15 +154,15 @@ export function isNodeTerminalStatus(status: NodeStatus): boolean {
 export function getValidNextNodeStatuses(currentStatus: NodeStatus): NodeStatus[] {
   switch (currentStatus) {
     case NodeStatus.PENDING:
-      return [NodeStatus.QUEUED, NodeStatus.RUNNING, NodeStatus.SKIPPED]
+      return [NodeStatus.QUEUED, NodeStatus.RUNNING, NodeStatus.SKIPPED, NodeStatus.FAILED]
     case NodeStatus.QUEUED:
       return [NodeStatus.RUNNING, NodeStatus.SKIPPED]
     case NodeStatus.RUNNING:
-      return [NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.PAUSED]
+      return [NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.PAUSED, NodeStatus.PENDING, NodeStatus.SKIPPED]
     case NodeStatus.PAUSED:
       return [NodeStatus.RUNNING]
     case NodeStatus.FAILED:
-      return [NodeStatus.RUNNING, NodeStatus.ABORTED]
+      return [NodeStatus.RUNNING, NodeStatus.ABORTED, NodeStatus.PENDING]
     case NodeStatus.COMPLETED:
     case NodeStatus.ABORTED:
     case NodeStatus.SKIPPED:

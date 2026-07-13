@@ -1758,6 +1758,11 @@ const scenarios: Scenario[] = [
     .mutating()
     .at(() => ({ path: route("/dag/{dagID}/control", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string>, body: { operation: "pause" } }))
     .status(404),
+  http.protected
+    .post("/dag/{dagID}/control", "dag.control")
+    .mutating()
+    .at(() => ({ path: route("/dag/{dagID}/control", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string>, body: { operation: "replan", fragment: { nodes: [] } } }))
+    .status(404),
 ]
 
 const llmScenarios = new Set([

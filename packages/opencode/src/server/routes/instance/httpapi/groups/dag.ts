@@ -49,6 +49,7 @@ export const DagNodeListResponse = Schema.Array(NodeResponse)
 
 export const DagControlPayload = Schema.Struct({
   operation: Schema.Literals(["pause", "resume", "cancel", "replan", "step", "complete"]),
+  fragment: Schema.optional(Schema.Unknown),
 })
 
 export const DagPaths = {

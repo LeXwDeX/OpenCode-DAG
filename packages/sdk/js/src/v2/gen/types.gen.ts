@@ -11632,6 +11632,7 @@ export type DagNodeDetailResponse = DagNodeDetailResponses[keyof DagNodeDetailRe
 export type DagControlData = {
   body?: {
     operation: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
+    fragment?: unknown
   }
   path?: never
   query?: {

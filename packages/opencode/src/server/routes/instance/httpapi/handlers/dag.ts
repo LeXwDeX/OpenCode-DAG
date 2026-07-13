@@ -72,15 +72,35 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       return node(row)
     })
 
-    const control = Effect.fn("DagHttpApi.control")(function* (ctx: { params: { dagID: string }; payload: { operation: string } }) {
+    const control = Effect.fn("DagHttpApi.control")(function* (ctx: { params: { dagID: string }; payload: { operation: string; fragment?: unknown } }) {
+      const { dagID } = ctx.params
       const op = ctx.payload.operation
-      if (op === "pause") yield* dag.pause(ctx.params.dagID).pipe(Effect.orDie)
-      else if (op === "resume") yield* dag.resume(ctx.params.dagID).pipe(Effect.orDie)
-      else if (op === "cancel") yield* dag.cancel(ctx.params.dagID).pipe(Effect.orDie)
-      else if (op === "complete") yield* dag.complete(ctx.params.dagID).pipe(Effect.orDie)
-      else if (op === "step") yield* dag.pause(ctx.params.dagID).pipe(Effect.orDie)
-      else return yield* Effect.fail(new InvalidRequestError({ message: `Unknown operation: ${op}` }))
-      return { status: "ok" }
+
+      if (op === "pause" || op === "step") {
+        yield* dag.pause(dagID).pipe(Effect.orDie)
+        return { status: "ok" }
+      }
+      if (op === "resume") {
+        yield* dag.resume(dagID).pipe(Effect.orDie)
+        return { status: "ok" }
+      }
+      if (op === "cancel") {
+        yield* dag.cancel(dagID).pipe(Effect.orDie)
+        return { status: "ok" }
+      }
+      if (op === "complete") {
+        yield* dag.complete(dagID).pipe(Effect.orDie)
+        return { status: "ok" }
+      }
+      if (op === "replan") {
+        const fragment = ctx.payload.fragment
+        if (!fragment || typeof fragment !== "object" || !Array.isArray((fragment as Record<string, unknown>).nodes)) {
+          return yield* Effect.fail(new InvalidRequestError({ message: "replan requires 'fragment' with a 'nodes' array" }))
+        }
+        const result = yield* dag.replan(dagID, fragment as { nodes: Dag.NodeConfig[] }).pipe(Effect.orDie)
+        return { status: "ok", ...result } as never
+      }
+      return yield* Effect.fail(new InvalidRequestError({ message: `Unknown operation: ${op}` }))
     })
 
     return handlers

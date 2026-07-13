@@ -10,6 +10,7 @@ import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { GoalLoop } from "@/goal/loop"
+import { DagLoop } from "@/dag/runtime/loop"
 import { SettingsHook } from "@/hook/settings"
 import { Service } from "./bootstrap-service"
 
@@ -65,6 +66,12 @@ export const layer = Layer.effect(
         yield* goalLoop.value
           .init()
           .pipe(Effect.catchCause((cause) => Effect.logWarning("goal loop init failed", { cause })))
+      }
+      const dagLoop = yield* Effect.serviceOption(DagLoop.Service)
+      if (dagLoop._tag === "Some") {
+        yield* dagLoop.value
+          .init()
+          .pipe(Effect.catchCause((cause) => Effect.logWarning("dag loop init failed", { cause })))
       }
       // SettingsHook: Setup fires once per instance bootstrap. Resolved lazily
       // (like GoalLoop) so bootstrap layers stay self-contained.

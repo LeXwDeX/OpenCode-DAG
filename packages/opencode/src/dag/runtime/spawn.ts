@@ -14,50 +14,75 @@
  * (Level 2) is a documented boundary — see eval.ts.
  */
 
-import { Effect, Semaphore } from "effect"
+import { Effect, Semaphore, Scope, Fiber, Schema, Option } from "effect"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { SessionID, MessageID } from "@/session/schema"
 import { deriveSubagentSessionPermission } from "@/agent/subagent-permissions"
-import type { TaskPromptOps } from "@/tool/task"
+import { SessionPrompt } from "@/session/prompt"
 import { Dag } from "../dag"
+import { InvalidTransitionError } from "@opencode-ai/core/dag/core/types"
 import type { DagStore } from "@opencode-ai/core/dag/store"
-import type { SessionPrompt } from "@/session/prompt"
 
 type PromptParts = SessionPrompt.PromptInput["parts"]
+
+const parseJsonOption = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+
+function validateAgainstSchema(parsed: unknown, schema: Record<string, unknown>): boolean {
+  const required = schema["required"]
+  if (Array.isArray(required) && typeof parsed === "object" && parsed !== null) {
+    const obj = parsed as Record<string, unknown>
+    if (!required.every((field) => typeof field === "string" && field in obj)) return false
+  }
+  const type = schema["type"]
+  if (typeof type === "string") {
+    if (type === "object" && (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))) return false
+    if (type === "array" && !Array.isArray(parsed)) return false
+    if (type === "string" && typeof parsed !== "string") return false
+    if (type === "number" && typeof parsed !== "number") return false
+    if (type === "boolean" && typeof parsed !== "boolean") return false
+  }
+  return true
+}
+
+const extractStructuredOutput = Effect.fn("Dag.extractStructuredOutput")(function* (rawText: string, outputSchema: Record<string, unknown>) {
+  const parsed = parseJsonOption(rawText)
+  if (Option.isNone(parsed)) {
+    yield* Effect.logWarning("DAG node output schema not satisfied: invalid JSON", { nodeOutput: rawText.slice(0, 200) })
+    return rawText
+  }
+  if (!validateAgainstSchema(parsed.value, outputSchema)) {
+    yield* Effect.logWarning("DAG node output schema not satisfied: parsed JSON does not match declared schema")
+    return rawText
+  }
+  return parsed.value
+})
 
 export interface NodeSpawnInput {
   dagID: string
   nodeID: string
   node: DagStore.NodeRow
   parentSessionID: string
-  parentModelID: string
-  parentProviderID: string
   promptParts: PromptParts
-  promptOps: TaskPromptOps
+  outputSchema?: Record<string, unknown>
 }
 
 export interface NodeSpawnResult {
   childSessionID: string
+  fiber: Fiber.Fiber<unknown, unknown>
 }
 
-/**
- * Spawn a DAG node as a real child session, under the concurrency semaphore.
- *
- * Returns after publishing NodeStarted and forking the prompt. Completion
- * (NodeCompleted or NodeFailed) is published from inside the forked fiber
- * when the prompt resolves or fails — the caller does not wait for it.
- */
 export function spawnNode(
   semaphore: Semaphore.Semaphore,
   input: NodeSpawnInput,
-): Effect.Effect<NodeSpawnResult, Error, Dag.Service | Agent.Service | Session.Service> {
+): Effect.Effect<NodeSpawnResult, Error, Dag.Service | Agent.Service | Session.Service | SessionPrompt.Service | Scope.Scope> {
   return Effect.gen(function* () {
     const dag = yield* Dag.Service
     const agentService = yield* Agent.Service
     const sessions = yield* Session.Service
+    const promptSvc = yield* SessionPrompt.Service
+    const scope = yield* Scope.Scope
 
-    // 1. Resolve agent
     const agent = yield* agentService.get(input.node.workerType).pipe(
       Effect.catchCause(() => Effect.succeed(undefined)),
     )
@@ -66,14 +91,23 @@ export function spawnNode(
       return yield* Effect.fail(new Error(`Unknown worker_type: ${input.node.workerType}`))
     }
 
-    // 2. Derive permissions (same as task.ts)
+    const nodeModel =
+      input.node.modelId && input.node.modelProviderId
+        ? { modelID: input.node.modelId as never, providerID: input.node.modelProviderId as never }
+        : undefined
+    const model = nodeModel
+      ?? (agent.model ? { modelID: agent.model.modelID, providerID: agent.model.providerID } : undefined)
+    if (!model) {
+      yield* dag.nodeFailed(input.dagID, input.nodeID, `no model configured for agent: ${agent.name}`, "exec_failed")
+      return yield* Effect.fail(new Error(`No model configured for agent: ${agent.name}`))
+    }
+
     const parent = yield* sessions.get(SessionID.make(input.parentSessionID))
     const childPermission = deriveSubagentSessionPermission({
       parentSessionPermission: parent.permission ?? [],
       subagent: agent,
     })
 
-    // 3. Create child session
     const childSession = yield* sessions.create({
       parentID: SessionID.make(input.parentSessionID),
       title: `${input.node.name} (DAG node)`,
@@ -81,50 +115,43 @@ export function spawnNode(
       permission: childPermission,
     })
 
-    // 4. Publish NodeStarted
     yield* dag.nodeStarted(input.dagID, input.nodeID, childSession.id)
 
-    // 5. Resolve model: node override (only if BOTH id+provider present) > agent
-    //    default > parent fallback. A half-specified override (id without provider)
-    //    falls through to agent/parent rather than producing an empty providerID.
-    //    agent.model is Model.Ref { id, providerID, variant? }
-    //    promptOps.prompt expects { modelID, providerID }
-    const nodeModel =
-      input.node.modelId && input.node.modelProviderId
-        ? { modelID: input.node.modelId as never, providerID: input.node.modelProviderId as never }
-        : undefined
-    const model = nodeModel
-      ?? (agent.model ? { modelID: agent.model.modelID, providerID: agent.model.providerID } : undefined)
-      ?? { modelID: input.parentModelID as never, providerID: input.parentProviderID as never }
-
-    // 6. Run prompt under concurrency semaphore. Completion is published from
-    //    inside the forked fiber: success → NodeCompleted (output = final text
-    //    part, same extraction as task.ts:221), failure → NodeFailed.
-    //    Level 1 boundary: output is plain text. input_mapping field references
-    //    (nodeID.output.field) resolve to undefined until Level 2 structured
-    //    output is defined — see eval.ts.
-    yield* Effect.forkDetach(
+    const fiber = yield* Effect.forkIn(scope)(
       semaphore.withPermits(1)(
         Effect.gen(function* () {
-          const result = yield* input.promptOps.prompt({
+          const result = yield* promptSvc.prompt({
             messageID: MessageID.ascending(),
             sessionID: childSession.id,
             model,
             agent: agent.name,
             parts: input.promptParts,
           })
-          const output = result.parts.findLast((p) => p.type === "text")?.text ?? ""
-          yield* dag.nodeCompleted(input.dagID, input.nodeID, output)
+          const rawText = result.parts.findLast((p) => p.type === "text")?.text ?? ""
+          const output = input.outputSchema
+            ? yield* extractStructuredOutput(rawText, input.outputSchema)
+            : rawText
+          yield* dag.nodeCompleted(input.dagID, input.nodeID, output).pipe(
+            Effect.catchIf(
+              (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+              () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
+            ),
+          )
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
-              yield* dag.nodeFailed(input.dagID, input.nodeID, String(cause), "exec_failed")
+              yield* dag.nodeFailed(input.dagID, input.nodeID, String(cause), "exec_failed").pipe(
+                Effect.catchIf(
+                  (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                  () => Effect.logWarning("nodeFailed guard rejected — node already terminal"),
+                ),
+              )
             }),
           ),
         ),
       ),
     )
 
-    return { childSessionID: childSession.id as string }
+    return { childSessionID: childSession.id as string, fiber }
   })
 }
