@@ -1,7 +1,7 @@
 export * as Dag from "./dag"
 
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
-import { DateTime, Effect, Layer, Context } from "effect"
+import { DateTime, Effect, Layer, Context, Schema, Option } from "effect"
 import { DagEvent } from "@opencode-ai/schema/dag-event"
 import { DagProjector } from "@opencode-ai/core/dag/projector"
 import { DagStore } from "@opencode-ai/core/dag/store"
@@ -50,6 +50,45 @@ export interface WorkflowConfig {
   report_strategy?: "silent" | "on_completion" | "on_converge"
   replan_policy?: { allow_kill_running?: boolean; orphan_strategy?: "auto_cancel" | "auto_fail" | "rewire_required" }
   nodes: NodeConfig[]
+}
+
+/**
+ * Merge the current workflow config with a replan fragment, applying the plan
+ * buckets (cancel / restart / replace / add) to produce the single-source-of-truth
+ * post-replan config. Pure function — no I/O.
+ *
+ * - cancelled nodes are removed
+ * - replaced nodes take the fragment's definition
+ * - restarted (running) nodes take the fragment's definition (restart = new def)
+ * - added nodes (new ids from fragment) are appended
+ * - terminal + running-unchanged nodes keep their current definition
+ */
+export function computeMergedConfig(
+  current: WorkflowConfig,
+  fragment: { nodes: NodeConfig[] },
+  plan: { cancel: string[]; restart: string[]; replace: string[]; add: string[] },
+): WorkflowConfig {
+  const fragmentById = new Map(fragment.nodes.map((n) => [n.id, n]))
+  const cancelSet = new Set(plan.cancel)
+  const restartSet = new Set(plan.restart)
+  const replaceSet = new Set(plan.replace)
+  const surviving = current.nodes
+    .filter((n) => !cancelSet.has(n.id))
+    .map((n) =>
+      restartSet.has(n.id) || replaceSet.has(n.id)
+        ? fragmentById.get(n.id) ?? n
+        : n,
+    )
+  const added = plan.add.map((id) => fragmentById.get(id)).filter((n): n is NodeConfig => n !== undefined)
+  return { ...current, nodes: [...surviving, ...added] }
+}
+
+const parseJsonOption = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
+
+export function parseWorkflowConfig(raw: string): WorkflowConfig | undefined {
+  const parsed = parseJsonOption(raw)
+  if (Option.isNone(parsed) || typeof parsed.value !== "object" || parsed.value === null) return undefined
+  return parsed.value as WorkflowConfig
 }
 
 export interface Interface {
@@ -170,6 +209,8 @@ export const layer = Layer.effect(
     })
 
     const replan = Effect.fn("Dag.replan")(function* (dagID: string, fragment: { nodes: NodeConfig[] }) {
+      const wf = yield* store.getWorkflow(dagID)
+      if (!wf) return yield* Effect.fail(new Error(`Workflow not found: ${dagID}`))
       const nodes = yield* store.getNodes(dagID)
       const plan = planReplan(
         { nodes: nodes.map((n) => ({ id: n.id, status: n.status as never, depends_on: n.dependsOn })) },
@@ -180,6 +221,22 @@ export const layer = Layer.effect(
       const nodeById = new Map(nodes.map((n) => [n.id, n]))
       for (const id of plan.add) {
         const node = fragmentById.get(id)!
+        yield* events.publish(DagEvent.NodeRegistered, {
+          dagID: dagID as ID,
+          nodeID: id as never,
+          name: node.name,
+          workerType: node.worker_type,
+          dependsOn: node.depends_on.map((d) => d as never),
+          required: node.required,
+          model: node.model as never,
+          timestamp: yield* DateTime.now,
+        })
+      }
+      // Replaced nodes: re-publish NodeRegistered so the projector upserts the
+      // new definition (worker_type, model, depends_on) into the read-model row.
+      for (const id of plan.replace) {
+        const node = fragmentById.get(id)
+        if (!node) continue
         yield* events.publish(DagEvent.NodeRegistered, {
           dagID: dagID as ID,
           nodeID: id as never,
@@ -206,6 +263,22 @@ export const layer = Layer.effect(
           timestamp: yield* DateTime.now,
         })
       }
+
+      // Persist the merged config as the single source of truth BEFORE the
+      // replan signal so DagLoop's WorkflowReplanned handler reads the updated
+      // config when it reloads entry.config from the store.
+      const currentConfig = parseWorkflowConfig(wf.config)
+      if (currentConfig) {
+        const mergedConfig = computeMergedConfig(currentConfig, fragment, plan)
+        yield* events.publish(DagEvent.WorkflowConfigUpdated, {
+          dagID: dagID as ID,
+          config: JSON.stringify(mergedConfig),
+          timestamp: yield* DateTime.now,
+        })
+      } else {
+        yield* Effect.logWarning("Dag.replan: failed to parse current config JSON — node definitions from fragment may be lost", { dagID })
+      }
+
       yield* events.publish(DagEvent.WorkflowReplanned, {
         dagID: dagID as ID,
         added: plan.add.length as never,

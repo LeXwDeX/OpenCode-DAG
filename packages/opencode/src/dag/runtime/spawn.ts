@@ -155,3 +155,71 @@ export function spawnNode(
     return { childSessionID: childSession.id as string, fiber }
   })
 }
+
+/**
+ * Re-attachment watcher for crash recovery.
+ *
+ * After a restart, a node left in `running` whose child session is still
+ * active has no fiber to observe the session's terminal event. This watcher
+ * periodically checks the child session's status and publishes the terminal
+ * DAG event when the session completes or fails.
+ *
+ * Polling uses exponential backoff: 1s initial, doubling up to 10s cap.
+ * The watcher holds a semaphore permit for its lifetime so recovered nodes
+ * count against the workflow's concurrency limit.
+ *
+ * It does NOT falsely fail a still-active session — if the session stays
+ * active or returns 'unknown' (0 messages), the watcher keeps checking
+ * until the workflow terminates and cleans up the fiber.
+ */
+export function attachNodeCompletionWatcher(
+  dagID: string,
+  nodeID: string,
+  childSessionID: string,
+  checkStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
+  semaphore: Semaphore.Semaphore,
+): Effect.Effect<Fiber.Fiber<void, unknown>, Error, Dag.Service | Scope.Scope> {
+  return Effect.gen(function* () {
+    const dag = yield* Dag.Service
+    const scope = yield* Scope.Scope
+
+    return yield* Effect.forkIn(scope)(
+      semaphore.withPermits(1)(
+        Effect.gen(function* () {
+          let status: "active" | "completed" | "failed" | "unknown" = "active"
+          let delayMs = 1000
+          const maxDelayMs = 10000
+          while (status === "active" || status === "unknown") {
+            yield* Effect.sleep(`${delayMs} millis`)
+            delayMs = Math.min(delayMs * 2, maxDelayMs)
+            status = yield* checkStatus(childSessionID).pipe(
+              Effect.catch(() => Effect.succeed("unknown" as const)),
+            )
+          }
+
+          if (status === "completed") {
+            yield* dag.nodeCompleted(dagID, nodeID, undefined).pipe(
+              Effect.catchIf(
+                (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                () => Effect.logWarning("Recovery watcher: nodeCompleted guard rejected — node already terminal"),
+              ),
+            )
+            return
+          }
+
+          yield* dag.nodeFailed(
+            dagID,
+            nodeID,
+            "child session failed (recovered)",
+            "exec_failed",
+          ).pipe(
+            Effect.catchIf(
+              (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+              () => Effect.logWarning("Recovery watcher: nodeFailed guard rejected — node already terminal"),
+            ),
+          )
+        }),
+      ),
+    )
+  })
+}

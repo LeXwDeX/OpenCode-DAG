@@ -48,6 +48,9 @@ export function reconcileWorkflow(
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
+        // active or unknown: leave running — the recovery watcher will poll
+        // until a definitive status arrives. A session with 0 messages may
+        // legitimately still be starting (semaphore queue, provider latency).
         if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         leftRunning++
       }
@@ -69,10 +72,15 @@ export function makeSessionStatusChecker(
       const msgs = yield* sessions.messages({ sessionID: SessionID.make(childSessionID), limit: 1 }).pipe(
         Effect.catch(() => Effect.succeed([] as never)),
       )
-      if (msgs.length === 0) return "active" as const
+      if (msgs.length === 0) return "unknown" as const
       const last = msgs[msgs.length - 1]
-      if (last.info.role === "assistant" && last.info.finish === "stop") return "completed" as const
-      if (last.info.role === "assistant" && last.info.finish === "error") return "failed" as const
-      return "active" as const
+      if (last.info.role !== "assistant") return "active" as const
+      // An interrupted/aborted session has error set but finish undefined.
+      if (last.info.error) return "failed" as const
+      const finish = last.info.finish
+      if (!finish || finish === "tool-calls" || finish === "unknown") return "active" as const
+      if (finish === "error" || finish === "content-filter") return "failed" as const
+      // stop, length, and any other terminal finish → completed
+      return "completed" as const
     })
 }

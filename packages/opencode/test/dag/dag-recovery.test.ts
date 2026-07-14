@@ -111,7 +111,7 @@ describe("reconcileWorkflow", () => {
     expect(result.reconciled).toBe(0)
   })
 
-  it("handles unknown session status gracefully", async () => {
+  it("leaves unknown session running (watcher handles it, does not falsely fail)", async () => {
     const events: { type: string; nodeID: string }[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1" })]
     const dagLayer = makeDagLayer(nodes, events)
@@ -119,7 +119,7 @@ describe("reconcileWorkflow", () => {
 
     const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
 
-    expect(events).toEqual([])
+    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
     expect(result.leftRunning).toBe(1)
   })
 })

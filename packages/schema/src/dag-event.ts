@@ -164,6 +164,16 @@ export const WorkflowReplanned = Event.define({
 })
 export type WorkflowReplanned = typeof WorkflowReplanned.Type
 
+export const WorkflowConfigUpdated = Event.define({
+  type: "dag.workflow.config_updated",
+  ...options,
+  schema: {
+    ...Base,
+    config: Schema.String, // merged YAML/JSON string (single source of truth after replan)
+  },
+})
+export type WorkflowConfigUpdated = typeof WorkflowConfigUpdated.Type
+
 // ============================================================================
 // Node lifecycle events
 // ============================================================================
@@ -263,6 +273,7 @@ export const DurableDefinitions = Event.inventory(
   WorkflowFailed,
   WorkflowCancelled,
   WorkflowReplanned,
+  WorkflowConfigUpdated,
   NodeRegistered,
   NodeStarted,
   NodeCompleted,

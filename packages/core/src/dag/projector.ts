@@ -96,6 +96,15 @@ export const layer = Layer.effectDiscard(
         .pipe(Effect.orDie),
     )
 
+    yield* events.project(DagEvent.WorkflowConfigUpdated, (event) =>
+      db
+        .update(WorkflowTable)
+        .set({ config: event.data.config, seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .where(eq(WorkflowTable.id, event.data.dagID))
+        .run()
+        .pipe(Effect.orDie),
+    )
+
     // ---- Node lifecycle (insert on register, update thereafter) ----
 
     const updateNode = (
@@ -126,7 +135,18 @@ export const layer = Layer.effectDiscard(
           model_provider_id: event.data.model?.providerID,
           seq: event.durable!.seq,
         })
-        .onConflictDoNothing()
+        .onConflictDoUpdate({
+          target: WorkflowNodeTable.id,
+          set: {
+            name: event.data.name,
+            worker_type: event.data.workerType,
+            required: event.data.required,
+            depends_on: [...event.data.dependsOn],
+            model_id: event.data.model?.modelID,
+            model_provider_id: event.data.model?.providerID,
+            seq: event.durable!.seq,
+          },
+        })
         .run()
         .pipe(Effect.orDie),
     )

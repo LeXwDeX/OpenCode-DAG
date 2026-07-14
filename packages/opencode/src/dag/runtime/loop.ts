@@ -1,6 +1,6 @@
 export * as DagLoop from "./loop"
 
-import { Effect, Layer, Context, Stream, Scope, Semaphore, Fiber, Schema, Option } from "effect"
+import { Effect, Layer, Context, Stream, Scope, Semaphore, Fiber } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -8,12 +8,12 @@ import { DagEvent } from "@opencode-ai/schema/dag-event"
 import { DagStore } from "@opencode-ai/core/dag/store"
 import { WorkflowRuntime, type SchedulingNode } from "@opencode-ai/core/dag/core/scheduling"
 import { isWorkflowTerminalStatus } from "@opencode-ai/core/dag/core/types"
-import { Dag, type WorkflowConfig } from "../dag"
+import { Dag, type WorkflowConfig, parseWorkflowConfig } from "../dag"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { resolveTemplate } from "../templates/resolve"
-import { spawnNode } from "./spawn"
+import { spawnNode, attachNodeCompletionWatcher } from "./spawn"
 import { evaluateCondition, resolveInputMapping } from "./eval"
 import { reconcileWorkflow, makeSessionStatusChecker } from "./recovery"
 
@@ -98,11 +98,30 @@ export const layer = Layer.effect(
               })
             }
 
-            let promptText = nodeConfig?.prompt_template
-              ? yield* resolveTemplate(nodeConfig.prompt_template, ctx.directory).pipe(
-                  Effect.catch(() => Effect.succeed(node.name)),
-                )
-              : node.name
+            let promptText: string
+            if (nodeConfig?.prompt_template) {
+              const resolved = yield* resolveTemplate(nodeConfig.prompt_template, ctx.directory).pipe(
+                Effect.tap((text) =>
+                  text.trim() === ""
+                    ? Effect.logWarning("DAG node resolved template is empty", { dagID, nodeID })
+                    : Effect.void,
+                ),
+                Effect.map((text) => ({ ok: true as const, text })),
+                Effect.catch((err: unknown) =>
+                  Effect.gen(function* () {
+                    yield* dag.nodeFailed(dagID, nodeID, `Template resolution failed: ${String(err)}`, "exec_failed").pipe(Effect.ignore)
+                    return { ok: false as const, text: "" }
+                  }),
+                ),
+              )
+              if (!resolved.ok) {
+                entry.runtime.markUnsatisfied(nodeID)
+                continue
+              }
+              promptText = resolved.text
+            } else {
+              promptText = node.name
+            }
 
             for (const [key, value] of Object.entries(resolvedMapping)) {
               if (value !== null && value !== undefined) {
@@ -140,12 +159,6 @@ export const layer = Layer.effect(
           }
         })
 
-        const parseConfig = (raw: string): WorkflowConfig | undefined => {
-          const parsed = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)(raw)
-          if (Option.isNone(parsed)) return undefined
-          return parsed.value as WorkflowConfig
-        }
-
         const checkCompletion = Effect.fn("DagLoop.checkCompletion")(function* (dagID: string) {
           const entry = runtimes.get(dagID)
           if (!entry) return
@@ -164,14 +177,25 @@ export const layer = Layer.effect(
             Effect.provideService(Dag.Service, dag),
             Effect.ignore,
           )
-          const config = parseConfig(wf.config)
+          const config = parseWorkflowConfig(wf.config)
           const nodes = yield* store.getNodes(dagID)
           const maxConcurrency = Math.max(1, config?.max_concurrency ?? 4)
           const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
           const semaphore = Semaphore.makeUnsafe(maxConcurrency)
           const isPaused = wf.status === "paused"
           if (isPaused) runtime.setPaused(true)
-          runtimes.set(dagID, { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() })
+          const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
+          runtimes.set(dagID, entry)
+          // Re-attach completion watchers for running nodes whose child sessions
+          // may still be active. Without this, no fiber observes the child
+          // session's terminal event and the node stays stuck in running.
+          for (const node of nodes) {
+            if (node.status !== "running" || !node.childSessionId) continue
+            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore).pipe(
+              Effect.provideService(Dag.Service, dag),
+            )
+            entry.fibers.set(node.id, fiber)
+          }
           if (!isPaused) {
             yield* spawnReady(dagID)
             yield* checkCompletion(dagID)
@@ -195,7 +219,7 @@ export const layer = Layer.effect(
               if (runtimes.has(dagID)) return
               const wf = yield* store.getWorkflow(dagID).pipe(Effect.orDie)
               if (!wf) return
-              const config = parseConfig(wf.config)
+              const config = parseWorkflowConfig(wf.config)
               const nodes = yield* store.getNodes(dagID)
               const maxConcurrency = Math.max(1, config?.max_concurrency ?? 4)
               const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
@@ -314,7 +338,7 @@ export const layer = Layer.effect(
               yield* entry.evalLock.withPermits(1)(
                 Effect.gen(function* () {
                   const wf = yield* store.getWorkflow(dagID).pipe(Effect.orDie)
-                  if (wf) entry.config = parseConfig(wf.config)
+                  if (wf) entry.config = parseWorkflowConfig(wf.config)
                   const nodes = yield* store.getNodes(dagID)
                   entry.runtime.rebuildGraph(toSchedulingNodes(nodes))
                   yield* spawnReady(dagID)
