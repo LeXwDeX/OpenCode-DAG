@@ -200,6 +200,8 @@ export const NodeStarted = Event.define({
     ...Base,
     nodeID: NodeID,
     childSessionID: SessionID,
+    deadlineMs: Schema.optional(Schema.Number),
+    wakeEligible: Schema.optional(Schema.Boolean),
   },
 })
 export type NodeStarted = typeof NodeStarted.Type
@@ -234,7 +236,7 @@ export const NodeSkipped = Event.define({
   schema: {
     ...Base,
     nodeID: NodeID,
-    reason: Schema.Literals(["condition_false", "agent_complete", "orphan_cascade"]),
+    reason: Schema.Literals(["condition_false", "agent_complete", "orphan_cascade", "workflow_cancelled", "workflow_failed"]),
   },
 })
 export type NodeSkipped = typeof NodeSkipped.Type

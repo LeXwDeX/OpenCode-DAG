@@ -32,6 +32,7 @@ export const WorkflowTable = sqliteTable(
     status: text().notNull(),
     config: text().notNull(), // YAML string
     seq: integer().notNull(), // latest durable event seq
+    wake_reported: integer({ mode: "boolean" }).notNull().default(false), // D3: has workflow terminal been reported to parent?
     started_at: integer(),
     completed_at: integer(),
     ...Timestamps,
@@ -62,6 +63,10 @@ export const WorkflowNodeTable = sqliteTable(
     output: text({ mode: "json" }).$type<unknown>(),
     error_reason: text(),
     retry_count: integer().notNull().default(0),
+    deadline_ms: integer(), // absolute deadline (spawnedAt + timeout_ms) for D0 termination boundary
+    wake_eligible: integer({ mode: "boolean" }).notNull().default(false), // D6: node has report_to_parent=true
+    wake_reported: integer({ mode: "boolean" }).notNull().default(false), // D3: has this node's terminal event been injected into the parent session?
+    replan_attempts: integer().notNull().default(0), // D4: per-node replan counter for circuit breaker
     seq: integer().notNull(), // latest durable event seq for this node
     started_at: integer(),
     completed_at: integer(),

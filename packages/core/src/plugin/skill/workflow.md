@@ -279,6 +279,10 @@ Workflows are not static. After creating a workflow, use `extend` and `control(r
 
 Node outputs are reported back on completion. When a report suggests the task decomposition was wrong, replan rather than letting the original graph run to completion.
 
+### Escalation: change approach after repeated failures
+
+When the same node or workflow keeps failing — via `orchestrator_unresponsive` (the woken agent took no action), a replan-attempt ceiling rejection, or repeated review failures — **change your approach** rather than retrying the identical plan. Try a different decomposition, a different model, a simpler prompt, or break the node into smaller steps. Repeating the same failing plan wastes budget without progress.
+
 ## Model Assignment Strategy
 
 Each node MAY specify `model: { modelID, providerID }` to pin a specific model. If omitted, the node uses its agent's default model.

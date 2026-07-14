@@ -73,18 +73,19 @@ describe("reconcileWorkflow", () => {
     expect(result.reconciled).toBe(0)
   })
 
-  it("publishes NodeFailed for pending node with no child session", async () => {
+  it("leaves pending node with no child session for spawnReady", async () => {
     const events: { type: string; nodeID: string }[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "pending", childSessionId: null })]
     const dagLayer = makeDagLayer(nodes, events)
     const checkStatus = () => Effect.succeed("active" as const)
 
-    await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
 
-    expect(events).toContainEqual({ type: "nodeFailed", nodeID: "n1" })
+    expect(events).toEqual([])
+    expect(result.reconciled).toBe(0)
   })
 
-  it("publishes NodeStarted retroactively for pending node with active child session", async () => {
+  it("skips pending node with child session (restart-orphan, left for spawnReady)", async () => {
     const events: { type: string; nodeID: string }[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "pending", childSessionId: "ses_1" })]
     const dagLayer = makeDagLayer(nodes, events)
@@ -92,8 +93,12 @@ describe("reconcileWorkflow", () => {
 
     const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
 
-    expect(events).toContainEqual({ type: "nodeStarted", nodeID: "n1" })
-    expect(result.leftRunning).toBe(1)
+    // Pending nodes with a childSessionId are restart-orphans (NodeRestarted
+    // set them pending but replacement was never spawned). Recovery should NOT
+    // re-attach to the old session — leave them pending for spawnReady.
+    expect(events).not.toContainEqual({ type: "nodeStarted", nodeID: "n1" })
+    expect(result.reconciled).toBe(0)
+    expect(result.leftRunning).toBe(0)
   })
 
   it("skips non-running, non-pending nodes", async () => {

@@ -49,6 +49,8 @@ const WorkflowGraphSchema = Schema.Struct({
       orphan_strategy: Schema.optional(Schema.Literals(["auto_cancel", "auto_fail", "rewire_required"])),
     }),
   ),
+  max_node_replan_attempts: Schema.optional(Schema.Number),
+  max_total_nodes: Schema.optional(Schema.Number),
   nodes: Schema.Array(NodeSchema),
 })
 

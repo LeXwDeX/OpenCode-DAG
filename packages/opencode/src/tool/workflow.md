@@ -56,7 +56,8 @@ Control a running workflow. Operations:
 | `model` | no | `{ modelID, providerID }` override |
 | `condition` | no | Expression evaluated before spawn; node is skipped if false |
 | `input_mapping` | no | Map upstream node outputs into template variables |
-| `report_to_parent` | no | If true, report result back to parent agent |
+| `report_to_parent` | no | If true, the parent agent is automatically woken when this node completes or fails. The workflow's terminal status always wakes the parent regardless of this flag |
+| `worker_config` | no | `{ use_worktree, timeout_ms, retry: { max_attempts, delay_ms } }` — `timeout_ms` bounds node execution (defaults to 10 minutes if omitted) |
 | `restart` | no | (replan only) Re-spawn this running node with new prompt |
 | `cancel` | no | (replan only) Cancel this node |
 

@@ -32,8 +32,12 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
 # opencode runtime-generated local project config (created when running the built binary in a package dir)
 **/.opencode/settings.json
+
+# claude
+.claude/
 
 # OpenSpec artifacts (local-only, not tracked)
 openspec/

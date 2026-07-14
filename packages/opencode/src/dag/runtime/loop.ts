@@ -5,6 +5,7 @@ import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { DagEvent } from "@opencode-ai/schema/dag-event"
+import { SessionStatusEvent } from "@opencode-ai/schema/session-status-event"
 import { DagStore } from "@opencode-ai/core/dag/store"
 import { WorkflowRuntime, type SchedulingNode } from "@opencode-ai/core/dag/core/scheduling"
 import { isWorkflowTerminalStatus } from "@opencode-ai/core/dag/core/types"
@@ -12,8 +13,9 @@ import { Dag, type WorkflowConfig, parseWorkflowConfig } from "../dag"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
+import { SessionID } from "@/session/schema"
 import { resolveTemplate } from "../templates/resolve"
-import { spawnNode, attachNodeCompletionWatcher } from "./spawn"
+import { spawnNode, attachNodeCompletionWatcher, attachAbandonedSessionWatcher } from "./spawn"
 import { evaluateCondition, resolveInputMapping } from "./eval"
 import { reconcileWorkflow, makeSessionStatusChecker } from "./recovery"
 
@@ -63,6 +65,8 @@ export const layer = Layer.effect(
       Effect.fn("DagLoop.state")(function* (ctx) {
         const scope = yield* Scope.Scope
         const runtimes = new Map<string, WorkflowEntry>()
+        const wakeInFlight = new Set<string>()
+        const wakePending = new Set<string>()
 
         const spawnReady = Effect.fn("DagLoop.spawnReady")(function* (dagID: string) {
           const entry = runtimes.get(dagID)
@@ -137,6 +141,7 @@ export const layer = Layer.effect(
 
             entry.runtime.markRunning(nodeID)
             const oldFiber = entry.fibers.get(nodeID)
+            yield* abortChild(nodeID, node.childSessionId).pipe(Effect.ignore)
             if (oldFiber) yield* Fiber.interrupt(oldFiber).pipe(Effect.ignore)
             yield* spawnNode(entry.semaphore, {
               dagID,
@@ -145,6 +150,8 @@ export const layer = Layer.effect(
               parentSessionID: entry.parentSessionID,
               promptParts,
               outputSchema: nodeConfig?.output_schema as Record<string, unknown> | undefined,
+              timeoutMs: nodeConfig?.worker_config?.timeout_ms,
+              reportToParent: nodeConfig?.report_to_parent,
             }).pipe(
               Effect.tap((result) => Effect.sync(() => entry.fibers.set(nodeID, result.fiber))),
               Effect.provideService(Dag.Service, dag),
@@ -171,9 +178,18 @@ export const layer = Layer.effect(
 
         const checkSessionStatus = makeSessionStatusChecker(sessionSvc)
 
+        // Best-effort abort of a durable child session, independent of whether
+        // a local wrapper fiber still exists.  Used at every replacement,
+        // cancellation, failure, and workflow-terminal cleanup site.
+        const abortChild = Effect.fnUntraced(function* (nodeID: string, childSessionId: string | null) {
+          if (!childSessionId) return
+          yield* promptSvc.cancel(childSessionId as never).pipe(Effect.ignore)
+          yield* attachAbandonedSessionWatcher(childSessionId, nodeID, checkSessionStatus, scope).pipe(Effect.ignore)
+        })
+
         const recoverWorkflow = Effect.fn("DagLoop.recoverWorkflow")(function* (wf: DagStore.WorkflowRow) {
           const dagID = wf.id
-          yield* reconcileWorkflow(dagID, checkSessionStatus).pipe(
+          yield* reconcileWorkflow(dagID, checkSessionStatus, (sid) => promptSvc.cancel(sid as never)).pipe(
             Effect.provideService(Dag.Service, dag),
             Effect.ignore,
           )
@@ -189,28 +205,28 @@ export const layer = Layer.effect(
           // Re-attach completion watchers for running nodes whose child sessions
           // may still be active. Without this, no fiber observes the child
           // session's terminal event and the node stays stuck in running.
+          // Note (P1-8): pre-existing running nodes from before the migration
+          // have wake_eligible=false. Their workflow-terminal wake is still
+          // unconditional via getUnreportedWakeWorkflows, so the closure loop
+          // is not broken — only per-node mid-workflow milestone wakes are
+          // missed for these legacy nodes, which is acceptable since
+          // report_to_parent had zero consumers before this change.
           for (const node of nodes) {
             if (node.status !== "running" || !node.childSessionId) continue
-            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore).pipe(
+            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore, node.deadlineMs, node.startedAt).pipe(
               Effect.provideService(Dag.Service, dag),
             )
             entry.fibers.set(node.id, fiber)
           }
           if (!isPaused) {
-            yield* spawnReady(dagID)
-            yield* checkCompletion(dagID)
+            yield* entry.evalLock.withPermits(1)(
+              Effect.gen(function* () {
+                yield* spawnReady(dagID)
+                yield* checkCompletion(dagID)
+              }),
+            )
           }
         })
-
-        const runningWfs = yield* store.listByStatus("running").pipe(Effect.orDie)
-        const pausedWfs = yield* store.listByStatus("paused").pipe(Effect.orDie)
-        for (const wf of [...runningWfs, ...pausedWfs]) {
-          yield* recoverWorkflow(wf).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning("DagLoop recovery failed for workflow", { dagID: wf.id, cause }),
-            ),
-          )
-        }
 
         yield* events.subscribe(DagEvent.WorkflowStarted).pipe(
           Stream.runForEach((evt) =>
@@ -224,9 +240,14 @@ export const layer = Layer.effect(
               const maxConcurrency = Math.max(1, config?.max_concurrency ?? 4)
               const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
               const semaphore = Semaphore.makeUnsafe(maxConcurrency)
-              runtimes.set(dagID, { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() })
-              yield* spawnReady(dagID)
-              yield* checkCompletion(dagID)
+              const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
+              runtimes.set(dagID, entry)
+              yield* entry.evalLock.withPermits(1)(
+                Effect.gen(function* () {
+                  yield* spawnReady(dagID)
+                  yield* checkCompletion(dagID)
+                }),
+              )
             }).pipe(Effect.ignore),
           ),
           Effect.forkScoped,
@@ -248,6 +269,10 @@ export const layer = Layer.effect(
                     yield* checkCompletion(dagID)
                   }),
                 )
+                // P1-2: trigger wake check directly on node terminal —
+                // the parent session may already be idle (no new idle event
+                // will fire), so we can't rely on the idle subscription alone.
+                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore)
               }).pipe(Effect.ignore),
             ),
             Effect.forkScoped,
@@ -265,6 +290,8 @@ export const layer = Layer.effect(
               yield* entry.evalLock.withPermits(1)(
                 Effect.gen(function* () {
                   const fiber = entry.fibers.get(nodeID)
+                  const node = yield* store.getNode(nodeID)
+                  yield* abortChild(nodeID, node?.childSessionId ?? null).pipe(Effect.ignore)
                   if (fiber) {
                     yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                     entry.fibers.delete(nodeID)
@@ -281,19 +308,31 @@ export const layer = Layer.effect(
 
         yield* events.subscribe(DagEvent.NodeFailed).pipe(
           Stream.filter((e) => runtimes.has(e.data.dagID as string)),
-          Stream.runForEach((evt) =>
-            Effect.gen(function* () {
-              const dagID = evt.data.dagID as string
-              const entry = runtimes.get(dagID)
-              if (!entry) return
-              yield* entry.evalLock.withPermits(1)(
-                Effect.gen(function* () {
-                  entry.fibers.delete(evt.data.nodeID as string)
-                  entry.runtime.markUnsatisfied(evt.data.nodeID as string)
-                  yield* checkCompletion(dagID)
-                }),
-              )
-            }).pipe(Effect.ignore),
+            Stream.runForEach((evt) =>
+              Effect.gen(function* () {
+                const dagID = evt.data.dagID as string
+                const entry = runtimes.get(dagID)
+                if (!entry) return
+                yield* entry.evalLock.withPermits(1)(
+                  Effect.gen(function* () {
+                    const nid = evt.data.nodeID as string
+                    const fiber = entry.fibers.get(nid)
+                    entry.fibers.delete(nid)
+                    // #3: only markUnsatisfied if the runtime still tracks this
+                    // node as non-terminal. A stale NodeFailed event (e.g. from
+                    // a replan-ceiling check after the node already completed)
+                    // would incorrectly flip a satisfied node to unsatisfied.
+                    if (entry.runtime.isActive(nid)) {
+                      const node = yield* store.getNode(nid)
+                      yield* abortChild(nid, node?.childSessionId ?? null).pipe(Effect.ignore)
+                      if (fiber) yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+                      entry.runtime.markUnsatisfied(nid)
+                    }
+                    yield* checkCompletion(dagID)
+                  }),
+                )
+                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore)
+              }).pipe(Effect.ignore),
           ),
           Effect.forkScoped,
         )
@@ -357,17 +396,164 @@ export const layer = Layer.effect(
               Effect.gen(function* () {
                 const dagID = evt.data.dagID as string
                 const entry = runtimes.get(dagID)
+                const parentSessionID = entry?.parentSessionID
                 if (entry) {
-                  for (const fiber of entry.fibers.values()) {
-                    yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
-                  }
-                  entry.fibers.clear()
+                  yield* entry.evalLock.withPermits(1)(
+                    Effect.gen(function* () {
+                      for (const [nodeID, fiber] of entry.fibers) {
+                        const node = yield* store.getNode(nodeID)
+                        yield* abortChild(nodeID, node?.childSessionId ?? null).pipe(Effect.ignore)
+                        yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
+                      }
+                      entry.fibers.clear()
+                      runtimes.delete(dagID)
+                    }),
+                  )
                 }
-                runtimes.delete(dagID)
+                // P1-6: trigger wake on workflow terminal so the parent
+                // learns the final outcome even if no idle event fires.
+                if (parentSessionID) {
+                  yield* tryDeliverWake(parentSessionID).pipe(Effect.ignore)
+                }
               }).pipe(Effect.ignore),
             ),
             Effect.forkScoped,
           )
+        }
+
+        // ── D2+D7: Autonomous wake — extracted as reusable function ────
+        // Called from both the idle-event subscription AND node-terminal
+        // event handlers, so a wake fires even when the parent session is
+        // already idle (P1-2 fix).
+
+        let tryDeliverWake: (sessionID: string) => Effect.Effect<void> = () => Effect.void
+        tryDeliverWake = Effect.fn("DagLoop.tryDeliverWake")(function* (sessionID: string) {
+          if (wakeInFlight.has(sessionID)) {
+            wakePending.add(sessionID)
+            return
+          }
+          wakeInFlight.add(sessionID)
+          // #4: drain loop — deliver ALL pending unreported rows, not just one.
+          // Each iteration delivers at most one to keep messages coherent,
+          // then re-checks for additional rows.
+          try {
+            const deliveredDagIDs = new Set<string>()
+            for (;;) {
+              const unreportedNodes = yield* store.getUnreportedWakeNodes(sessionID).pipe(
+                Effect.catch(() => Effect.succeed([] as DagStore.NodeRow[])),
+              )
+              const unreportedWorkflows = yield* store.getUnreportedWakeWorkflows(sessionID).pipe(
+                Effect.catch(() => Effect.succeed([] as DagStore.WorkflowRow[])),
+              )
+              const hasUnreported = unreportedNodes.length > 0 || unreportedWorkflows.length > 0
+
+              if (!hasUnreported) {
+                // A terminal event can commit between either query. Coalesce
+                // its trigger into another durable read before declaring idle.
+                if (wakePending.delete(sessionID)) continue
+                // D7: if we delivered at least one wake in this call and no more
+                // unreported rows remain, check for orchestrator-unresponsive.
+                // #5: scoped per-workflow — only fail the workflow whose node
+                // was reported, not any other workflow under the same session.
+                // Skip paused workflows (they intentionally have no ready nodes).
+                if (deliveredDagIDs.size > 0) {
+                  for (const dagID of deliveredDagIDs) {
+                    const entry = runtimes.get(dagID)
+                    if (!entry) continue
+                    if (entry.runtime.isPaused()) continue
+                    if (entry.runtime.hasRunning()) continue
+                    if (entry.runtime.getReadyNodes().length > 0) continue
+                    if (entry.runtime.isComplete()) continue
+                    yield* dag.fail(dagID, "orchestrator_unresponsive").pipe(Effect.ignore)
+                  }
+                }
+                return
+              }
+
+              // Preemption guard (task 3.3): abort if fresher user message exists
+              const msgs = yield* sessionSvc.messages({ sessionID: SessionID.make(sessionID), limit: 20 }).pipe(Effect.catch(() => Effect.succeed([])))
+              let lastUserAt = -1
+              let lastAsstAt = -1
+              for (const m of msgs) {
+                const t = m.info.time?.created
+                if (typeof t !== "number") continue
+                if (m.info.role === "user" && t > lastUserAt) lastUserAt = t
+                else if (m.info.role === "assistant" && t > lastAsstAt) lastAsstAt = t
+              }
+              if (lastUserAt > lastAsstAt) return
+
+              // D6: prioritize node-level wake, then workflow-terminal wake
+              const targetNode = unreportedNodes[0]
+              const targetWorkflow = targetNode ? undefined : unreportedWorkflows[0]
+              if (!targetNode && !targetWorkflow) return
+
+              const summary = targetNode
+                ? `[DAG Node Result] Node "${targetNode.name}" ${targetNode.status}: ${typeof targetNode.output === "string" ? targetNode.output.slice(0, 500) : targetNode.errorReason ?? "(no output)"}`
+                : `[DAG Workflow ${targetWorkflow!.status}] Workflow "${targetWorkflow!.title}" has reached terminal status.`
+
+              // Persist wake_reported AFTER successful delivery only.
+              // A failure stays durable for a later idle event or restart scan;
+              // it must not spin synchronously on the same row.
+              const didDeliver = yield* promptSvc.prompt({
+                sessionID: SessionID.make(sessionID),
+                parts: [{ type: "text", text: summary }],
+              }).pipe(
+                Effect.tap(() =>
+                  Effect.gen(function* () {
+                    if (targetNode) {
+                      yield* store.markNodeWakeReported(targetNode.id)
+                      deliveredDagIDs.add(targetNode.workflowId)
+                    }
+                    if (targetWorkflow) {
+                      yield* store.markWorkflowWakeReported(targetWorkflow.id)
+                      deliveredDagIDs.add(targetWorkflow.id)
+                    }
+                  }),
+                ),
+                Effect.as(true),
+                Effect.catchCause(() =>
+                  Effect.logWarning("DAG wake delivery failed", { sessionID }).pipe(Effect.as(false)),
+                ),
+              )
+              if (!didDeliver) return
+              // Loop continues to drain remaining unreported rows
+            }
+          } finally {
+            const retry = wakePending.delete(sessionID)
+            wakeInFlight.delete(sessionID)
+            if (retry) yield* tryDeliverWake(sessionID)
+          }
+        })
+
+        // Idle-event subscription: the primary wake trigger
+        yield* events.subscribe(SessionStatusEvent.Status).pipe(
+          Stream.filter((evt) => evt.data.status.type === "idle"),
+          Stream.runForEach((evt) =>
+            tryDeliverWake(evt.data.sessionID as string).pipe(Effect.ignore),
+          ),
+          Effect.forkScoped,
+        )
+
+        // Install all live event handlers before spawning recovery watchers so
+        // a child that settles immediately cannot leave the runtime stale.
+        const runningWfs = yield* store.listByStatus("running").pipe(Effect.orDie)
+        const pausedWfs = yield* store.listByStatus("paused").pipe(Effect.orDie)
+        for (const wf of [...runningWfs, ...pausedWfs]) {
+          yield* recoverWorkflow(wf).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("DagLoop recovery failed for workflow", { dagID: wf.id, cause }),
+            ),
+          )
+        }
+
+        // Terminal rows can survive a process crash after projection but before
+        // parent delivery. Re-enter the normal serialized drain for every
+        // affected parent session without waiting for a new status event.
+        const pendingWakeSessions = yield* store.getSessionsWithUnreportedWakes().pipe(
+          Effect.catch(() => Effect.succeed([] as string[])),
+        )
+        for (const sessionID of pendingWakeSessions) {
+          yield* tryDeliverWake(sessionID).pipe(Effect.forkScoped)
         }
 
         return {}

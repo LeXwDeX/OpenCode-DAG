@@ -77,6 +77,16 @@ export class WorkflowRuntime {
     this.running.add(nodeID)
   }
 
+  /** Synchronous check: does the runtime track any running node? */
+  hasRunning(): boolean {
+    return this.running.size > 0
+  }
+
+  /** Returns true if the node is in running or pending (not yet terminal) state. */
+  isActive(nodeID: string): boolean {
+    return this.running.has(nodeID) || (!this.satisfied.has(nodeID) && !this.unsatisfied.has(nodeID))
+  }
+
   getReadyNodes(): string[] {
     if (this.paused) return []
     return this.graph

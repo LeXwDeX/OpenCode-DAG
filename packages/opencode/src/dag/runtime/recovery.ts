@@ -20,6 +20,7 @@ import type { DagStore } from "@opencode-ai/core/dag/store"
 export function reconcileWorkflow(
   dagID: string,
   checkSessionStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
+  cancelSession?: (sessionID: string) => Effect.Effect<void>,
 ): Effect.Effect<{ reconciled: number; leftRunning: number }, Error, Dag.Service> {
   return Effect.gen(function* () {
     const dag = yield* Dag.Service
@@ -28,9 +29,21 @@ export function reconcileWorkflow(
     let leftRunning = 0
 
     for (const node of nodes) {
-      if (node.status !== "running" && node.status !== "pending") continue
+      // Pending nodes have not been admitted to an execution attempt yet. This
+      // includes ordinary dependency-blocked work and restart-orphans; both are
+      // left for spawnReady to schedule after runtime reconstruction.
+      // A restart-orphan (pending + stale childSessionId) must have its old
+      // child session cancelled here, since spawnReady may never revisit it if
+      // the workflow is about to become terminal.
+      if (node.status === "pending") {
+        if (node.childSessionId && cancelSession) {
+          yield* cancelSession(node.childSessionId).pipe(Effect.catch(() => Effect.void))
+        }
+        continue
+      }
+      if (node.status !== "running") continue
       if (!node.childSessionId) {
-        yield* dag.nodeFailed(dagID, node.id, node.status === "pending" ? "node was pending but never started" : "node was running but had no child session on recovery", "exec_failed")
+        yield* dag.nodeFailed(dagID, node.id, "node was running but had no child session on recovery", "exec_failed")
         reconciled++
         continue
       }
@@ -40,18 +53,15 @@ export function reconcileWorkflow(
       )
 
       if (sessionStatus === "completed") {
-        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         yield* dag.nodeCompleted(dagID, node.id, undefined)
         reconciled++
       } else if (sessionStatus === "failed") {
-        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
         // active or unknown: leave running — the recovery watcher will poll
         // until a definitive status arrives. A session with 0 messages may
         // legitimately still be starting (semaphore queue, provider latency).
-        if (node.status === "pending") yield* dag.nodeStarted(dagID, node.id, node.childSessionId)
         leftRunning++
       }
     }

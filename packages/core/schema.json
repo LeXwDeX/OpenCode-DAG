@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "5b6023af-92c0-43b1-8d1c-b1beafd6380c",
+  "id": "e3e2e0f8-3856-4f47-956f-84113683c96b",
   "prevIds": [
-    "0d9aac12-bbf1-43fd-ad20-b275b2a83cb7"
+    "5b6023af-92c0-43b1-8d1c-b1beafd6380c"
   ],
   "ddl": [
     {
@@ -610,6 +610,46 @@
     },
     {
       "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "deadline_ms",
+      "entityType": "columns",
+      "table": "workflow_node"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "wake_eligible",
+      "entityType": "columns",
+      "table": "workflow_node"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "wake_reported",
+      "entityType": "columns",
+      "table": "workflow_node"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "replan_attempts",
+      "entityType": "columns",
+      "table": "workflow_node"
+    },
+    {
+      "type": "integer",
       "notNull": true,
       "autoincrement": false,
       "default": null,
@@ -725,6 +765,16 @@
       "default": null,
       "generated": null,
       "name": "seq",
+      "entityType": "columns",
+      "table": "workflow"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "wake_reported",
       "entityType": "columns",
       "table": "workflow"
     },

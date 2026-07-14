@@ -1815,7 +1815,66 @@ export const layer = Layer.effect(
         yield* sessions.touch(input.sessionID)
         return { info: userMsg, parts: [cmdText, responsePart] }
       }
+      // /workflow command dispatch — inject the goal text as a regular prompt and
+      // start a normal agent turn. The workflow skill + tool are already available
+      // to the agent; it will use workflow.start to build a graph autonomously.
+      // No deterministic bootstrap template (D5).
+      if (input.command === "workflow") {
+        const m = yield* currentModel(input.sessionID)
+        const agentName = input.agent ?? (yield* agents.defaultAgent())
+        const userMsg: SessionV1.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          role: "user",
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          agent: agentName,
+          model: { providerID: m.providerID, modelID: m.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        const cmdText: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: `/workflow ${input.arguments}`.trim(),
+        }
+        yield* sessions.updatePart(cmdText)
+        yield* sessions.touch(input.sessionID)
+        return yield* loop({ sessionID: input.sessionID })
+      }
       // Goal/Subgoal command dispatch — early return BEFORE command registry lookup
+      // Migration window (task 6.2): /goal is deprecated, route to /workflow with notice
+      if (input.command === "goal" && !input.arguments.match(/^(resume|pause|clear|done|set|status|subgoal)\b/)) {
+        const m = yield* currentModel(input.sessionID)
+        const agentName = input.agent ?? (yield* agents.defaultAgent())
+        const userMsg: SessionV1.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          role: "user",
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          agent: agentName,
+          model: { providerID: m.providerID, modelID: m.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        const cmdText: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: `/goal ${input.arguments} (deprecated — use /workflow)`,
+        }
+        yield* sessions.updatePart(cmdText)
+        const deprecationPart: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: "⚠️ /goal is deprecated in favor of /workflow. Routing you there now.",
+        }
+        yield* sessions.updatePart(deprecationPart)
+        yield* sessions.touch(input.sessionID)
+        return yield* loop({ sessionID: input.sessionID })
+      }
       if (goal && (input.command === "goal" || input.command === "subgoal")) {
         const dispatch = input.command === "goal" ? goal.dispatch : goal.dispatchSubgoal
         const dispatchResult = yield* dispatch(input.sessionID, input.arguments).pipe(
@@ -1903,6 +1962,41 @@ export const layer = Layer.effect(
           }
           return { info: userMsg, parts: [cmdText, responsePart] }
         }
+      }
+
+      // Post-removal /goal guidance (task 6.3): when the Goal module is removed
+      // (goal service is undefined), respond with guidance to use /workflow.
+      // Active during the migration window the goal dispatch above handles it.
+      if (input.command === "goal" && !goal) {
+        const m = yield* currentModel(input.sessionID)
+        const agentName = input.agent ?? (yield* agents.defaultAgent())
+        const userMsg: SessionV1.User = {
+          id: input.messageID ?? MessageID.ascending(),
+          role: "user",
+          sessionID: input.sessionID,
+          time: { created: Date.now() },
+          agent: agentName,
+          model: { providerID: m.providerID, modelID: m.modelID },
+        }
+        yield* sessions.updateMessage(userMsg)
+        const cmdText: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: `/goal ${input.arguments}`.trim(),
+        }
+        yield* sessions.updatePart(cmdText)
+        const guidancePart: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: userMsg.id,
+          sessionID: input.sessionID,
+          type: "text",
+          text: "/goal has been replaced by /workflow. Use /workflow \"<your goal text>\" to start an autonomous workflow.",
+        }
+        yield* sessions.updatePart(guidancePart)
+        yield* sessions.touch(input.sessionID)
+        return { info: userMsg, parts: [cmdText, guidancePart] }
       }
 
       const cmd = yield* commands.get(input.command)

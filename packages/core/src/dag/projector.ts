@@ -1,6 +1,6 @@
 export * as DagProjector from "./projector"
 
-import { eq } from "drizzle-orm"
+import { and, eq, inArray, sql } from "drizzle-orm"
 import { DateTime, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
@@ -154,7 +154,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(DagEvent.NodeStarted, (event) =>
       updateNode(
         event.data.nodeID,
-        { status: "running", child_session_id: event.data.childSessionID, started_at: toMillis(event.data.timestamp) },
+        { status: "running", child_session_id: event.data.childSessionID, started_at: toMillis(event.data.timestamp), deadline_ms: event.data.deadlineMs ?? null, wake_eligible: event.data.wakeEligible ?? false, wake_reported: false },
         event.durable!.seq,
         event.data.timestamp,
       ),
@@ -170,29 +170,67 @@ export const layer = Layer.effectDiscard(
     )
 
     yield* events.project(DagEvent.NodeFailed, (event) =>
-      updateNode(
-        event.data.nodeID,
-        { status: "failed", error_reason: event.data.reason, completed_at: toMillis(event.data.timestamp) },
-        event.durable!.seq,
-        event.data.timestamp,
-      ),
+      db
+        .update(WorkflowNodeTable)
+        .set({
+          status: "failed",
+          error_reason: event.data.reason,
+          completed_at: toMillis(event.data.timestamp),
+          seq: event.durable!.seq,
+          time_updated: toMillis(event.data.timestamp),
+        })
+        // P1-7: only fail nodes in non-terminal status. Prevents stale
+        // replan-ceiling events from overwriting completed/skipped nodes.
+        .where(and(
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          inArray(WorkflowNodeTable.status, ["running", "pending"]),
+        ))
+        .run()
+        .pipe(Effect.orDie),
     )
 
     yield* events.project(DagEvent.NodeSkipped, (event) =>
-      updateNode(event.data.nodeID, { status: "skipped" }, event.durable!.seq, event.data.timestamp),
+      db
+        .update(WorkflowNodeTable)
+        .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .where(and(
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+        ))
+        .run()
+        .pipe(Effect.orDie),
     )
 
     yield* events.project(DagEvent.NodeCancelled, (event) =>
-      updateNode(event.data.nodeID, { status: "skipped" }, event.durable!.seq, event.data.timestamp),
+      db
+        .update(WorkflowNodeTable)
+        .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .where(and(
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+        ))
+        .run()
+        .pipe(Effect.orDie),
     )
 
     yield* events.project(DagEvent.NodeRestarted, (event) =>
-      updateNode(
-        event.data.nodeID,
-        { status: "pending", child_session_id: null },
-        event.durable!.seq,
-        event.data.timestamp,
-      ),
+      db
+        .update(WorkflowNodeTable)
+        .set({
+          status: "pending",
+          // P1-3: do NOT clear child_session_id here — spawnReady reads it to
+          // abort the old session before spawning the replacement. NodeStarted
+          // will overwrite it with the new child session.
+          replan_attempts: sql`${WorkflowNodeTable.replan_attempts} + 1`,
+          seq: event.durable!.seq,
+          time_updated: toMillis(event.data.timestamp),
+        })
+        // Only restart nodes still in "running" status — if the node completed
+        // or failed between replan's snapshot read and this event publish, the
+        // UPDATE matches 0 rows and the terminal status is preserved.
+        .where(and(eq(WorkflowNodeTable.id, event.data.nodeID), eq(WorkflowNodeTable.status, "running")))
+        .run()
+        .pipe(Effect.orDie),
     )
   }),
 )

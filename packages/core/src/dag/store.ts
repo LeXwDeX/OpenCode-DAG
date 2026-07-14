@@ -1,6 +1,6 @@
 export * as DagStore from "./store"
 
-import { and, desc, eq, gte, lte } from "drizzle-orm"
+import { and, desc, eq, gte, lte, inArray } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
@@ -18,6 +18,7 @@ export interface WorkflowRow {
   status: string
   config: string
   seq: number
+  wakeReported: boolean
   startedAt: number | null
   completedAt: number | null
   timeCreated: number
@@ -38,6 +39,10 @@ export interface NodeRow {
   output: unknown
   errorReason: string | null
   retryCount: number
+  deadlineMs: number | null
+  wakeEligible: boolean
+  wakeReported: boolean
+  replanAttempts: number
   seq: number
   startedAt: number | null
   completedAt: number | null
@@ -62,6 +67,7 @@ const mapWorkflow = (r: typeof WorkflowTable.$inferSelect): WorkflowRow => ({
   status: r.status,
   config: r.config,
   seq: r.seq,
+  wakeReported: r.wake_reported,
   startedAt: r.started_at,
   completedAt: r.completed_at,
   timeCreated: r.time_created,
@@ -82,6 +88,10 @@ const mapNode = (r: typeof WorkflowNodeTable.$inferSelect): NodeRow => ({
   output: r.output,
   errorReason: r.error_reason,
   retryCount: r.retry_count,
+  deadlineMs: r.deadline_ms,
+  wakeEligible: r.wake_eligible,
+  wakeReported: r.wake_reported,
+  replanAttempts: r.replan_attempts,
   seq: r.seq,
   startedAt: r.started_at,
   completedAt: r.completed_at,
@@ -124,6 +134,13 @@ export interface Interface {
   readonly getNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
   readonly getNode: (nodeId: string) => Effect.Effect<NodeRow | undefined>
   readonly getRunningNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
+
+  readonly markNodeWakeReported: (nodeID: string) => Effect.Effect<void>
+  readonly markWorkflowWakeReported: (dagID: string) => Effect.Effect<void>
+  readonly getUnreportedWakeNodes: (sessionID: string) => Effect.Effect<NodeRow[]>
+  readonly getUnreportedWakeWorkflows: (sessionID: string) => Effect.Effect<WorkflowRow[]>
+  readonly getSessionsWithUnreportedWakes: () => Effect.Effect<string[]>
+  readonly hasReportedWakeNodes: (sessionID: string) => Effect.Effect<boolean>
 
   readonly listViolations: (workflowId: string) => Effect.Effect<ViolationRow[]>
   readonly countBySeverity: (workflowId: string) => Effect.Effect<Record<string, number>>
@@ -205,6 +222,94 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         return rows.map(mapNode)
+      }),
+
+      markNodeWakeReported: Effect.fn("DagStore.markNodeWakeReported")(function* (nodeID) {
+        yield* db
+          .update(WorkflowNodeTable)
+          .set({ wake_reported: true })
+          .where(eq(WorkflowNodeTable.id, nodeID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+
+      markWorkflowWakeReported: Effect.fn("DagStore.markWorkflowWakeReported")(function* (dagID) {
+        yield* db
+          .update(WorkflowTable)
+          .set({ wake_reported: true })
+          .where(eq(WorkflowTable.id, dagID))
+          .run()
+          .pipe(Effect.orDie)
+      }),
+
+      getUnreportedWakeNodes: Effect.fn("DagStore.getUnreportedWakeNodes")(function* (sessionID) {
+        const rows = yield* db
+          .select()
+          .from(WorkflowNodeTable)
+          .innerJoin(WorkflowTable, eq(WorkflowNodeTable.workflow_id, WorkflowTable.id))
+          .where(and(
+            eq(WorkflowTable.session_id, sessionID),
+            eq(WorkflowNodeTable.wake_eligible, true),
+            eq(WorkflowNodeTable.wake_reported, false),
+            inArray(WorkflowNodeTable.status, ["completed", "failed"]),
+          ))
+          .all()
+          .pipe(Effect.orDie)
+        return rows.map((r) => mapNode(r.workflow_node))
+      }),
+
+      getUnreportedWakeWorkflows: Effect.fn("DagStore.getUnreportedWakeWorkflows")(function* (sessionID) {
+        const rows = yield* db
+          .select()
+          .from(WorkflowTable)
+          .where(and(
+            eq(WorkflowTable.session_id, sessionID),
+            eq(WorkflowTable.wake_reported, false),
+          ))
+          .all()
+          .pipe(Effect.orDie)
+        return rows
+          .filter((r) => ["completed", "failed", "cancelled"].includes(r.status))
+          .map(mapWorkflow)
+      }),
+
+      getSessionsWithUnreportedWakes: Effect.fn("DagStore.getSessionsWithUnreportedWakes")(function* () {
+        const workflowRows = yield* db
+          .select({ sessionId: WorkflowTable.session_id })
+          .from(WorkflowTable)
+          .where(and(
+            eq(WorkflowTable.wake_reported, false),
+            inArray(WorkflowTable.status, ["completed", "failed", "cancelled"]),
+          ))
+          .all()
+          .pipe(Effect.orDie)
+        const nodeRows = yield* db
+          .select({ sessionId: WorkflowTable.session_id })
+          .from(WorkflowNodeTable)
+          .innerJoin(WorkflowTable, eq(WorkflowNodeTable.workflow_id, WorkflowTable.id))
+          .where(and(
+            eq(WorkflowNodeTable.wake_eligible, true),
+            eq(WorkflowNodeTable.wake_reported, false),
+            inArray(WorkflowNodeTable.status, ["completed", "failed"]),
+          ))
+          .all()
+          .pipe(Effect.orDie)
+        return [...new Set([...workflowRows, ...nodeRows].map((row) => row.sessionId))]
+      }),
+
+      hasReportedWakeNodes: Effect.fn("DagStore.hasReportedWakeNodes")(function* (sessionID) {
+        const rows = yield* db
+          .select({ id: WorkflowNodeTable.id })
+          .from(WorkflowNodeTable)
+          .innerJoin(WorkflowTable, eq(WorkflowNodeTable.workflow_id, WorkflowTable.id))
+          .where(and(
+            eq(WorkflowTable.session_id, sessionID),
+            eq(WorkflowNodeTable.wake_eligible, true),
+            eq(WorkflowNodeTable.wake_reported, true),
+          ))
+          .all()
+          .pipe(Effect.orDie)
+        return rows.length > 0
       }),
 
       listViolations: Effect.fn("DagStore.listViolations")(function* (workflowId) {

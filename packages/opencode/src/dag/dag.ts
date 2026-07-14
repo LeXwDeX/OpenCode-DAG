@@ -13,6 +13,7 @@ import {
   getValidNextWorkflowStatuses,
   getValidNextNodeStatuses,
   isWorkflowTerminalStatus,
+  isNodeTerminalStatus,
   InvalidTransitionError,
   WorkflowStatus,
   NodeStatus,
@@ -49,6 +50,8 @@ export interface WorkflowConfig {
   timeout_ms?: number
   report_strategy?: "silent" | "on_completion" | "on_converge"
   replan_policy?: { allow_kill_running?: boolean; orphan_strategy?: "auto_cancel" | "auto_fail" | "rewire_required" }
+  max_node_replan_attempts?: number
+  max_total_nodes?: number
   nodes: NodeConfig[]
 }
 
@@ -103,11 +106,12 @@ export interface Interface {
   readonly resume: (dagID: string) => Effect.Effect<void, Error>
   readonly cancel: (dagID: string) => Effect.Effect<void, Error>
   readonly complete: (dagID: string) => Effect.Effect<void, Error>
+  readonly fail: (dagID: string, reason: string) => Effect.Effect<void, Error>
   readonly replan: (dagID: string, fragment: { nodes: NodeConfig[] }) => Effect.Effect<
     { cancel: string[]; restart: string[]; replace: string[]; add: string[]; ignore: string[] },
     Error
   >
-  readonly nodeStarted: (dagID: string, nodeID: string, childSessionID: string) => Effect.Effect<void, Error>
+  readonly nodeStarted: (dagID: string, nodeID: string, childSessionID: string, deadlineMs?: number, wakeEligible?: boolean) => Effect.Effect<void, Error>
   readonly nodeCompleted: (dagID: string, nodeID: string, output: unknown) => Effect.Effect<void, Error>
   readonly nodeFailed: (dagID: string, nodeID: string, reason: string, trigger: string) => Effect.Effect<void, Error>
   readonly nodeSkipped: (dagID: string, nodeID: string, reason: string) => Effect.Effect<void, Error>
@@ -116,6 +120,9 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Dag") {}
+
+const DEFAULT_MAX_NODE_REPLAN_ATTEMPTS = 5
+const DEFAULT_MAX_TOTAL_NODES = 100
 
 export const layer = Layer.effect(
   Service,
@@ -188,24 +195,51 @@ export const layer = Layer.effect(
       yield* guardWorkflow(dagID, WorkflowStatus.RUNNING)
       yield* events.publish(DagEvent.WorkflowResumed, { dagID: dagID as ID, timestamp: yield* DateTime.now })
     })
-    const cancel = Effect.fn("Dag.cancel")(function* (dagID: string) {
-      yield* guardWorkflow(dagID, WorkflowStatus.CANCELLED)
-      yield* events.publish(DagEvent.WorkflowCancelled, { dagID: dagID as ID, timestamp: yield* DateTime.now })
-    })
-    const complete = Effect.fn("Dag.complete")(function* (dagID: string) {
-      yield* guardWorkflow(dagID, WorkflowStatus.COMPLETED)
+    // Publish terminal node events for any non-terminal nodes so the read
+    // model stays consistent after workflow termination.  Running nodes get
+    // NodeFailed (or NodeSkipped when failRunning=false); pending/queued
+    // nodes always get NodeSkipped.  The projector's status guards make this
+    // safe against races — a node that transitioned between the read and the
+    // publish is silently left at its current status.
+    const terminateNonTerminalNodes = Effect.fnUntraced(function* (dagID: string, skipReason: "agent_complete" | "workflow_cancelled" | "workflow_failed", failReason: string, failRunning: boolean) {
       const nodes = yield* store.getNodes(dagID)
       for (const node of nodes) {
-        if (node.status === "pending" || node.status === "queued") {
+        if (isNodeTerminalStatus(node.status as NodeStatus)) continue
+        const ts = yield* DateTime.now
+        if (failRunning && node.status === "running") {
+          yield* events.publish(DagEvent.NodeFailed, {
+            dagID: dagID as ID,
+            nodeID: node.id as never,
+            reason: failReason,
+            trigger: "exec_failed" as never,
+            timestamp: ts,
+          })
+        } else {
           yield* events.publish(DagEvent.NodeSkipped, {
             dagID: dagID as ID,
             nodeID: node.id as never,
-            reason: "agent_complete",
-            timestamp: yield* DateTime.now,
+            reason: skipReason,
+            timestamp: ts,
           })
         }
       }
+    })
+
+    const cancel = Effect.fn("Dag.cancel")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.CANCELLED)
+      yield* events.publish(DagEvent.WorkflowCancelled, { dagID: dagID as ID, timestamp: yield* DateTime.now })
+      yield* terminateNonTerminalNodes(dagID, "workflow_cancelled", "workflow_cancelled", false)
+    })
+    const complete = Effect.fn("Dag.complete")(function* (dagID: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.COMPLETED)
+      yield* terminateNonTerminalNodes(dagID, "agent_complete", "", false)
       yield* events.publish(DagEvent.WorkflowCompleted, { dagID: dagID as ID, durationMs: 0 as never, timestamp: yield* DateTime.now })
+    })
+
+    const fail = Effect.fn("Dag.fail")(function* (dagID: string, reason: string) {
+      yield* guardWorkflow(dagID, WorkflowStatus.FAILED)
+      yield* events.publish(DagEvent.WorkflowFailed, { dagID: dagID as ID, reason, failedNodes: [] as never, timestamp: yield* DateTime.now })
+      yield* terminateNonTerminalNodes(dagID, "workflow_failed", reason, true)
     })
 
     const replan = Effect.fn("Dag.replan")(function* (dagID: string, fragment: { nodes: NodeConfig[] }) {
@@ -217,8 +251,31 @@ export const layer = Layer.effect(
         { nodes: fragment.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, restart: n.restart, cancel: n.cancel })) },
       )
       if (plan.errors.length > 0) return yield* Effect.fail(new Error(`Replan rejected: ${plan.errors.join("; ")}`))
-      const fragmentById = new Map(fragment.nodes.map((n) => [n.id, n]))
+
+      const wfConfig = parseWorkflowConfig(wf.config)
+      const maxReplanAttempts = wfConfig?.max_node_replan_attempts ?? DEFAULT_MAX_NODE_REPLAN_ATTEMPTS
+      const maxTotalNodes = wfConfig?.max_total_nodes ?? DEFAULT_MAX_TOTAL_NODES
+
+      // Enforce total node ceiling BEFORE any event publication so a rejected
+      // replan leaves no durable side effects.  Count only non-terminal nodes
+      // — cancelled/completed/skipped rows don't consume live capacity.
+      const liveNodeCount = nodes.filter((n) => !isNodeTerminalStatus(n.status as NodeStatus)).length
+      if (liveNodeCount + plan.add.length > maxTotalNodes) {
+        return yield* Effect.fail(new Error(`Total node ceiling exceeded: ${liveNodeCount} live + ${plan.add.length} new > ${maxTotalNodes} max`))
+      }
+
       const nodeById = new Map(nodes.map((n) => [n.id, n]))
+      const ceilingBreached: string[] = []
+      for (const id of plan.restart) {
+        const existing = nodeById.get(id)
+        if (existing && existing.replanAttempts >= maxReplanAttempts) {
+          yield* nodeFailed(dagID, id, "replan attempt ceiling exceeded", "exec_failed").pipe(Effect.ignore)
+          ceilingBreached.push(id)
+        }
+      }
+      const effectiveRestart = plan.restart.filter((id) => !ceilingBreached.includes(id))
+
+      const fragmentById = new Map(fragment.nodes.map((n) => [n.id, n]))
       for (const id of plan.add) {
         const node = fragmentById.get(id)!
         yield* events.publish(DagEvent.NodeRegistered, {
@@ -255,7 +312,7 @@ export const layer = Layer.effect(
           timestamp: yield* DateTime.now,
         })
       }
-      for (const id of plan.restart) {
+      for (const id of effectiveRestart) {
         yield* events.publish(DagEvent.NodeRestarted, {
           dagID: dagID as ID,
           nodeID: id as never,
@@ -264,12 +321,12 @@ export const layer = Layer.effect(
         })
       }
 
-      // Persist the merged config as the single source of truth BEFORE the
-      // replan signal so DagLoop's WorkflowReplanned handler reads the updated
-      // config when it reloads entry.config from the store.
-      const currentConfig = parseWorkflowConfig(wf.config)
-      if (currentConfig) {
-        const mergedConfig = computeMergedConfig(currentConfig, fragment, plan)
+      // #6: build effective plan that excludes ceiling-breached restarts
+      const effectivePlan = { ...plan, restart: effectiveRestart }
+
+      // Persist the merged config using the effective plan (without ceiling-breached restarts)
+      if (wfConfig) {
+        const mergedConfig = computeMergedConfig(wfConfig, fragment, effectivePlan)
         yield* events.publish(DagEvent.WorkflowConfigUpdated, {
           dagID: dagID as ID,
           config: JSON.stringify(mergedConfig),
@@ -279,20 +336,25 @@ export const layer = Layer.effect(
         yield* Effect.logWarning("Dag.replan: failed to parse current config JSON — node definitions from fragment may be lost", { dagID })
       }
 
+      // #7: max_total_nodes check is non-atomic (read-then-publish). This is
+      // acceptable because the ceiling is a fail-safe, not a correctness
+      // invariant — concurrent replans slightly exceeding the limit is better
+      // than serializing all replans. The projector's INSERT ON CONFLICT
+      // ensures no duplicate node IDs.
       yield* events.publish(DagEvent.WorkflowReplanned, {
         dagID: dagID as ID,
-        added: plan.add.length as never,
-        removed: plan.cancel.length as never,
-        replaced: plan.replace.length as never,
-        restarted: plan.restart.length as never,
+        added: effectivePlan.add.length as never,
+        removed: effectivePlan.cancel.length as never,
+        replaced: effectivePlan.replace.length as never,
+        restarted: effectivePlan.restart.length as never,
         timestamp: yield* DateTime.now,
       })
-      return { cancel: plan.cancel, restart: plan.restart, replace: plan.replace, add: plan.add, ignore: plan.ignore }
+      return { cancel: effectivePlan.cancel, restart: effectivePlan.restart, replace: effectivePlan.replace, add: effectivePlan.add, ignore: effectivePlan.ignore }
     })
 
-    const nodeStarted = Effect.fn("Dag.nodeStarted")(function* (dagID: string, nodeID: string, childSessionID: string) {
+    const nodeStarted = Effect.fn("Dag.nodeStarted")(function* (dagID: string, nodeID: string, childSessionID: string, deadlineMs?: number, wakeEligible?: boolean) {
       yield* guardNode(nodeID, NodeStatus.RUNNING)
-      yield* events.publish(DagEvent.NodeStarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
+      yield* events.publish(DagEvent.NodeStarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, deadlineMs, wakeEligible, timestamp: yield* DateTime.now })
     })
     const nodeCompleted = Effect.fn("Dag.nodeCompleted")(function* (dagID: string, nodeID: string, output: unknown) {
       yield* guardNode(nodeID, NodeStatus.COMPLETED)
@@ -315,7 +377,7 @@ export const layer = Layer.effect(
       yield* events.publish(DagEvent.NodeRestarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
     })
 
-    return Service.of({ create, store, pause, resume, cancel, complete, replan, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
+    return Service.of({ create, store, pause, resume, cancel, complete, fail, replan, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
   }),
 )
 

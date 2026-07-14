@@ -139,4 +139,23 @@ describe("spawnNode completion bridge", () => {
     const terminal = events.filter((e) => e.type === "nodeCompleted" || e.type === "nodeFailed")
     expect(terminal.length).toBe(1)
   })
+
+  it("releases its permit for the next node", async () => {
+    const { events, dagLayer } = makeEventTracker()
+    const semaphore = Semaphore.makeUnsafe(1)
+    const fullLayer = Layer.mergeAll(dagLayer, agentLayer, sessionLayer, makePromptLayer(reply("done")))
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const first = yield* spawnNode(semaphore, makeSpawnInput())
+          yield* Fiber.await(first.fiber)
+          const second = yield* spawnNode(semaphore, makeSpawnInput())
+          yield* Fiber.await(second.fiber)
+        }),
+      ).pipe(Effect.provide(fullLayer)) as Effect.Effect<never>,
+    )
+
+    expect(events.filter((event) => event.type === "nodeCompleted")).toHaveLength(2)
+  })
 })
