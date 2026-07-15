@@ -48,7 +48,7 @@ export const Default = {
   INIT: "init",
   REVIEW: "review",
   GOAL: "goal",
-  SUBGOAL: "subgoal",
+  WORKFLOW: "workflow",
   IMPORT_HOOKS: "import-claude-hooks",
   CREATE_HOOK: "create-hook",
 } as const
@@ -93,14 +93,14 @@ export const layer = Layer.effect(
       }
       commands[Default.GOAL] = {
         name: Default.GOAL,
-        description: "设定持久目标，自动循环执行直到完成 [status|pause|resume|clear|stop]",
+        description: "deprecated — use /workflow instead",
         source: "command",
         template: "",
         hints: ["$ARGUMENTS"],
       }
-      commands[Default.SUBGOAL] = {
-        name: Default.SUBGOAL,
-        description: "管理子目标 [list|<text>|remove <n>|clear]",
+      commands[Default.WORKFLOW] = {
+        name: Default.WORKFLOW,
+        description: "start an autonomous workflow from a free-text goal",
         source: "command",
         template: "",
         hints: ["$ARGUMENTS"],

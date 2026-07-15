@@ -204,7 +204,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(DagEvent.NodeCancelled, (event) =>
       db
         .update(WorkflowNodeTable)
-        .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .set({ status: "failed", error_reason: "cancelled via replan", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),

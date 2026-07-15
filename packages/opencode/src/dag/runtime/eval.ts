@@ -17,39 +17,39 @@ import type { DagStore } from "@opencode-ai/core/dag/store"
  * The condition is a simple expression evaluated against upstream node outputs.
  * Supported syntax: `nodeID.output.field == value` or `nodeID.output.field > N`.
  *
- * Returns true if the node should run, false if it should be skipped.
- * If the condition can't be evaluated (missing outputs, syntax error), returns
- * true (fail-open: run the node rather than silently skipping).
+ * Returns `{ ok: true, value }` — `value` is true (run the node) or false (skip).
+ * Returns `{ ok: false, error }` when the expression cannot be parsed — the
+ * caller MUST fail the node rather than running it on an unevaluable condition.
  *
  * @example
  * ```ts
  * evaluateCondition(
  *   "explore-src.output.findings.size > 0",
- *   { "explore-src": { findings: [1,2,3] } }
- * ) // → true
+ *   { "explore-src": { output: { findings: [1,2,3] } } }
+ * ) // → { ok: true, value: true }
  * ```
  */
 export function evaluateCondition(
   condition: string | undefined,
   outputs: Record<string, unknown>,
-): boolean {
-  if (!condition || condition.trim() === "") return true
+): { ok: true; value: boolean } | { ok: false; error: string } {
+  if (!condition || condition.trim() === "") return { ok: true, value: true }
 
   const match = condition.match(/^(.+?)\s*(==|!=|>=|<=|>|<)\s*(.+)$/)
-  if (!match) return true
+  if (!match) return { ok: false, error: `condition unparseable: ${condition}` }
 
   const [, lhsRaw, op, rhsRaw] = match
   const lhs = resolvePath(lhsRaw.trim(), outputs)
   const rhs = parseValue(rhsRaw.trim())
 
   switch (op) {
-    case "==": return lhs === rhs
-    case "!=": return lhs !== rhs
-    case ">": return (lhs as number) > (rhs as number)
-    case "<": return (lhs as number) < (rhs as number)
-    case ">=": return (lhs as number) >= (rhs as number)
-    case "<=": return (lhs as number) <= (rhs as number)
-    default: return true
+    case "==": return { ok: true, value: lhs === rhs }
+    case "!=": return { ok: true, value: lhs !== rhs }
+    case ">": return { ok: true, value: (lhs as number) > (rhs as number) }
+    case "<": return { ok: true, value: (lhs as number) < (rhs as number) }
+    case ">=": return { ok: true, value: (lhs as number) >= (rhs as number) }
+    case "<=": return { ok: true, value: (lhs as number) <= (rhs as number) }
+    default: return { ok: true, value: true }
   }
 }
 

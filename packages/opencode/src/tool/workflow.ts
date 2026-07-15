@@ -23,9 +23,7 @@ const NodeSchema = Schema.Struct({
   }),
   worker_config: Schema.optional(
     Schema.Struct({
-      use_worktree: Schema.optional(Schema.Boolean),
       timeout_ms: Schema.optional(Schema.Number),
-      retry: Schema.optional(Schema.Struct({ max_attempts: Schema.Number, delay_ms: Schema.Number })),
     }),
   ),
   input_mapping: Schema.optional(Schema.Record(Schema.String, Schema.String)),
@@ -42,13 +40,6 @@ const WorkflowGraphSchema = Schema.Struct({
   description: Schema.optional(Schema.String),
   max_concurrency: Schema.optional(Schema.Number),
   timeout_ms: Schema.optional(Schema.Number),
-  report_strategy: Schema.optional(Schema.Literals(["silent", "on_completion", "on_converge"])),
-  replan_policy: Schema.optional(
-    Schema.Struct({
-      allow_kill_running: Schema.optional(Schema.Boolean),
-      orphan_strategy: Schema.optional(Schema.Literals(["auto_cancel", "auto_fail", "rewire_required"])),
-    }),
-  ),
   max_node_replan_attempts: Schema.optional(Schema.Number),
   max_total_nodes: Schema.optional(Schema.Number),
   nodes: Schema.Array(NodeSchema),

@@ -16,6 +16,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { resolveTemplate } from "../templates/resolve"
 import { spawnNode, attachNodeCompletionWatcher, attachAbandonedSessionWatcher } from "./spawn"
+import { registerCaptureSlot } from "./capture"
 import { evaluateCondition, resolveInputMapping } from "./eval"
 import { reconcileWorkflow, makeSessionStatusChecker } from "./recovery"
 
@@ -25,7 +26,7 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/DagLoop") {}
 
-export const SUCCESS_TERMINAL = new Set(["completed", "skipped", "aborted", "cancelled"])
+export const SUCCESS_TERMINAL = new Set(["completed", "skipped", "aborted"])
 
 export function toSchedulingNodes(nodes: readonly DagStore.NodeRow[]): SchedulingNode[] {
   return nodes.map((n) => ({
@@ -84,7 +85,13 @@ export const layer = Layer.effect(
                 const depNode = allNodes.find((n) => n.id === dep)
                 if (depNode) outputs[dep] = { output: depNode.output }
               }
-              if (!evaluateCondition(nodeConfig.condition, outputs)) {
+              const condResult = evaluateCondition(nodeConfig.condition, outputs)
+              if (!condResult.ok) {
+                yield* dag.nodeFailed(dagID, nodeID, condResult.error, "exec_failed").pipe(Effect.ignore)
+                entry.runtime.markUnsatisfied(nodeID)
+                continue
+              }
+              if (!condResult.value) {
                 entry.runtime.markSatisfied(nodeID)
                 yield* dag.nodeSkipped(dagID, nodeID, "condition_false").pipe(Effect.ignore)
                 continue
@@ -139,6 +146,13 @@ export const layer = Layer.effect(
               promptParts.push({ type: "text", text: `\n\nContext:\n${JSON.stringify(resolvedMapping, null, 2)}` })
             }
 
+            if (nodeConfig?.output_schema) {
+              promptParts.push({
+                type: "text",
+                text: `\n\nYou MUST call the submit_result tool with a JSON payload matching this schema before ending your turn:\n${JSON.stringify(nodeConfig.output_schema, null, 2)}`,
+              })
+            }
+
             entry.runtime.markRunning(nodeID)
             const oldFiber = entry.fibers.get(nodeID)
             yield* abortChild(nodeID, node.childSessionId).pipe(Effect.ignore)
@@ -189,13 +203,13 @@ export const layer = Layer.effect(
 
         const recoverWorkflow = Effect.fn("DagLoop.recoverWorkflow")(function* (wf: DagStore.WorkflowRow) {
           const dagID = wf.id
-          yield* reconcileWorkflow(dagID, checkSessionStatus, (sid) => promptSvc.cancel(sid as never)).pipe(
+          const config = parseWorkflowConfig(wf.config)
+          yield* reconcileWorkflow(dagID, checkSessionStatus, (sid) => promptSvc.cancel(sid as never), config).pipe(
             Effect.provideService(Dag.Service, dag),
             Effect.ignore,
           )
-          const config = parseWorkflowConfig(wf.config)
           const nodes = yield* store.getNodes(dagID)
-          const maxConcurrency = Math.max(1, config?.max_concurrency ?? 4)
+          const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
           const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
           const semaphore = Semaphore.makeUnsafe(maxConcurrency)
           const isPaused = wf.status === "paused"
@@ -213,7 +227,11 @@ export const layer = Layer.effect(
           // report_to_parent had zero consumers before this change.
           for (const node of nodes) {
             if (node.status !== "running" || !node.childSessionId) continue
-            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore, node.deadlineMs, node.startedAt).pipe(
+            const nodeConfig = entry.config?.nodes.find((n) => n.id === node.id)
+            if (nodeConfig?.output_schema && node.childSessionId) {
+              registerCaptureSlot(node.childSessionId, nodeConfig.output_schema as Record<string, unknown>)
+            }
+            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore, node.deadlineMs, node.startedAt, nodeConfig?.output_schema as Record<string, unknown> | undefined).pipe(
               Effect.provideService(Dag.Service, dag),
             )
             entry.fibers.set(node.id, fiber)
@@ -237,7 +255,7 @@ export const layer = Layer.effect(
               if (!wf) return
               const config = parseWorkflowConfig(wf.config)
               const nodes = yield* store.getNodes(dagID)
-              const maxConcurrency = Math.max(1, config?.max_concurrency ?? 4)
+              const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
               const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
               const semaphore = Semaphore.makeUnsafe(maxConcurrency)
               const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
@@ -296,8 +314,7 @@ export const layer = Layer.effect(
                     yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                     entry.fibers.delete(nodeID)
                   }
-                  entry.runtime.markSatisfied(nodeID)
-                  yield* spawnReady(dagID)
+                  entry.runtime.markUnsatisfied(nodeID)
                   yield* checkCompletion(dagID)
                 }),
               )
@@ -488,7 +505,7 @@ export const layer = Layer.effect(
               if (!targetNode && !targetWorkflow) return
 
               const summary = targetNode
-                ? `[DAG Node Result] Node "${targetNode.name}" ${targetNode.status}: ${typeof targetNode.output === "string" ? targetNode.output.slice(0, 500) : targetNode.errorReason ?? "(no output)"}`
+                ? `[DAG Node Result] Node "${targetNode.name}" ${targetNode.status}: ${typeof targetNode.output === "string" ? targetNode.output.slice(0, 500) : targetNode.errorReason ?? "(no output)"}\n\nYou MUST act on this workflow in this turn (workflow tool: extend / control replan / complete / cancel). If this turn ends with the workflow stalled and no action taken, it will be failed with reason "orchestrator_unresponsive".`
                 : `[DAG Workflow ${targetWorkflow!.status}] Workflow "${targetWorkflow!.title}" has reached terminal status.`
 
               // Persist wake_reported AFTER successful delivery only.

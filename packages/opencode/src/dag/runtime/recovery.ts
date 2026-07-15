@@ -21,6 +21,7 @@ export function reconcileWorkflow(
   dagID: string,
   checkSessionStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
   cancelSession?: (sessionID: string) => Effect.Effect<void>,
+  workflowConfig?: { nodes: { id: string; output_schema?: Record<string, unknown> }[] } | undefined,
 ): Effect.Effect<{ reconciled: number; leftRunning: number }, Error, Dag.Service> {
   return Effect.gen(function* () {
     const dag = yield* Dag.Service
@@ -53,7 +54,16 @@ export function reconcileWorkflow(
       )
 
       if (sessionStatus === "completed") {
-        yield* dag.nodeCompleted(dagID, node.id, undefined)
+        const nodeConfig = workflowConfig?.nodes.find((n) => n.id === node.id)
+        if (nodeConfig?.output_schema) {
+          if (node.capturedOutput !== undefined && node.capturedOutput !== null) {
+            yield* dag.nodeCompleted(dagID, node.id, node.capturedOutput)
+          } else {
+            yield* dag.nodeFailed(dagID, node.id, "output_schema declared but submit_result was never successfully called (recovered)", "verdict_fail")
+          }
+        } else {
+          yield* dag.nodeCompleted(dagID, node.id, undefined)
+        }
         reconciled++
       } else if (sessionStatus === "failed") {
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")

@@ -33,7 +33,7 @@ export interface NodeConfig {
   depends_on: string[]
   required: boolean
   prompt_template: { id?: string; inline?: string; input?: Record<string, unknown> }
-  worker_config?: { use_worktree?: boolean; timeout_ms?: number; retry?: { max_attempts: number; delay_ms: number } }
+  worker_config?: { timeout_ms?: number }
   input_mapping?: Record<string, string>
   report_to_parent?: boolean
   condition?: string
@@ -48,8 +48,6 @@ export interface WorkflowConfig {
   description?: string
   max_concurrency: number
   timeout_ms?: number
-  report_strategy?: "silent" | "on_completion" | "on_converge"
-  replan_policy?: { allow_kill_running?: boolean; orphan_strategy?: "auto_cancel" | "auto_fail" | "rewire_required" }
   max_node_replan_attempts?: number
   max_total_nodes?: number
   nodes: NodeConfig[]
@@ -257,11 +255,10 @@ export const layer = Layer.effect(
       const maxTotalNodes = wfConfig?.max_total_nodes ?? DEFAULT_MAX_TOTAL_NODES
 
       // Enforce total node ceiling BEFORE any event publication so a rejected
-      // replan leaves no durable side effects.  Count only non-terminal nodes
-      // — cancelled/completed/skipped rows don't consume live capacity.
-      const liveNodeCount = nodes.filter((n) => !isNodeTerminalStatus(n.status as NodeStatus)).length
-      if (liveNodeCount + plan.add.length > maxTotalNodes) {
-        return yield* Effect.fail(new Error(`Total node ceiling exceeded: ${liveNodeCount} live + ${plan.add.length} new > ${maxTotalNodes} max`))
+      // replan leaves no durable side effects. Count ALL nodes ever registered
+      // (cumulative lifetime) — terminal nodes still count toward the cap.
+      if (nodes.length + plan.add.length > maxTotalNodes) {
+        return yield* Effect.fail(new Error(`Total node ceiling exceeded: ${nodes.length} existing + ${plan.add.length} new > ${maxTotalNodes} max`))
       }
 
       const nodeById = new Map(nodes.map((n) => [n.id, n]))
@@ -369,7 +366,7 @@ export const layer = Layer.effect(
       yield* events.publish(DagEvent.NodeSkipped, { dagID: dagID as ID, nodeID: nodeID as never, reason: reason as never, timestamp: yield* DateTime.now })
     })
     const nodeCancelled = Effect.fn("Dag.nodeCancelled")(function* (dagID: string, nodeID: string) {
-      yield* guardNode(nodeID, NodeStatus.SKIPPED)
+      yield* guardNode(nodeID, NodeStatus.FAILED)
       yield* events.publish(DagEvent.NodeCancelled, { dagID: dagID as ID, nodeID: nodeID as never, timestamp: yield* DateTime.now })
     })
     const nodeRestarted = Effect.fn("Dag.nodeRestarted")(function* (dagID: string, nodeID: string, childSessionID: string) {

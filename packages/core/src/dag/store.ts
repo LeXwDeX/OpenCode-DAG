@@ -37,8 +37,8 @@ export interface NodeRow {
   modelProviderId: string | null
   childSessionId: string | null
   output: unknown
+  capturedOutput: unknown
   errorReason: string | null
-  retryCount: number
   deadlineMs: number | null
   wakeEligible: boolean
   wakeReported: boolean
@@ -86,8 +86,8 @@ const mapNode = (r: typeof WorkflowNodeTable.$inferSelect): NodeRow => ({
   modelProviderId: r.model_provider_id,
   childSessionId: r.child_session_id,
   output: r.output,
+  capturedOutput: r.captured_output,
   errorReason: r.error_reason,
-  retryCount: r.retry_count,
   deadlineMs: r.deadline_ms,
   wakeEligible: r.wake_eligible,
   wakeReported: r.wake_reported,
@@ -134,6 +134,7 @@ export interface Interface {
   readonly getNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
   readonly getNode: (nodeId: string) => Effect.Effect<NodeRow | undefined>
   readonly getRunningNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
+  readonly setCapturedOutput: (childSessionID: string, payload: unknown) => Effect.Effect<void>
 
   readonly markNodeWakeReported: (nodeID: string) => Effect.Effect<void>
   readonly markWorkflowWakeReported: (dagID: string) => Effect.Effect<void>
@@ -222,6 +223,15 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         return rows.map(mapNode)
+      }),
+
+      setCapturedOutput: Effect.fn("DagStore.setCapturedOutput")(function* (childSessionID, payload) {
+        yield* db
+          .update(WorkflowNodeTable)
+          .set({ captured_output: payload })
+          .where(eq(WorkflowNodeTable.child_session_id, childSessionID))
+          .run()
+          .pipe(Effect.orDie)
       }),
 
       markNodeWakeReported: Effect.fn("DagStore.markNodeWakeReported")(function* (nodeID) {

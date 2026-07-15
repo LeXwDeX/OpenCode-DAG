@@ -310,8 +310,26 @@ Templates are read-only prompt fragments under `.opencode/dag-prompts/*.md`. Ref
 
 For ad-hoc prompts, use `prompt_template: { inline: "...", input: {...} }`. Inline templates support `{{var}}` interpolation from `input`.
 
+## Budget Declaration
+
+The engine faithfully executes declared budgets and circuit-breaks on ceiling breach. It does not adaptively adjust — declare what your task needs. Choose values based on task complexity:
+
+- `max_concurrency`: default 5. For independent fan-out (e.g., generating 100 images, migrating 10 packages), declare 10–20 so nodes aren't serialized behind an artificially narrow pipe.
+- `max_node_replan_attempts`: default 5. Increase only if you expect iterative quality-driven convergence (review → revise → review cycles on a single artifact).
+- `max_total_nodes`: default 100. Increase for large-scale decompositions.
+- `worker_config.timeout_ms`: default 10 minutes. Increase for long-running nodes (compilation, large test suites).
+
+## Single-Workspace Discipline
+
+All nodes share the same workspace. Write conflicts are an orchestration concern, not an infrastructure one. Two tiers:
+
+**Tier A — Disjoint write sets**: parallel nodes that write to non-overlapping files/paths can run concurrently without coordination. Structure the decomposition so each node owns a distinct module or file set.
+
+**Tier B — Propose-then-assemble**: when disjoint write sets cannot be guaranteed, parallel nodes should only produce proposals (structured output via `output_schema` + `submit_result`), not directly write files. A single assembly node then applies the changes sequentially. The review point converges on the assembly node's diff, not on scattered parallel edits.
+
 ## Design Principles
 
 - Each node is a real child session with its own message history, tools, and context window. There is no shared memory between nodes — data flows only through `depends_on` and `input_mapping`.
 - `required: true` means failure cancels the entire workflow. Use it for nodes whose output is indispensable (gates, core implementation). Omit it for nodes whose failure is recoverable.
 - Layers are computed automatically from `depends_on`. Nodes in the same layer execute concurrently up to `max_concurrency`. Do not try to control execution order beyond declaring dependencies.
+- When a node declares `output_schema`, the child agent must call `submit_result` to submit its structured result. Failure to call `submit_result` before the session ends results in node failure (`verdict_fail`). Nodes without `output_schema` use plain text output (the final text part of the session).

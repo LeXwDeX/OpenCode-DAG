@@ -14,7 +14,7 @@
  * (Level 2) is a documented boundary — see eval.ts.
  */
 
-import { Effect, Semaphore, Scope, Fiber, Schema, Option, Clock, Cause } from "effect"
+import { Effect, Semaphore, Scope, Fiber, Option, Clock, Cause } from "effect"
 import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { SessionID, MessageID } from "@/session/schema"
@@ -23,6 +23,7 @@ import { SessionPrompt } from "@/session/prompt"
 import { Dag } from "../dag"
 import { InvalidTransitionError } from "@opencode-ai/core/dag/core/types"
 import type { DagStore } from "@opencode-ai/core/dag/store"
+import { registerCaptureSlot, clearCaptureSlot } from "./capture"
 
 type PromptParts = SessionPrompt.PromptInput["parts"]
 
@@ -31,38 +32,6 @@ const DEFAULT_NODE_TIMEOUT_MS = 10 * 60 * 1000
 
 /** Grace period for confirming an abandoned session stopped after restart-induced abort. */
 const ABANDONED_SESSION_GRACE_MS = 30 * 1000
-
-const parseJsonOption = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
-
-function validateAgainstSchema(parsed: unknown, schema: Record<string, unknown>): boolean {
-  const required = schema["required"]
-  if (Array.isArray(required) && typeof parsed === "object" && parsed !== null) {
-    const obj = parsed as Record<string, unknown>
-    if (!required.every((field) => typeof field === "string" && field in obj)) return false
-  }
-  const type = schema["type"]
-  if (typeof type === "string") {
-    if (type === "object" && (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))) return false
-    if (type === "array" && !Array.isArray(parsed)) return false
-    if (type === "string" && typeof parsed !== "string") return false
-    if (type === "number" && typeof parsed !== "number") return false
-    if (type === "boolean" && typeof parsed !== "boolean") return false
-  }
-  return true
-}
-
-const extractStructuredOutput = Effect.fn("Dag.extractStructuredOutput")(function* (rawText: string, outputSchema: Record<string, unknown>) {
-  const parsed = parseJsonOption(rawText)
-  if (Option.isNone(parsed)) {
-    yield* Effect.logWarning("DAG node output schema not satisfied: invalid JSON", { nodeOutput: rawText.slice(0, 200) })
-    return rawText
-  }
-  if (!validateAgainstSchema(parsed.value, outputSchema)) {
-    yield* Effect.logWarning("DAG node output schema not satisfied: parsed JSON does not match declared schema")
-    return rawText
-  }
-  return parsed.value
-})
 
 export interface NodeSpawnInput {
   dagID: string
@@ -134,6 +103,8 @@ export function spawnNode(
 
     yield* dag.nodeStarted(input.dagID, input.nodeID, childSession.id, deadlineMs, input.reportToParent)
 
+    if (input.outputSchema) registerCaptureSlot(childSession.id, input.outputSchema)
+
     const fiber = yield* Effect.forkIn(scope)(
       Effect.gen(function* () {
         // P1(#1): Acquire permit with a deadline-bounded timeout so the node
@@ -184,20 +155,47 @@ export function spawnNode(
             )
             return
           }
-          const rawText = resultOpt.value.parts.findLast((p) => p.type === "text")?.text ?? ""
-          const output = input.outputSchema
-            ? yield* extractStructuredOutput(rawText, input.outputSchema)
-            : rawText
-          yield* dag.nodeCompleted(input.dagID, input.nodeID, output).pipe(
-            Effect.catchIf(
-              (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
-              () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
-            ),
-          )
+          if (input.outputSchema) {
+            clearCaptureSlot(childSession.id)
+            const updatedNode = yield* dag.store.getNode(input.nodeID).pipe(Effect.orDie)
+            const captured = updatedNode?.capturedOutput
+            if (captured !== undefined && captured !== null) {
+              yield* dag.nodeCompleted(input.dagID, input.nodeID, captured).pipe(
+                Effect.catchIf(
+                  (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                  () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
+                ),
+              )
+            } else {
+              yield* dag.nodeFailed(
+                input.dagID, input.nodeID,
+                "output_schema declared but submit_result was never successfully called",
+                "verdict_fail",
+              ).pipe(
+                Effect.catchIf(
+                  (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                  () => Effect.logWarning("nodeFailed (verdict_fail) guard rejected — node already terminal"),
+                ),
+              )
+            }
+          } else {
+            const rawText = resultOpt.value.parts.findLast((p) => p.type === "text")?.text ?? ""
+            yield* dag.nodeCompleted(input.dagID, input.nodeID, rawText).pipe(
+              Effect.catchIf(
+                (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
+              ),
+            )
+          }
         } finally {
           yield* semaphore.release(1)
         }
       }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (input.outputSchema) clearCaptureSlot(childSession.id)
+          }),
+        ),
         Effect.catchCause((cause) =>
           Effect.gen(function* () {
             if (Cause.interruptors(cause).size > 0) return
@@ -240,6 +238,7 @@ export function attachNodeCompletionWatcher(
   semaphore: Semaphore.Semaphore,
   deadlineMs?: number | null,
   startedAt?: number | null,
+  outputSchema?: Record<string, unknown>,
 ): Effect.Effect<Fiber.Fiber<void, unknown>, Error, Dag.Service | Scope.Scope> {
   return Effect.gen(function* () {
     const dag = yield* Dag.Service
@@ -255,7 +254,16 @@ export function attachNodeCompletionWatcher(
           if (now >= effectiveDeadline) {
             const status = yield* checkStatus(childSessionID).pipe(Effect.catch(() => Effect.succeed("unknown" as const)))
             if (status === "completed") {
-              yield* dag.nodeCompleted(dagID, nodeID, undefined).pipe(Effect.ignore)
+              if (outputSchema) clearCaptureSlot(childSessionID)
+              const recoveredNode = outputSchema ? (yield* dag.store.getNode(nodeID).pipe(Effect.orDie)) : undefined
+              const captured = recoveredNode?.capturedOutput
+              if (captured !== undefined && captured !== null) {
+                yield* dag.nodeCompleted(dagID, nodeID, captured).pipe(Effect.ignore)
+              } else if (outputSchema) {
+                yield* dag.nodeFailed(dagID, nodeID, "output_schema declared but submit_result was never successfully called (recovered)", "verdict_fail").pipe(Effect.ignore)
+              } else {
+                yield* dag.nodeCompleted(dagID, nodeID, undefined).pipe(Effect.ignore)
+              }
               return
             }
             if (status === "failed") {
@@ -280,16 +288,20 @@ export function attachNodeCompletionWatcher(
             return
           }
           try {
-            yield* runPollLoop(dag, dagID, nodeID, childSessionID, checkStatus, effectiveDeadline)
+            yield* runPollLoop(dag, dagID, nodeID, childSessionID, checkStatus, effectiveDeadline, outputSchema)
           } finally {
             yield* semaphore.release(1)
           }
         } else {
           yield* semaphore.withPermits(1)(
-            runPollLoop(dag, dagID, nodeID, childSessionID, checkStatus, null),
+            runPollLoop(dag, dagID, nodeID, childSessionID, checkStatus, null, outputSchema),
           )
         }
-      }),
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => { if (outputSchema) clearCaptureSlot(childSessionID) }),
+        ),
+      ),
     )
   })
 }
@@ -301,6 +313,7 @@ function runPollLoop(
   childSessionID: string,
   checkStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
   effectiveDeadline: number | null,
+  outputSchema?: Record<string, unknown>,
 ): Effect.Effect<void, Error, never> {
   return Effect.gen(function* () {
     let status: "active" | "completed" | "failed" | "unknown" = "active"
@@ -328,6 +341,27 @@ function runPollLoop(
     }
 
     if (status === "completed") {
+      if (outputSchema) clearCaptureSlot(childSessionID)
+      const recoveredNode = outputSchema ? (yield* dag.store.getNode(nodeID).pipe(Effect.orDie)) : undefined
+      const captured = recoveredNode?.capturedOutput
+      if (captured !== undefined && captured !== null) {
+        yield* dag.nodeCompleted(dagID, nodeID, captured).pipe(
+          Effect.catchIf(
+            (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+            () => Effect.logWarning("Recovery watcher: nodeCompleted guard rejected — node already terminal"),
+          ),
+        )
+        return
+      }
+      if (outputSchema) {
+        yield* dag.nodeFailed(dagID, nodeID, "output_schema declared but submit_result was never successfully called (recovered)", "verdict_fail").pipe(
+          Effect.catchIf(
+            (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+            () => Effect.logWarning("Recovery watcher: nodeFailed (verdict_fail) guard rejected — node already terminal"),
+          ),
+        )
+        return
+      }
       yield* dag.nodeCompleted(dagID, nodeID, undefined).pipe(
         Effect.catchIf(
           (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,

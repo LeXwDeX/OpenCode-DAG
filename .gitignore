@@ -39,6 +39,9 @@ tsconfig.tsbuildinfo
 # claude
 .claude/
 
+# agents
+.agents/
+
 # OpenSpec artifacts (local-only, not tracked)
 openspec/
 .opencode/commands/

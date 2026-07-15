@@ -57,7 +57,8 @@ Control a running workflow. Operations:
 | `condition` | no | Expression evaluated before spawn; node is skipped if false |
 | `input_mapping` | no | Map upstream node outputs into template variables |
 | `report_to_parent` | no | If true, the parent agent is automatically woken when this node completes or fails. The workflow's terminal status always wakes the parent regardless of this flag |
-| `worker_config` | no | `{ use_worktree, timeout_ms, retry: { max_attempts, delay_ms } }` — `timeout_ms` bounds node execution (defaults to 10 minutes if omitted) |
+| `worker_config` | no | `{ timeout_ms }` — bounds node execution (defaults to 10 minutes if omitted) |
+| `output_schema` | no | JSON Schema; when declared, the child agent must call `submit_result` to submit structured output — failure to submit results in node failure |
 | `restart` | no | (replan only) Re-spawn this running node with new prompt |
 | `cancel` | no | (replan only) Cancel this node |
 
@@ -66,3 +67,14 @@ Control a running workflow. Operations:
 - No `node_complete` action — completion is automatic
 - No `status` / `list` / `history` actions — those are TUI-only via HTTP routes
 - No topology templates — templates are prompt fragments only; you design the graph
+
+## Budgets
+
+The engine faithfully executes declared values and circuit-breaks on ceiling breach. It does not adaptively adjust budgets — declare what your task needs.
+
+| Budget | Default | Description |
+|--------|---------|-------------|
+| `max_concurrency` | 5 | Max parallel nodes. Declare higher for independent fan-out (e.g., 20 for generating 100 images) |
+| `max_node_replan_attempts` | 5 | Max replan restarts per node ID. Breach fails the node with `"replan attempt ceiling exceeded"` |
+| `max_total_nodes` | 100 | Cumulative node cap across the workflow lifetime (initial + extend + replan). Breach rejects the operation |
+| `worker_config.timeout_ms` | 600000 (10 min) | Per-node execution timeout. Queue wait counts toward the deadline |

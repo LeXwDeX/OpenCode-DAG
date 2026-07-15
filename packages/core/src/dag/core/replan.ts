@@ -15,7 +15,7 @@
  *   - absent from fragment → kept unchanged (let finish)
  *   - present, no marker   → kept unchanged
  *   - restart: true        → pause + discard child session + re-spawn with fragment's def
- *   - cancel: true         → cancelled; downstream follows orphan_strategy
+ *   - cancel: true         → cancelled; downstream becomes orphan (auto-failed via cascade)
  * - pending nodes:
  *   - absent from fragment → cancelled (superseded)
  *   - present               → replaced with fragment's def
@@ -33,7 +33,7 @@ export interface ReplanNodeInput {
   depends_on: string[]
   /** Marker: re-spawn this running node's child session with the fragment's def. */
   restart?: boolean
-  /** Marker: cancel this running/pending node; downstream follows orphan_strategy. */
+  /** Marker: cancel this running/pending node; downstream is auto-failed via cascade. */
   cancel?: boolean
 }
 
@@ -227,32 +227,4 @@ export function planReplan(
   }
 
   return { errors, cancel, restart, replace, add, ignore, mergedGraph }
-}
-
-/**
- * Convenience: compute the downstream-orphan set given a set of cancelled nodes.
- *
- * After cancelling nodes, any pending node whose deps include a cancelled node
- * becomes an orphan (its deps can never all complete). This returns the full
- * transitive orphan closure under the `auto_cancel` strategy (the default).
- * The runtime uses this to cascade-cancellations without re-scanning.
- */
-export function computeOrphanCascade(
-  mergedGraph: DependencyGraph,
-  cancelledIds: string[],
-): string[] {
-  const orphans = new Set<string>()
-  const frontier = [...cancelledIds]
-  while (frontier.length > 0) {
-    const id = frontier.pop()!
-    for (const dependent of mergedGraph.getDependents(id)) {
-      if (orphans.has(dependent)) continue
-      // The dependent is an orphan if ALL its deps are cancelled-or-orphan.
-      // Conservative check: if ANY dep is cancelled/orphan, mark it (the
-      // runtime will verify status before actually cancelling).
-      orphans.add(dependent)
-      frontier.push(dependent)
-    }
-  }
-  return Array.from(orphans)
 }

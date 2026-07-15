@@ -1,36 +1,36 @@
 import { describe, expect, it } from "bun:test"
 import { evaluateCondition, resolveInputMapping } from "@/dag/runtime/eval"
-import { WorktreeManager } from "@/dag/runtime/worktree-manager"
-import { DependencyGraph } from "@opencode-ai/core/dag/core/graph"
-import { planReplan, computeOrphanCascade } from "@opencode-ai/core/dag/core/replan"
+import { planReplan } from "@opencode-ai/core/dag/core/replan"
+import { WorkflowRuntime } from "@opencode-ai/core/dag/core/scheduling"
 import { NodeStatus } from "@opencode-ai/core/dag/core/types"
 
 describe("evaluateCondition", () => {
-  it("returns true when condition is empty/undefined (fail-open)", () => {
-    expect(evaluateCondition(undefined, {})).toBe(true)
-    expect(evaluateCondition("", {})).toBe(true)
-    expect(evaluateCondition("   ", {})).toBe(true)
+  it("returns ok:true value:true when condition is empty/undefined", () => {
+    expect(evaluateCondition(undefined, {})).toEqual({ ok: true, value: true })
+    expect(evaluateCondition("", {})).toEqual({ ok: true, value: true })
+    expect(evaluateCondition("   ", {})).toEqual({ ok: true, value: true })
   })
 
-  it("returns true on unrecognized syntax (fail-open)", () => {
-    expect(evaluateCondition("garbage syntax !! @#$", {})).toBe(true)
+  it("returns ok:false with error containing expression text on unparseable syntax", () => {
+    const result = evaluateCondition("foo ??? bar", {})
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toContain("foo ??? bar")
   })
 
   it("evaluates numeric comparisons", () => {
     const outputs = { "explore-src": { output: { count: 3 } } }
-    expect(evaluateCondition("explore-src.output.count > 0", outputs)).toBe(true)
-    expect(evaluateCondition("explore-src.output.count > 5", outputs)).toBe(false)
+    expect(evaluateCondition("explore-src.output.count > 0", outputs)).toEqual({ ok: true, value: true })
+    expect(evaluateCondition("explore-src.output.count > 5", outputs)).toEqual({ ok: true, value: false })
   })
 
   it("evaluates equality", () => {
     const outputs = { node: { output: { status: "ok" } } }
-    expect(evaluateCondition('node.output.status == "ok"', outputs)).toBe(true)
-    expect(evaluateCondition('node.output.status == "fail"', outputs)).toBe(false)
+    expect(evaluateCondition('node.output.status == "ok"', outputs)).toEqual({ ok: true, value: true })
+    expect(evaluateCondition('node.output.status == "fail"', outputs)).toEqual({ ok: true, value: false })
   })
 
-  it("returns true when path resolves to undefined with != (fail-open)", () => {
-    // When the path is missing, undefined != "something" → true
-    expect(evaluateCondition('missing.path != "expected"', {})).toBe(true)
+  it("returns ok:true value:true when path resolves to undefined with != ", () => {
+    expect(evaluateCondition('missing.path != "expected"', {})).toEqual({ ok: true, value: true })
   })
 })
 
@@ -49,15 +49,6 @@ describe("resolveInputMapping", () => {
     const getOutput = (id: string) => (id === "plan" ? { steps: ["a", "b"] } : undefined)
     const result = resolveInputMapping({ steps: "plan.output.steps" }, getOutput)
     expect(result).toEqual({ steps: ["a", "b"] })
-  })
-})
-
-describe("WorktreeManager", () => {
-  it("reads use_worktree flag preserving the canonical pattern", () => {
-    expect(WorktreeManager.readUseWorktree({ use_worktree: true })).toBe(true)
-    expect(WorktreeManager.readUseWorktree({ use_worktree: false })).toBe(false)
-    expect(WorktreeManager.readUseWorktree({})).toBe(false)
-    expect(WorktreeManager.readUseWorktree(undefined)).toBe(false)
   })
 })
 
@@ -86,14 +77,20 @@ describe("planReplan integration (replan from runtime)", () => {
     expect(plan.add).toContain("e")
     expect(plan.cancel).toContain("d") // d is pending-not-in-fragment → cancelled
   })
+})
 
-  it("orphan cascade cancels downstream of cancelled nodes", () => {
-    const g = new DependencyGraph()
-    for (const id of ["a", "b", "c", "d"]) g.addNode(id)
-    g.addEdge("b", "a")
-    g.addEdge("c", "b")
-    g.addEdge("d", "c")
-    const orphans = computeOrphanCascade(g, ["a"])
-    expect(orphans.sort()).toEqual(["b", "c", "d"])
+describe("default concurrency", () => {
+  it("defaults to 5 when max_concurrency is omitted", () => {
+    const config: { max_concurrency?: number } = {}
+    const maxConcurrency = Math.max(1, config.max_concurrency ?? 5)
+    const runtime = new WorkflowRuntime([], maxConcurrency)
+    expect(runtime.maxConcurrency).toBe(5)
+  })
+
+  it("uses declared value without clamping", () => {
+    const config: { max_concurrency?: number } = { max_concurrency: 20 }
+    const maxConcurrency = Math.max(1, config.max_concurrency ?? 5)
+    const runtime = new WorkflowRuntime([], maxConcurrency)
+    expect(runtime.maxConcurrency).toBe(20)
   })
 })

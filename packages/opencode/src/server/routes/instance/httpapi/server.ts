@@ -46,7 +46,6 @@ import { Skill } from "@/skill"
 import { Discovery } from "@/skill/discovery"
 import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
-import { Goal } from "@/goal/goal"
 import { SettingsHook } from "@/hook/settings"
 import { HookRewakeLive } from "@/hook/rewake-live"
 import { SessionHooks } from "@/hook/session-hooks"
@@ -264,7 +263,6 @@ const app = LayerNode.group([
   ProjectV2.node,
   ProjectCopy.node,
   PtyTicket.node,
-  Goal.node,
   // SettingsHook + SessionHooks: previously defined but never wired into
   // the server app graph, so every consumer using
   // `Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))`

@@ -4,7 +4,7 @@ import {
   assignLongestPathRanks,
   assignWavefrontLayers,
 } from "@opencode-ai/core/dag/core/layering"
-import { computeOrphanCascade, planReplan } from "@opencode-ai/core/dag/core/replan"
+import { planReplan } from "@opencode-ai/core/dag/core/replan"
 import {
   assertValidNodeTransition,
   assertValidWorkflowTransition,
@@ -451,27 +451,6 @@ describe("planReplan (D11 simplified model)", () => {
     )
     expect(plan.errors).toEqual([])
     expect(plan.mergedGraph.hasCycle()).toBe(false)
-  })
-})
-
-describe("computeOrphanCascade", () => {
-  it("cascades to direct dependents of cancelled nodes", () => {
-    const g = new DependencyGraph()
-    for (const id of ["a", "b", "c"]) g.addNode(id)
-    g.addEdge("b", "a") // b depends on a
-    g.addEdge("c", "b") // c depends on b
-    const orphans = computeOrphanCascade(g, ["a"])
-    expect(orphans.sort()).toEqual(["b", "c"])
-  })
-
-  it("does not cascade through surviving deps", () => {
-    // c depends on both a (cancelled) and d (surviving). Conservative impl marks c.
-    const g = new DependencyGraph()
-    for (const id of ["a", "c", "d"]) g.addNode(id)
-    g.addEdge("c", "a")
-    g.addEdge("c", "d")
-    const orphans = computeOrphanCascade(g, ["a"])
-    expect(orphans).toContain("c")
   })
 })
 

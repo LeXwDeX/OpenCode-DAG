@@ -39,7 +39,6 @@ export const NodeResponse = Schema.Struct({
   child_session_id: Schema.optional(Schema.String),
   output: Schema.optional(Schema.Unknown),
   error_reason: Schema.optional(Schema.String),
-  retry_count: Schema.Number,
   started_at: Schema.optional(Schema.Number),
   completed_at: Schema.optional(Schema.Number),
 }).annotate({ identifier: "Dag.Node" })

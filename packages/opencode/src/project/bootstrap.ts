@@ -9,7 +9,6 @@ import { InstanceState } from "@/effect/instance-state"
 import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
-import { GoalLoop } from "@/goal/loop"
 import { DagLoop } from "@/dag/runtime/loop"
 import { SettingsHook } from "@/hook/settings"
 import { Service } from "./bootstrap-service"
@@ -23,11 +22,6 @@ export const layer = Layer.effect(
     // Yield each bootstrap dep at layer init so `run` itself has R = never.
     // InstanceStore imports only the lightweight tag from bootstrap-service.ts,
     // so it can depend on bootstrap without importing this implementation graph.
-    //
-    // GoalLoop is intentionally NOT yielded here: it pulls heavyweight transitive
-    // deps (Provider/SessionPrompt → HttpClient) that don't belong in bootstrap's
-    // construction context. It is resolved lazily via serviceOption in `run`,
-    // mirroring how SettingsHook consumers treat their optional dep.
     const config = yield* Config.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
@@ -59,14 +53,8 @@ export const layer = Layer.effect(
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
-      // GoalLoop is provided by AppLayer (provideMerge). Activate its idle-event
+      // DagLoop is provided by AppLayer (provideMerge). Activate its event
       // subscription only when available; skipped in test/standalone contexts.
-      const goalLoop = yield* Effect.serviceOption(GoalLoop.Service)
-      if (goalLoop._tag === "Some") {
-        yield* goalLoop.value
-          .init()
-          .pipe(Effect.catchCause((cause) => Effect.logWarning("goal loop init failed", { cause })))
-      }
       const dagLoop = yield* Effect.serviceOption(DagLoop.Service)
       if (dagLoop._tag === "Some") {
         yield* dagLoop.value
@@ -74,7 +62,7 @@ export const layer = Layer.effect(
           .pipe(Effect.catchCause((cause) => Effect.logWarning("dag loop init failed", { cause })))
       }
       // SettingsHook: Setup fires once per instance bootstrap. Resolved lazily
-      // (like GoalLoop) so bootstrap layers stay self-contained.
+      // so bootstrap layers stay self-contained.
       const settingsHook = yield* Effect.serviceOption(SettingsHook.Service)
       if (settingsHook._tag === "Some") {
         yield* settingsHook.value

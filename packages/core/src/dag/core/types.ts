@@ -50,7 +50,7 @@ export enum SkipReason {
   CONDITION_FALSE = "condition_false",
   /** Agent called `control(complete)` early; remaining nodes abandoned. Non-violation. */
   AGENT_COMPLETE = "agent_complete",
-  /** An upstream dependency was cancelled/skipped and orphan_strategy cascaded. */
+  /** An upstream dependency was cancelled/failed, cascading failure to this node. */
   ORPHAN_CASCADE = "orphan_cascade",
 }
 
