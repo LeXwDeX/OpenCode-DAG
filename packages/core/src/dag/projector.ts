@@ -175,7 +175,7 @@ export const layer = Layer.effectDiscard(
         // a replan-ceiling check) back to completed.
         .where(and(
           eq(WorkflowNodeTable.id, event.data.nodeID),
-          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
         .run()
         .pipe(Effect.orDie),
@@ -207,7 +207,7 @@ export const layer = Layer.effectDiscard(
         .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
           eq(WorkflowNodeTable.id, event.data.nodeID),
-          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
         .run()
         .pipe(Effect.orDie),
@@ -219,7 +219,7 @@ export const layer = Layer.effectDiscard(
         .set({ status: "failed", error_reason: "cancelled via replan", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
           eq(WorkflowNodeTable.id, event.data.nodeID),
-          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
         .run()
         .pipe(Effect.orDie),

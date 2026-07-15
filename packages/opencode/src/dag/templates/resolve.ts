@@ -27,6 +27,12 @@ export interface TemplateRef {
 
 const INTERPOLATION_RE = /\{\{(\w+)\}\}/g
 
+/** A template id must be a single path segment (no separators, no parent refs)
+ * so it cannot escape the dag-prompts directory via path traversal. */
+function isSafeTemplateId(id: string): boolean {
+  return id.length > 0 && !id.includes("/") && !id.includes("\\") && id !== "." && id !== ".."
+}
+
 /**
  * Resolve a template reference into a final prompt string.
  *
@@ -69,6 +75,12 @@ function readInline(content: string): Effect.Effect<string, Error> {
 
 function readById(id: string, projectDir: string): Effect.Effect<string, Error> {
   return Effect.gen(function* () {
+    // Reject path traversal: a template id must be a single path segment so it
+    // cannot escape the dag-prompts directory. "\" is rejected for Windows,
+    // where it is a path separator.
+    if (!isSafeTemplateId(id)) {
+      return yield* Effect.fail(new Error(`Invalid template id: ${id}`))
+    }
     const projectPath = path.join(projectDir, ".opencode", "dag-prompts", `${id}.md`)
     const globalPath = path.join(os.homedir(), ".config", "opencode", "dag-prompts", `${id}.md`)
 

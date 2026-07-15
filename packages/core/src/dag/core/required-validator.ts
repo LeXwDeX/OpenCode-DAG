@@ -3,8 +3,7 @@
  *
  * Pure: validates that a workflow's node config is internally consistent at
  * creation time (and before applying a replan fragment). Specifically checks
- * that required nodes reference existing node ids and that required nodes do
- * not form a cycle among themselves.
+ * that required nodes do not form a cycle among themselves.
  *
  * Ported from dag-iron-laws session/required-nodes-validator.ts. Adapted to
  * the new schema field name (`depends_on` instead of `dependencies`) and to
@@ -43,15 +42,7 @@ export function validateRequiredNodes(config: WorkflowConfigLike): ValidationRes
   const errors: string[] = []
   const warnings: string[] = []
 
-  const nodeIds = config.nodes.map((n) => n.id)
   const requiredNodeIds = config.nodes.filter((n) => n.required).map((n) => n.id)
-
-  // Required nodes must reference existing ids.
-  for (const reqId of requiredNodeIds) {
-    if (!nodeIds.includes(reqId)) {
-      errors.push(`Required node "${reqId}" not found in nodes list`)
-    }
-  }
 
   // Required nodes must not form a cycle among themselves. Reuse DependencyGraph
   // rather than the old validator's bespoke DFS — same semantics, less code.

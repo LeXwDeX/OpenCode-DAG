@@ -174,7 +174,11 @@ export function planReplan(
   for (const n of current.nodes) {
     if (!survivingIds.has(n.id)) continue
     const frag = fragmentNodeById.get(n.id)
-    if (frag && (frag.restart || !isNodeTerminalStatus(n.status))) {
+    // A node takes the fragment's deps only when it is actually being replaced
+    // (pending/queued/paused) or restarted (running with restart marker). A
+    // running node present without a marker is "kept unchanged" and keeps its
+    // current deps; terminal nodes are immutable and keep their current deps.
+    if (frag && (frag.restart || (n.status !== NodeStatus.RUNNING && !isNodeTerminalStatus(n.status)))) {
       for (const depId of frag.depends_on) tryAddEdge(n.id, depId)
     } else {
       for (const depId of n.depends_on) tryAddEdge(n.id, depId)

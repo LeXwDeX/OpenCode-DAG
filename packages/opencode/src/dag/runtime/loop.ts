@@ -273,8 +273,13 @@ export const layer = Layer.effect(
                 yield* entry.evalLock.withPermits(1)(
                   Effect.gen(function* () {
                     entry.fibers.delete(evt.data.nodeID as string)
-                    entry.runtime.markSatisfied(evt.data.nodeID as string)
-                    yield* spawnReady(dagID)
+                    // Guard against stale events: a node already cancelled
+                    // (markUnsatisfied) or already satisfied must not be flipped
+                    // back. Mirrors the NodeFailed handler's isActive guard.
+                    if (entry.runtime.isActive(evt.data.nodeID as string)) {
+                      entry.runtime.markSatisfied(evt.data.nodeID as string)
+                      yield* spawnReady(dagID)
+                    }
                     yield* checkCompletion(dagID)
                   }),
                 )

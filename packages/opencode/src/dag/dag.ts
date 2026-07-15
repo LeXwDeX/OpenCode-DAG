@@ -17,6 +17,7 @@ import {
   isWorkflowTerminalStatus,
   isNodeTerminalStatus,
   InvalidTransitionError,
+  TerminalViolationError,
   WorkflowStatus,
   NodeStatus,
 } from "@opencode-ai/core/dag/core/types"
@@ -106,6 +107,10 @@ export interface Interface {
   readonly complete: (dagID: string) => Effect.Effect<void, Error>
   readonly fail: (dagID: string, reason: string) => Effect.Effect<void, Error>
   readonly replan: (dagID: string, fragment: { nodes: NodeConfig[] }) => Effect.Effect<
+    { cancel: string[]; restart: string[]; replace: string[]; add: string[]; ignore: string[] },
+    Error
+  >
+  readonly extend: (dagID: string, nodes: NodeConfig[]) => Effect.Effect<
     { cancel: string[]; restart: string[]; replace: string[]; add: string[]; ignore: string[] },
     Error
   >
@@ -367,6 +372,29 @@ export const layer = Layer.effect(
       return { cancel: effectivePlan.cancel, restart: effectivePlan.restart, replace: effectivePlan.replace, add: effectivePlan.add, ignore: effectivePlan.ignore }
     })
 
+    const extend = Effect.fn("Dag.extend")(function* (dagID: string, newNodes: NodeConfig[]) {
+      const wf = yield* store.getWorkflow(dagID)
+      if (!wf) return yield* Effect.fail(new Error(`Workflow not found: ${dagID}`))
+      const nodes = yield* store.getNodes(dagID)
+      const config = parseWorkflowConfig(wf.config)
+      const cfgById = new Map((config?.nodes ?? []).map((n) => [n.id, n]))
+      const newIds = new Set(newNodes.map((n) => n.id))
+      // extend is additive: carry forward pending/queued/paused nodes (with their
+      // existing config definition) so replan treats them as "replace" (preserved)
+      // rather than "supersede" (cancelled). Running nodes are intentionally
+      // excluded — a running node absent from the fragment is already kept
+      // unchanged by replan, so there is nothing to carry forward. Terminal
+      // nodes are immutable and need no preservation.
+      const toPreserve = nodes.filter((n) => !newIds.has(n.id) && (n.status === NodeStatus.PENDING || n.status === NodeStatus.QUEUED || n.status === NodeStatus.PAUSED))
+      if (toPreserve.length > 0 && !config) {
+        return yield* Effect.fail(new Error(`Cannot extend: workflow config is unparseable — would silently cancel ${toPreserve.length} pending node(s)`))
+      }
+      const preserved = toPreserve
+        .map((n) => cfgById.get(n.id))
+        .filter((n): n is NodeConfig => n !== undefined)
+      return yield* replan(dagID, { nodes: [...preserved, ...newNodes] })
+    })
+
     const nodeStarted = Effect.fn("Dag.nodeStarted")(function* (dagID: string, nodeID: string, childSessionID: string, deadlineMs?: number, wakeEligible?: boolean) {
       yield* guardNode(nodeID, NodeStatus.RUNNING)
       yield* events.publish(DagEvent.NodeStarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, deadlineMs, wakeEligible, timestamp: yield* DateTime.now })
@@ -384,15 +412,26 @@ export const layer = Layer.effect(
       yield* events.publish(DagEvent.NodeSkipped, { dagID: dagID as ID, nodeID: nodeID as never, reason: reason as never, timestamp: yield* DateTime.now })
     })
     const nodeCancelled = Effect.fn("Dag.nodeCancelled")(function* (dagID: string, nodeID: string) {
-      yield* guardNode(nodeID, NodeStatus.FAILED)
-      yield* events.publish(DagEvent.NodeCancelled, { dagID: dagID as ID, nodeID: nodeID as never, timestamp: yield* DateTime.now })
+      // Cancellation is valid from any non-terminal status; no single target
+      // NodeStatus is a legal transition from all of pending/queued/running/paused
+      // (e.g. PAUSED -> SKIPPED is not in the table), so guard on terminality.
+      const node = yield* store.getNode(nodeID).pipe(Effect.orDie)
+      if (!node) return yield* Effect.fail(new Error(`Node not found: ${nodeID}`))
+      if (isNodeTerminalStatus(node.status as NodeStatus)) {
+        return yield* Effect.fail(new TerminalViolationError(nodeID, node.status, "cancelled"))
+      }
+      yield* events.publish(DagEvent.NodeCancelled, {
+        dagID: dagID as ID,
+        nodeID: nodeID as never,
+        timestamp: yield* DateTime.now,
+      })
     })
     const nodeRestarted = Effect.fn("Dag.nodeRestarted")(function* (dagID: string, nodeID: string, childSessionID: string) {
       yield* guardNode(nodeID, NodeStatus.PENDING)
       yield* events.publish(DagEvent.NodeRestarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
     })
 
-    return Service.of({ create, store, pause, resume, cancel, complete, fail, replan, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
+    return Service.of({ create, store, pause, resume, cancel, complete, fail, replan, extend, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
   }),
 )
 

@@ -89,7 +89,7 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
             }
             case "extend": {
               if (!params.workflow_id || !params.nodes) return yield* Effect.die(new Error("extend requires 'workflow_id' and 'nodes'"))
-              const r = yield* dag.replan(params.workflow_id, { nodes: params.nodes as NodeConfig[] }).pipe(Effect.orDie)
+              const r = yield* dag.extend(params.workflow_id, params.nodes as NodeConfig[]).pipe(Effect.orDie)
               return {
                 title: `Workflow extended: ${r.add.length} nodes added`,
                 output: `<workflow id="${params.workflow_id}" action="extend">\nAdded: ${r.add.join(", ")}\n</workflow>`,
