@@ -1,5 +1,5 @@
 import * as Tool from "./tool"
-import DESCRIPTION from "./workflow.md"
+import { SkillPlugin } from "@opencode-ai/core/plugin/skill"
 import { Effect, Option, Schema } from "effect"
 import { Dag } from "@/dag/dag"
 import type { NodeConfig, WorkflowConfig } from "@/dag/dag"
@@ -11,53 +11,48 @@ const id = "workflow"
 // ============================================================================
 
 const NodeSchema = Schema.Struct({
-  id: Schema.String,
-  name: Schema.String,
-  worker_type: Schema.String,
-  depends_on: Schema.Array(Schema.String),
-  required: Schema.optional(Schema.Boolean),
+  id: Schema.String.annotate({ description: "Unique node identifier, used in depends_on" }),
+  name: Schema.String.annotate({ description: "Human-readable node name" }),
+  worker_type: Schema.String.annotate({ description: "Agent type (explore, build, general, plan, or custom)" }),
+  depends_on: Schema.Array(Schema.String).annotate({ description: "Node IDs this node waits for ([] for root)" }),
+  required: Schema.optional(Schema.Boolean).annotate({ description: "If true and this node fails, the workflow is cancelled. Default: false" }),
   prompt_template: Schema.Struct({
     id: Schema.optional(Schema.String),
     inline: Schema.optional(Schema.String),
     input: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  }),
+  }).annotate({ description: 'Template: { id: "..." } or { inline: "...", input: {...} }' }),
   worker_config: Schema.optional(
     Schema.Struct({
       timeout_ms: Schema.optional(Schema.Number),
     }),
-  ),
-  input_mapping: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  report_to_parent: Schema.optional(Schema.Boolean),
-  condition: Schema.optional(Schema.String),
-  model: Schema.optional(Schema.Struct({ modelID: Schema.String, providerID: Schema.String })),
-  restart: Schema.optional(Schema.Boolean),
-  cancel: Schema.optional(Schema.Boolean),
-  output_schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  ).annotate({ description: "{ timeout_ms } — bounds node execution (defaults to 10 minutes)" }),
+  input_mapping: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({ description: "Map upstream node outputs into template variables" }),
+  report_to_parent: Schema.optional(Schema.Boolean).annotate({ description: "If true, the parent agent is woken when this node completes or fails" }),
+  condition: Schema.optional(Schema.String).annotate({ description: "Expression evaluated before spawn; node is skipped if false" }),
+  model: Schema.optional(Schema.Struct({ modelID: Schema.String, providerID: Schema.String })).annotate({ description: "{ modelID, providerID } override for this node" }),
+  restart: Schema.optional(Schema.Boolean).annotate({ description: "(replan only) Re-spawn this running node with new prompt" }),
+  cancel: Schema.optional(Schema.Boolean).annotate({ description: "(replan only) Cancel this node" }),
+  output_schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate({ description: "JSON Schema; child agent must call submit_result to submit structured output" }),
 })
 
 const WorkflowGraphSchema = Schema.Struct({
-  name: Schema.String,
-  description: Schema.optional(Schema.String),
-  max_concurrency: Schema.optional(Schema.Number),
-  timeout_ms: Schema.optional(Schema.Number),
-  max_node_replan_attempts: Schema.optional(Schema.Number),
-  max_total_nodes: Schema.optional(Schema.Number),
-  nodes: Schema.Array(NodeSchema),
+  name: Schema.String.annotate({ description: "Workflow name" }),
+  max_concurrency: Schema.optional(Schema.Number).annotate({ description: "Max parallel nodes. Default: 5" }),
+  max_node_replan_attempts: Schema.optional(Schema.Number).annotate({ description: "Max replan restarts per node ID. Default: 5" }),
+  max_total_nodes: Schema.optional(Schema.Number).annotate({ description: "Cumulative node cap across the workflow lifetime. Default: 100" }),
+  nodes: Schema.Array(NodeSchema).annotate({ description: "Node declarations" }),
 })
 
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["start", "extend", "control"]),
-  // start fields
-  config: Schema.optional(WorkflowGraphSchema),
-  session_id: Schema.optional(Schema.String),
-  project_id: Schema.optional(Schema.String),
-  title: Schema.optional(Schema.String),
-  // extend + control fields
-  workflow_id: Schema.optional(Schema.String),
-  nodes: Schema.optional(Schema.Array(NodeSchema)),
-  // control fields
-  operation: Schema.optional(Schema.Literals(["pause", "resume", "cancel", "replan", "step", "complete"])),
-  fragment: Schema.optional(WorkflowGraphSchema),
+  action: Schema.Literals(["start", "extend", "control"]).annotate({ description: "start: create workflow; extend: add nodes; control: pause/resume/cancel/replan/step/complete" }),
+  config: Schema.optional(WorkflowGraphSchema).annotate({ description: "(start) Workflow graph definition" }),
+  session_id: Schema.optional(Schema.String).annotate({ description: "(start) Parent session ID" }),
+  project_id: Schema.optional(Schema.String).annotate({ description: "(start) Project ID" }),
+  title: Schema.optional(Schema.String).annotate({ description: "(start) Workflow title" }),
+  workflow_id: Schema.optional(Schema.String).annotate({ description: "(extend/control) Target workflow ID" }),
+  nodes: Schema.optional(Schema.Array(NodeSchema)).annotate({ description: "(extend) Nodes to add" }),
+  operation: Schema.optional(Schema.Literals(["pause", "resume", "cancel", "replan", "step", "complete"])).annotate({ description: "(control) Operation to perform" }),
+  fragment: Schema.optional(WorkflowGraphSchema).annotate({ description: "(control replan) Replan fragment with node definitions" }),
 })
 
 // ============================================================================
@@ -70,7 +65,7 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
   id,
   Effect.gen(function* () {
     return {
-      description: DESCRIPTION,
+      description: SkillPlugin.WorkflowContent,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {

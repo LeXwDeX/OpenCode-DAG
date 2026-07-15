@@ -1,9 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import { Effect, Layer, Fiber, Semaphore } from "effect"
+import { Effect } from "effect"
 import { computeMergedConfig, type NodeConfig, type WorkflowConfig } from "@/dag/dag"
-import { attachNodeCompletionWatcher } from "@/dag/runtime/spawn"
-import { Dag } from "@/dag/dag"
-import type { DagStore } from "@opencode-ai/core/dag/store"
 
 // ============================================================================
 // computeMergedConfig tests (E3: node-def persistence)
@@ -82,101 +79,6 @@ describe("computeMergedConfig", () => {
     })
     expect(merged.name).toBe("my-workflow")
     expect(merged.max_concurrency).toBe(8)
-  })
-})
-
-// ============================================================================
-// attachNodeCompletionWatcher tests (E4: crash recovery fiber re-attachment)
-// ============================================================================
-
-type TrackedEvent = { type: string; nodeID: string; reason?: string }
-
-function makeWatcherEventTracker() {
-  const events: TrackedEvent[] = []
-  const dagLayer = Layer.mock(Dag.Service, {
-    store: {} as DagStore.Interface,
-    create: () => Effect.die("not implemented"),
-    pause: () => Effect.die("not implemented"),
-    resume: () => Effect.die("not implemented"),
-    cancel: () => Effect.die("not implemented"),
-    complete: () => Effect.die("not implemented"),
-    replan: () => Effect.die("not implemented"),
-    nodeStarted: () => Effect.die("not implemented"),
-    nodeCompleted: Effect.fn("stub.nodeCompleted")((_dagID: string, nodeID: string) =>
-      Effect.sync(() => events.push({ type: "nodeCompleted", nodeID })),
-    ),
-    nodeFailed: Effect.fn("stub.nodeFailed")((_dagID: string, nodeID: string, reason: string) =>
-      Effect.sync(() => events.push({ type: "nodeFailed", nodeID, reason })),
-    ),
-    nodeSkipped: () => Effect.die("not implemented"),
-    nodeCancelled: () => Effect.die("not implemented"),
-    nodeRestarted: () => Effect.die("not implemented"),
-  })
-  return { events, dagLayer }
-}
-
-describe("attachNodeCompletionWatcher", () => {
-  it("publishes NodeCompleted when child session completes", async () => {
-    const { events, dagLayer } = makeWatcherEventTracker()
-    let callCount = 0
-    const checkStatus = () =>
-      Effect.succeed((++callCount > 1 ? "completed" : "active") as "active" | "completed")
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fiber = yield* attachNodeCompletionWatcher("dag-1", "node-1", "child-1", checkStatus, Semaphore.makeUnsafe(1))
-          yield* Fiber.await(fiber)
-        }),
-      ).pipe(Effect.provide(dagLayer)) as Effect.Effect<never>,
-    )
-
-    const completed = events.find((e) => e.type === "nodeCompleted")
-    expect(completed).toBeDefined()
-    expect(completed!.nodeID).toBe("node-1")
-  })
-
-  it("publishes NodeFailed when child session fails", async () => {
-    const { events, dagLayer } = makeWatcherEventTracker()
-    const checkStatus = () => Effect.succeed("failed" as const)
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fiber = yield* attachNodeCompletionWatcher("dag-1", "node-1", "child-1", checkStatus, Semaphore.makeUnsafe(1))
-          yield* Fiber.await(fiber)
-        }),
-      ).pipe(Effect.provide(dagLayer)) as Effect.Effect<never>,
-    )
-
-    const failed = events.find((e) => e.type === "nodeFailed")
-    expect(failed).toBeDefined()
-    expect(failed!.reason).toContain("failed")
-  })
-
-  it("treats unknown status as active (continues polling, does not fail)", async () => {
-    const { events, dagLayer } = makeWatcherEventTracker()
-    let callCount = 0
-    // First poll: unknown (0 messages), second poll: completed
-    const checkStatus = () =>
-      Effect.succeed((++callCount === 1 ? "unknown" : "completed") as "unknown" | "completed")
-
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const fiber = yield* attachNodeCompletionWatcher("dag-1", "node-1", "child-1", checkStatus, Semaphore.makeUnsafe(1))
-          yield* Fiber.await(fiber)
-        }),
-      ).pipe(Effect.provide(dagLayer)) as Effect.Effect<never>,
-    )
-
-    // Unknown on first poll did NOT cause nodeFailed — the watcher continued
-    const failed = events.find((e) => e.type === "nodeFailed")
-    expect(failed).toBeUndefined()
-
-    // Second poll saw completed → nodeCompleted published
-    const completed = events.find((e) => e.type === "nodeCompleted")
-    expect(completed).toBeDefined()
   })
 })
 

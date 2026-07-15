@@ -600,16 +600,6 @@
     },
     {
       "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": "0",
-      "generated": null,
-      "name": "retry_count",
-      "entityType": "columns",
-      "table": "workflow_node"
-    },
-    {
-      "type": "integer",
       "notNull": false,
       "autoincrement": false,
       "default": null,

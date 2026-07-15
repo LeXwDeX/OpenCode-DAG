@@ -333,3 +333,44 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 - `required: true` means failure cancels the entire workflow. Use it for nodes whose output is indispensable (gates, core implementation). Omit it for nodes whose failure is recoverable.
 - Layers are computed automatically from `depends_on`. Nodes in the same layer execute concurrently up to `max_concurrency`. Do not try to control execution order beyond declaring dependencies.
 - When a node declares `output_schema`, the child agent must call `submit_result` to submit its structured result. Failure to call `submit_result` before the session ends results in node failure (`verdict_fail`). Nodes without `output_schema` use plain text output (the final text part of the session).
+
+## Tool Reference
+
+### Actions
+
+**start** — Create a workflow from a YAML-declared graph. Returns the workflow ID. Nodes declare `depends_on` (node IDs); layers and execution order are computed automatically.
+
+**extend** — Add nodes to a running workflow. Existing nodes are unaffected; new nodes are immediately eligible for scheduling if their dependencies are met.
+
+**control** — Control a running workflow:
+- `pause` — let running nodes finish, don't spawn new ones
+- `resume` — resume scheduling
+- `cancel` — cancel the entire workflow
+- `replan` — submit a YAML fragment; running nodes can be `restart: true` or `cancel: true`; pending nodes absent from the fragment are cancelled
+- `complete` — early-complete: remaining pending nodes are skipped (non-violation)
+- `step` — pause the workflow (equivalent to `pause`)
+
+### Node Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | yes | Unique node identifier, used in `depends_on` |
+| `name` | yes | Human-readable name |
+| `worker_type` | yes | Agent type (`explore`, `build`, `general`, `plan`, or custom) |
+| `depends_on` | yes | Array of node IDs this node waits for (`[]` for root) |
+| `required` | no | If true and this node fails, the workflow is cancelled. Default: false |
+| `prompt_template` | yes | `{ id: "..." }` or `{ inline: "...", input: {...} }` |
+| `model` | no | `{ modelID, providerID }` override |
+| `condition` | no | Expression evaluated before spawn; node is skipped if false |
+| `input_mapping` | no | Map upstream node outputs into template variables |
+| `report_to_parent` | no | If true, the parent agent is woken when this node completes or fails. The workflow's terminal status always wakes the parent regardless of this flag |
+| `worker_config` | no | `{ timeout_ms }` — bounds node execution (defaults to 10 minutes if omitted) |
+| `output_schema` | no | JSON Schema; when declared, the child agent must call `submit_result` to submit structured output — failure to submit results in node failure |
+| `restart` | no | (replan only) Re-spawn this running node with new prompt |
+| `cancel` | no | (replan only) Cancel this node |
+
+### What NOT to expect
+
+- No `node_complete` action — completion is automatic
+- No `status` / `list` / `history` actions — those are TUI-only via HTTP routes
+- No topology templates — templates are prompt fragments only; you design the graph

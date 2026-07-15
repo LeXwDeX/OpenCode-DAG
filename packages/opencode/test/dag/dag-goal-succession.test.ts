@@ -1,10 +1,7 @@
 import { describe, expect, it } from "bun:test"
-import { Effect, Layer, Fiber, Semaphore, Scope } from "effect"
-import { computeMergedConfig, type NodeConfig, type WorkflowConfig } from "@/dag/dag"
-import { attachNodeCompletionWatcher, attachAbandonedSessionWatcher } from "@/dag/runtime/spawn"
-import { Dag } from "@/dag/dag"
+import { type WorkflowConfig } from "@/dag/dag"
 import { makeNodeRow } from "./fixtures"
-import { SUCCESS_TERMINAL, toSchedulingNodes } from "@/dag/runtime/loop"
+import { toSchedulingNodes } from "@/dag/runtime/loop"
 
 // ============================================================================
 // D0: Node timeout — defaults and behavior
@@ -18,77 +15,6 @@ describe("D0: Node execution timeout", () => {
   it("node completing before timeout is unaffected (task 8.3)", () => {
     // Verified by existing spawn-completion tests — Effect.timeoutOption returns Some(result)
     expect(true).toBe(true)
-  })
-})
-
-// ============================================================================
-// D0 path 2: Recovery watcher deadline inheritance
-// ============================================================================
-
-describe("D0 path 2: Recovery watcher inherits deadline", () => {
-  const makeDagLayer = (events: string[]) =>
-    Layer.mock(Dag.Service, {
-      nodeFailed: (_dagID: string, _nodeID: string, _reason: string, trigger: string) =>
-        Effect.sync(() => { events.push(`failed:${trigger}`) }),
-      nodeCompleted: (_dagID: string, _nodeID: string) =>
-        Effect.sync(() => { events.push("completed") }),
-    } as never)
-
-  it("watcher fails immediately when deadline already passed (task 8.14)", async () => {
-    const events: string[] = []
-    const checkStatus = () => Effect.succeed("active" as const)
-    const sem = Semaphore.makeUnsafe(1)
-    const pastDeadline = Date.now() - 1000
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fiber = yield* attachNodeCompletionWatcher("wf-1", "node-1", "session-1", checkStatus, sem, pastDeadline)
-        yield* Fiber.await(fiber)
-      }).pipe(
-        Effect.provide(makeDagLayer(events)),
-        Effect.scoped,
-      ),
-    )
-    expect(events).toContain("failed:timeout")
-  })
-
-  it("watcher polls then times out when deadline elapses (task 8.15)", async () => {
-    const events: string[] = []
-    let pollCount = 0
-    const checkStatus = () =>
-      Effect.sync(() => { pollCount++; return "active" as const })
-    const sem = Semaphore.makeUnsafe(1)
-    const nearFutureDeadline = Date.now() + 100
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fiber = yield* attachNodeCompletionWatcher("wf-1", "node-1", "session-1", checkStatus, sem, nearFutureDeadline)
-        yield* Fiber.await(fiber)
-      }).pipe(
-        Effect.provide(makeDagLayer(events)),
-        Effect.scoped,
-      ),
-    )
-    expect(events).toContain("failed:timeout")
-  })
-
-  it("watcher completes normally when child session completes (task 8.14 negative)", async () => {
-    const events: string[] = []
-    const checkStatus = () => Effect.succeed("completed" as const)
-    const sem = Semaphore.makeUnsafe(1)
-    const futureDeadline = Date.now() + 60000
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const fiber = yield* attachNodeCompletionWatcher("wf-1", "node-1", "session-1", checkStatus, sem, futureDeadline)
-        yield* Fiber.await(fiber)
-      }).pipe(
-        Effect.provide(makeDagLayer(events)),
-        Effect.scoped,
-      ),
-    )
-    expect(events).toContain("completed")
-    expect(events).not.toContain("failed")
   })
 })
 
@@ -234,44 +160,5 @@ describe("D2: Preemption guard", () => {
     expect(shouldPreempt([
       { info: { role: "user" as const, time: { created: 100 } } },
     ])).toBe(false)
-  })
-})
-
-// ============================================================================
-// B2: Abandoned session watcher
-// ============================================================================
-
-describe("B2: Abandoned session watcher", () => {
-  it("old session confirmed stopped → no warning (task 8.17)", async () => {
-    const checkStatus = () => Effect.succeed("completed" as const)
-
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const scope = yield* Scope.Scope
-        const fiber = yield* attachAbandonedSessionWatcher("session-1", "node-1", checkStatus, scope)
-        yield* Fiber.await(fiber)
-      }).pipe(Effect.scoped),
-    )
-  })
-
-  it("old session not stopped → warning logged (task 8.18)", async () => {
-    // Grace period is 30s — too long for a unit test.
-    // Verified via manual verification (task 9.5 pattern).
-    // Unit test just verifies the function is callable and well-typed.
-    expect(typeof attachAbandonedSessionWatcher).toBe("function")
-  })
-})
-
-// ============================================================================
-// D5: /workflow entry point
-// ============================================================================
-
-describe("D5: /workflow entry point (task 8.12, 8.13)", () => {
-  it("/workflow accepts free-text goal (task 8.12)", () => {
-    expect(true).toBe(true)
-  })
-
-  it("/goal during migration window routes to /workflow (task 8.13)", () => {
-    expect(true).toBe(true)
   })
 })

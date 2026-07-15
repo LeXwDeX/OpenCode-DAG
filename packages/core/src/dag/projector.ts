@@ -161,12 +161,24 @@ export const layer = Layer.effectDiscard(
     )
 
     yield* events.project(DagEvent.NodeCompleted, (event) =>
-      updateNode(
-        event.data.nodeID,
-        { status: "completed", output: event.data.output, completed_at: toMillis(event.data.timestamp) },
-        event.durable!.seq,
-        event.data.timestamp,
-      ),
+      db
+        .update(WorkflowNodeTable)
+        .set({
+          status: "completed",
+          output: event.data.output,
+          completed_at: toMillis(event.data.timestamp),
+          seq: event.durable!.seq,
+          time_updated: toMillis(event.data.timestamp),
+        })
+        // Only complete nodes in non-terminal status. Prevents a stale
+        // NodeCompleted from flipping an already-terminal node (e.g. failed by
+        // a replan-ceiling check) back to completed.
+        .where(and(
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "running"]),
+        ))
+        .run()
+        .pipe(Effect.orDie),
     )
 
     yield* events.project(DagEvent.NodeFailed, (event) =>

@@ -1,6 +1,6 @@
 export * as DagLoop from "./loop"
 
-import { Effect, Layer, Context, Stream, Scope, Semaphore, Fiber } from "effect"
+import { Effect, Layer, Context, Stream, Semaphore, Fiber } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -15,7 +15,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { resolveTemplate } from "../templates/resolve"
-import { spawnNode, attachNodeCompletionWatcher, attachAbandonedSessionWatcher } from "./spawn"
+import { spawnNode } from "./spawn"
 import { registerCaptureSlot } from "./capture"
 import { evaluateCondition, resolveInputMapping } from "./eval"
 import { reconcileWorkflow, makeSessionStatusChecker } from "./recovery"
@@ -64,7 +64,6 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make(
       Effect.fn("DagLoop.state")(function* (ctx) {
-        const scope = yield* Scope.Scope
         const runtimes = new Map<string, WorkflowEntry>()
         const wakeInFlight = new Set<string>()
         const wakePending = new Set<string>()
@@ -198,7 +197,6 @@ export const layer = Layer.effect(
         const abortChild = Effect.fnUntraced(function* (nodeID: string, childSessionId: string | null) {
           if (!childSessionId) return
           yield* promptSvc.cancel(childSessionId as never).pipe(Effect.ignore)
-          yield* attachAbandonedSessionWatcher(childSessionId, nodeID, checkSessionStatus, scope).pipe(Effect.ignore)
         })
 
         const recoverWorkflow = Effect.fn("DagLoop.recoverWorkflow")(function* (wf: DagStore.WorkflowRow) {
@@ -216,25 +214,18 @@ export const layer = Layer.effect(
           if (isPaused) runtime.setPaused(true)
           const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
           runtimes.set(dagID, entry)
-          // Re-attach completion watchers for running nodes whose child sessions
-          // may still be active. Without this, no fiber observes the child
-          // session's terminal event and the node stays stuck in running.
-          // Note (P1-8): pre-existing running nodes from before the migration
-          // have wake_eligible=false. Their workflow-terminal wake is still
-          // unconditional via getUnreportedWakeWorkflows, so the closure loop
-          // is not broken — only per-node mid-workflow milestone wakes are
-          // missed for these legacy nodes, which is acceptable since
-          // report_to_parent had zero consumers before this change.
+          // Re-register capture slots for running nodes whose child sessions
+          // may still call submit_result. No persistent watcher is forked
+          // (by design — see dag-module-cleanup design D1). reconcileWorkflow
+          // (above) already published terminal events for settled sessions.
+          // Still-active sessions whose fibers died with the crashed process
+          // remain running until a post-crash continuation mechanism is built.
           for (const node of nodes) {
             if (node.status !== "running" || !node.childSessionId) continue
             const nodeConfig = entry.config?.nodes.find((n) => n.id === node.id)
             if (nodeConfig?.output_schema && node.childSessionId) {
               registerCaptureSlot(node.childSessionId, nodeConfig.output_schema as Record<string, unknown>)
             }
-            const fiber = yield* attachNodeCompletionWatcher(dagID, node.id, node.childSessionId, checkSessionStatus, entry.semaphore, node.deadlineMs, node.startedAt, nodeConfig?.output_schema as Record<string, unknown> | undefined).pipe(
-              Effect.provideService(Dag.Service, dag),
-            )
-            entry.fibers.set(node.id, fiber)
           }
           if (!isPaused) {
             yield* entry.evalLock.withPermits(1)(

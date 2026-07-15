@@ -8,6 +8,8 @@ import { DagStore } from "@opencode-ai/core/dag/store"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { validateRequiredNodes } from "@opencode-ai/core/dag/core/required-validator"
+import { buildGraph } from "@opencode-ai/core/dag/core/scheduling"
+import { CycleError } from "@opencode-ai/core/dag/core/graph"
 import { planReplan } from "@opencode-ai/core/dag/core/replan"
 import {
   getValidNextWorkflowStatuses,
@@ -45,9 +47,7 @@ export interface NodeConfig {
 
 export interface WorkflowConfig {
   name: string
-  description?: string
-  max_concurrency: number
-  timeout_ms?: number
+  max_concurrency?: number
   max_node_replan_attempts?: number
   max_total_nodes?: number
   nodes: NodeConfig[]
@@ -156,6 +156,24 @@ export const layer = Layer.effect(
         nodes: input.config.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, required: n.required })),
       })
       if (!validation.valid) return yield* Effect.fail(new Error(`Invalid workflow config: ${validation.errors.join("; ")}`))
+
+      // Full-graph cycle detection — validates ALL nodes (not just required),
+      // so a cycle among optional nodes cannot silently create a zombie graph.
+      // buildGraph throws CycleError via addEdge's wouldCreateCycle pre-check.
+      const cyclePath: string[] | null = yield* Effect.sync(() => {
+        try {
+          const graph = buildGraph(
+            input.config.nodes.map((n) => ({ id: n.id, dependsOn: n.depends_on, status: "pending" as const, required: n.required })),
+          )
+          return graph.hasCycle() ? (graph.findCycles()[0] ?? null) : null
+        } catch (e) {
+          if (e instanceof CycleError) return e.cycle
+          throw e
+        }
+      })
+      if (cyclePath) {
+        return yield* Effect.fail(new Error(`Workflow config contains a dependency cycle: ${cyclePath.join(" -> ")}`))
+      }
 
       const dagID = DagEvent.DagID.create()
       const ts = yield* DateTime.now

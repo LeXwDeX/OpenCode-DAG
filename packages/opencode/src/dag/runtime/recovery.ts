@@ -69,9 +69,11 @@ export function reconcileWorkflow(
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
-        // active or unknown: leave running — the recovery watcher will poll
-        // until a definitive status arrives. A session with 0 messages may
-        // legitimately still be starting (semaphore queue, provider latency).
+        // active or unknown: leave running. The child session's in-process
+        // execution fiber died with the crashed process; its DB status may
+        // not yet reflect terminal. No persistent watcher is forked (by
+        // design — see dag-module-cleanup design D1). Post-crash continuation
+        // recovery requires a separate explicit mechanism not yet built.
         leftRunning++
       }
     }

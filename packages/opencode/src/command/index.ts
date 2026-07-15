@@ -47,8 +47,6 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
-  GOAL: "goal",
-  WORKFLOW: "workflow",
   IMPORT_HOOKS: "import-claude-hooks",
   CREATE_HOOK: "create-hook",
 } as const
@@ -90,20 +88,6 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
-      }
-      commands[Default.GOAL] = {
-        name: Default.GOAL,
-        description: "deprecated — use /workflow instead",
-        source: "command",
-        template: "",
-        hints: ["$ARGUMENTS"],
-      }
-      commands[Default.WORKFLOW] = {
-        name: Default.WORKFLOW,
-        description: "start an autonomous workflow from a free-text goal",
-        source: "command",
-        template: "",
-        hints: ["$ARGUMENTS"],
       }
       commands[Default.IMPORT_HOOKS] = {
         name: Default.IMPORT_HOOKS,

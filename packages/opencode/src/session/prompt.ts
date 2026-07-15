@@ -1811,65 +1811,6 @@ export const layer = Layer.effect(
         yield* sessions.touch(input.sessionID)
         return { info: userMsg, parts: [cmdText, responsePart] }
       }
-      // /workflow command dispatch — inject the goal text as a regular prompt and
-      // start a normal agent turn. The workflow skill + tool are already available
-      // to the agent; it will use workflow.start to build a graph autonomously.
-      // No deterministic bootstrap template (D5).
-      if (input.command === "workflow") {
-        const m = yield* currentModel(input.sessionID)
-        const agentName = input.agent ?? (yield* agents.defaultAgent())
-        const userMsg: SessionV1.User = {
-          id: input.messageID ?? MessageID.ascending(),
-          role: "user",
-          sessionID: input.sessionID,
-          time: { created: Date.now() },
-          agent: agentName,
-          model: { providerID: m.providerID, modelID: m.modelID },
-        }
-        yield* sessions.updateMessage(userMsg)
-        const cmdText: SessionV1.TextPart = {
-          id: PartID.ascending(),
-          messageID: userMsg.id,
-          sessionID: input.sessionID,
-          type: "text",
-          text: `/workflow ${input.arguments}`.trim(),
-        }
-        yield* sessions.updatePart(cmdText)
-        yield* sessions.touch(input.sessionID)
-        return yield* loop({ sessionID: input.sessionID })
-      }
-      // /goal and /subgoal are deprecated — route ALL invocations to /workflow with notice
-      if (input.command === "goal" || input.command === "subgoal") {
-        const m = yield* currentModel(input.sessionID)
-        const agentName = input.agent ?? (yield* agents.defaultAgent())
-        const userMsg: SessionV1.User = {
-          id: input.messageID ?? MessageID.ascending(),
-          role: "user",
-          sessionID: input.sessionID,
-          time: { created: Date.now() },
-          agent: agentName,
-          model: { providerID: m.providerID, modelID: m.modelID },
-        }
-        yield* sessions.updateMessage(userMsg)
-        const cmdText: SessionV1.TextPart = {
-          id: PartID.ascending(),
-          messageID: userMsg.id,
-          sessionID: input.sessionID,
-          type: "text",
-          text: `/${input.command} ${input.arguments} (deprecated — use /workflow)`,
-        }
-        yield* sessions.updatePart(cmdText)
-        const deprecationPart: SessionV1.TextPart = {
-          id: PartID.ascending(),
-          messageID: userMsg.id,
-          sessionID: input.sessionID,
-          type: "text",
-          text: `⚠️ /${input.command} is deprecated in favor of /workflow. Routing you there now.`,
-        }
-        yield* sessions.updatePart(deprecationPart)
-        yield* sessions.touch(input.sessionID)
-        return yield* loop({ sessionID: input.sessionID })
-      }
 
       const cmd = yield* commands.get(input.command)
       if (!cmd) {

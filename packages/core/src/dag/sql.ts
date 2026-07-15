@@ -62,7 +62,6 @@ export const WorkflowNodeTable = sqliteTable(
     child_session_id: text(),
     output: text({ mode: "json" }).$type<unknown>(),
     error_reason: text(),
-    retry_count: integer().notNull().default(0),
     captured_output: text({ mode: "json" }).$type<unknown>(), // durable payload from submit_result (survives restart)
     deadline_ms: integer(), // absolute deadline (spawnedAt + timeout_ms) for D0 termination boundary
     wake_eligible: integer({ mode: "boolean" }).notNull().default(false), // D6: node has report_to_parent=true

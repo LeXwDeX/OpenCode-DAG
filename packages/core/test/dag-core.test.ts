@@ -1,9 +1,5 @@
 import { describe, expect, it } from "bun:test"
 import { CycleError, DependencyGraph, NodeNotFoundError } from "@opencode-ai/core/dag/core/graph"
-import {
-  assignLongestPathRanks,
-  assignWavefrontLayers,
-} from "@opencode-ai/core/dag/core/layering"
 import { planReplan } from "@opencode-ai/core/dag/core/replan"
 import {
   assertValidNodeTransition,
@@ -125,64 +121,6 @@ describe("DependencyGraph", () => {
     const g2 = DependencyGraph.fromJSON(json)
     expect(g2.getDependencies("b")).toEqual(["a"])
     expect(g2.hasEdge("b", "a")).toBe(true)
-  })
-})
-
-describe("layering helpers (D10)", () => {
-  it("assignWavefrontLayers matches getLayers indices", () => {
-    const g = new DependencyGraph()
-    for (const id of ["a", "b", "c", "d"]) g.addNode(id)
-    g.addEdge("d", "a")
-    g.addEdge("d", "b")
-    g.addEdge("d", "c")
-    const levels = assignWavefrontLayers(g)
-    expect(levels.get("a")).toBe(0)
-    expect(levels.get("b")).toBe(0)
-    expect(levels.get("c")).toBe(0)
-    expect(levels.get("d")).toBe(1)
-  })
-
-  it("assignLongestPathRanks puts bypass-target deeper than wavefront", () => {
-    // Shape: a -> b, a -> c, b -> d. c and d both transitively depend on a,
-    // but d is deeper by longest-path (a=0,b=1,d=2). c is at depth 1 by both.
-    // Wavefront: layer 0 = [a], layer 1 = [b, c] (b and c both ready once a done),
-    //            layer 2 = [d] (d ready once b done). So wavefront also gives d=2 here.
-    // The divergence between wavefront and longest-path appears for shapes like
-    // a->b, a->c, b->d, c->d where d has two deps of differing depth.
-    const g = new DependencyGraph()
-    for (const id of ["a", "b", "c", "d"]) g.addNode(id)
-    g.addEdge("b", "a")
-    g.addEdge("c", "a")
-    g.addEdge("d", "b")
-    const wf = assignWavefrontLayers(g)
-    const lp = assignLongestPathRanks(g)
-    expect(wf.get("a")).toBe(0)
-    expect(wf.get("b")).toBe(1)
-    expect(wf.get("c")).toBe(1)
-    expect(wf.get("d")).toBe(2) // d waits for b
-    expect(lp.get("a")).toBe(0)
-    expect(lp.get("b")).toBe(1)
-    expect(lp.get("c")).toBe(1)
-    expect(lp.get("d")).toBe(2)
-  })
-
-  it("wavefront vs longest-path diverge on diamond-with-bypass", () => {
-    // Shape: a -> b, a -> c, b -> d, c -> d. d has two deps (b at depth 1, c at depth 1).
-    // Both wavefront and longest-path agree here (d=2). The real divergence is
-    // a -> b, a -> c, b -> c (c depends on a AND b). Wavefront: a=0, b=1, c=2
-    // (c waits for b). Longest-path: same. They only truly diverge when a node
-    // has deps in different layers but could run earlier — which wavefront forbids.
-    // This test confirms they agree on the diamond.
-    const g = new DependencyGraph()
-    for (const id of ["a", "b", "c", "d"]) g.addNode(id)
-    g.addEdge("b", "a")
-    g.addEdge("c", "a")
-    g.addEdge("d", "b")
-    g.addEdge("d", "c")
-    const wf = assignWavefrontLayers(g)
-    const lp = assignLongestPathRanks(g)
-    expect(wf.get("d")).toBe(2)
-    expect(lp.get("d")).toBe(2)
   })
 })
 

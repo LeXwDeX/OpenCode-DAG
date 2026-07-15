@@ -83,7 +83,7 @@ export default {
           \`child_session_id\` text,
           \`output\` text,
           \`error_reason\` text,
-          \`retry_count\` integer DEFAULT 0 NOT NULL,
+          \`captured_output\` text,
           \`deadline_ms\` integer,
           \`wake_eligible\` integer DEFAULT false NOT NULL,
           \`wake_reported\` integer DEFAULT false NOT NULL,
