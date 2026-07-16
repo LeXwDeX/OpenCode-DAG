@@ -47,8 +47,6 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
-  GOAL: "goal",
-  SUBGOAL: "subgoal",
   IMPORT_HOOKS: "import-claude-hooks",
   CREATE_HOOK: "create-hook",
 } as const
@@ -90,20 +88,6 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
-      }
-      commands[Default.GOAL] = {
-        name: Default.GOAL,
-        description: "设定持久目标，自动循环执行直到完成 [status|pause|resume|clear|stop]",
-        source: "command",
-        template: "",
-        hints: ["$ARGUMENTS"],
-      }
-      commands[Default.SUBGOAL] = {
-        name: Default.SUBGOAL,
-        description: "管理子目标 [list|<text>|remove <n>|clear]",
-        source: "command",
-        template: "",
-        hints: ["$ARGUMENTS"],
       }
       commands[Default.IMPORT_HOOKS] = {
         name: Default.IMPORT_HOOKS,

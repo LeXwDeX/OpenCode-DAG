@@ -42,6 +42,10 @@ const CONFIGURE_HOOKS_SKILL_NAME = "configure-hooks"
 const CONFIGURE_HOOKS_SKILL_DESCRIPTION = SkillPlugin.ConfigureHooksDescription
 const CONFIGURE_HOOKS_SKILL_BODY = SkillPlugin.ConfigureHooksContent
 
+const WORKFLOW_SKILL_NAME = "workflow"
+const WORKFLOW_SKILL_DESCRIPTION = SkillPlugin.WorkflowDescription
+const WORKFLOW_SKILL_BODY = SkillPlugin.WorkflowContent
+
 export const Info = Schema.Struct({
   name: Schema.String,
   description: Schema.optional(Schema.String),
@@ -294,6 +298,12 @@ export const layer = Layer.effect(
           description: CONFIGURE_HOOKS_SKILL_DESCRIPTION,
           location: "<built-in>",
           content: CONFIGURE_HOOKS_SKILL_BODY,
+        }
+        s.skills[WORKFLOW_SKILL_NAME] = {
+          name: WORKFLOW_SKILL_NAME,
+          description: WORKFLOW_SKILL_DESCRIPTION,
+          location: "<built-in>",
+          content: WORKFLOW_SKILL_BODY,
         }
         yield* loadSkills(s, yield* InstanceState.get(discovered), events)
         return s

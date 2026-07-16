@@ -1183,28 +1183,6 @@ const scenarios: Scenario[] = [
       check(stable(body) === stable(ctx.state.todos), "todos should match seeded state")
     }),
   http.protected
-    .get("/session/{sessionID}/goal", "session.goal")
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Goal session" })
-        yield* ctx.goal(session.id, "cover session goal")
-        return { session }
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/goal", { sessionID: ctx.state.session.id }),
-      headers: ctx.headers(),
-    }))
-    .json(200, (body) => {
-      object(body)
-      check(body.goal === "cover session goal", "goal text should match seeded state")
-      check(body.status === "active", "status should be active for a freshly seeded goal")
-      check(body.turnsUsed === 0, "turnsUsed should be 0 for a freshly seeded goal")
-      check(body.maxTurns === 20, "maxTurns should be the default (20)")
-      check(Array.isArray(body.subgoals) && body.subgoals.length === 0, "subgoals should be an empty array")
-      check(!("pausedReason" in body), "pausedReason should be absent when goal is active")
-    }),
-  http.protected
     .post("/session/{sessionID}/hook", "session.hook.add")
     .seeded((ctx) => ctx.session({ title: "Hook session" }))
     .at((ctx) => ({
@@ -1733,6 +1711,36 @@ const scenarios: Scenario[] = [
     .probe({ path: "/global/upgrade", body: { target: 1 } })
     .at(() => ({ path: "/global/upgrade", body: { target: 1 } }))
     .status(400),
+
+  // ── DAG workflow routes ──────────────────────────────────────────────
+  http.protected.get("/dag", "dag.list").json(200, array, "status"),
+  http.protected
+    .get("/dag/session/{sessionID}", "dag.bySession")
+    .seeded((ctx) => ctx.session({ title: "DAG session" }))
+    .at((ctx) => ({ path: route("/dag/session/{sessionID}", { sessionID: ctx.state.id }), headers: ctx.headers() }))
+    .json(200, array, "status"),
+  http.protected
+    .get("/dag/{dagID}", "dag.detail")
+    .at(() => ({ path: route("/dag/{dagID}", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .get("/dag/{dagID}/nodes", "dag.nodes")
+    .at(() => ({ path: route("/dag/{dagID}/nodes", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .get("/dag/{dagID}/nodes/{nodeID}", "dag.nodeDetail")
+    .at(() => ({ path: route("/dag/{dagID}/nodes/{nodeID}", { dagID: "dag_nonexistent", nodeID: "n1" }), headers: {} as Record<string, string> }))
+    .status(404),
+  http.protected
+    .post("/dag/{dagID}/control", "dag.control")
+    .mutating()
+    .at(() => ({ path: route("/dag/{dagID}/control", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string>, body: { operation: "pause" } }))
+    .status(404),
+  http.protected
+    .post("/dag/{dagID}/control", "dag.control")
+    .mutating()
+    .at(() => ({ path: route("/dag/{dagID}/control", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string>, body: { operation: "replan", fragment: { nodes: [] } } }))
+    .status(404),
 ]
 
 const llmScenarios = new Set([

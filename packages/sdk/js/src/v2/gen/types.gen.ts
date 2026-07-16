@@ -3845,6 +3845,37 @@ export type ProjectDirectories = Array<{
   strategy?: string
 }>
 
+export type DagWorkflow = {
+  id: string
+  project_id: string
+  session_id: string
+  title: string
+  status: string
+  config: string
+  seq: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  started_at?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  completed_at?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_created: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  time_updated: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
+export type DagNode = {
+  id: string
+  workflow_id: string
+  name: string
+  worker_type: string
+  status: string
+  required: boolean
+  depends_on: Array<string>
+  model_id?: string
+  model_provider_id?: string
+  child_session_id?: string
+  output?: unknown
+  error_reason?: string
+  started_at?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  completed_at?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+}
+
 export type LocationInfo = {
   directory: string
   workspaceID?: string
@@ -9932,40 +9963,6 @@ export type SessionTodoResponses = {
 
 export type SessionTodoResponse = SessionTodoResponses[keyof SessionTodoResponses]
 
-export type SessionGoalData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/goal"
-}
-
-export type SessionGoalErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionGoalError = SessionGoalErrors[keyof SessionGoalErrors]
-
-export type SessionGoalResponses = {
-  /**
-   * Goal state
-   */
-  200: Goal
-}
-
-export type SessionGoalResponse = SessionGoalResponses[keyof SessionGoalResponses]
-
 export type SessionHookListData = {
   body?: never
   path: {
@@ -11436,6 +11433,203 @@ export type TuiControlResponseResponses = {
 }
 
 export type TuiControlResponseResponse = TuiControlResponseResponses[keyof TuiControlResponseResponses]
+
+export type DagListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag"
+}
+
+export type DagListErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagListError = DagListErrors[keyof DagListErrors]
+
+export type DagListResponses = {
+  /**
+   * All workflows
+   */
+  200: Array<DagWorkflow>
+}
+
+export type DagListResponse = DagListResponses[keyof DagListResponses]
+
+export type DagBySessionData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/session/{sessionID}"
+}
+
+export type DagBySessionErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagBySessionError = DagBySessionErrors[keyof DagBySessionErrors]
+
+export type DagBySessionResponses = {
+  /**
+   * Workflows for a session
+   */
+  200: Array<DagWorkflow>
+}
+
+export type DagBySessionResponse = DagBySessionResponses[keyof DagBySessionResponses]
+
+export type DagDetailData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/{dagID}"
+}
+
+export type DagDetailErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagDetailError = DagDetailErrors[keyof DagDetailErrors]
+
+export type DagDetailResponses = {
+  /**
+   * Workflow detail
+   */
+  200: DagWorkflow
+}
+
+export type DagDetailResponse = DagDetailResponses[keyof DagDetailResponses]
+
+export type DagNodesData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/{dagID}/nodes"
+}
+
+export type DagNodesErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagNodesError = DagNodesErrors[keyof DagNodesErrors]
+
+export type DagNodesResponses = {
+  /**
+   * Nodes for a workflow
+   */
+  200: Array<DagNode>
+}
+
+export type DagNodesResponse = DagNodesResponses[keyof DagNodesResponses]
+
+export type DagNodeDetailData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/{dagID}/nodes/{nodeID}"
+}
+
+export type DagNodeDetailErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagNodeDetailError = DagNodeDetailErrors[keyof DagNodeDetailErrors]
+
+export type DagNodeDetailResponses = {
+  /**
+   * Node detail
+   */
+  200: DagNode
+}
+
+export type DagNodeDetailResponse = DagNodeDetailResponses[keyof DagNodeDetailResponses]
+
+export type DagControlData = {
+  body?: {
+    operation: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
+    fragment?: unknown
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/{dagID}/control"
+}
+
+export type DagControlErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagControlError = DagControlErrors[keyof DagControlErrors]
+
+export type DagControlResponses = {
+  /**
+   * Control result
+   */
+  200: {
+    status: string
+  }
+}
+
+export type DagControlResponse = DagControlResponses[keyof DagControlResponses]
 
 export type ExperimentalWorkspaceAdapterListData = {
   body?: never

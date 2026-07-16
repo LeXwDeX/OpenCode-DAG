@@ -24,6 +24,18 @@ import type {
   ConfigProvidersResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
+  DagBySessionErrors,
+  DagBySessionResponses,
+  DagControlErrors,
+  DagControlResponses,
+  DagDetailErrors,
+  DagDetailResponses,
+  DagListErrors,
+  DagListResponses,
+  DagNodeDetailErrors,
+  DagNodeDetailResponses,
+  DagNodesErrors,
+  DagNodesResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -189,8 +201,6 @@ import type {
   SessionForkResponses,
   SessionGetErrors,
   SessionGetResponses,
-  SessionGoalErrors,
-  SessionGoalResponses,
   SessionHookAddErrors,
   SessionHookAddResponses,
   SessionHookListErrors,
@@ -3815,38 +3825,6 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
-   * Get session goal
-   *
-   * Retrieve the autonomous goal state for a session, if one is set.
-   */
-  public goal<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<SessionGoalResponses, SessionGoalErrors, ThrowOnError>({
-      url: "/session/{sessionID}/goal",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
    * Get message diff
    *
    * Get the file changes (diff) that resulted from a specific user message in the session.
@@ -5205,6 +5183,185 @@ export class Tui extends HeyApiClient {
   private _control?: Control
   get control(): Control {
     return (this._control ??= new Control({ client: this.client }))
+  }
+}
+
+export class Dag extends HeyApiClient {
+  /**
+   * List all DAG workflows
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagListResponses, DagListErrors, ThrowOnError>({
+      url: "/dag",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List workflows by session
+   */
+  public bySession<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagBySessionResponses, DagBySessionErrors, ThrowOnError>({
+      url: "/dag/session/{sessionID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow by ID
+   */
+  public detail<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagDetailResponses, DagDetailErrors, ThrowOnError>({
+      url: "/dag/{dagID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * List nodes for a workflow
+   */
+  public nodes<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagNodesResponses, DagNodesErrors, ThrowOnError>({
+      url: "/dag/{dagID}/nodes",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get node by ID
+   */
+  public nodeDetail<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagNodeDetailResponses, DagNodeDetailErrors, ThrowOnError>({
+      url: "/dag/{dagID}/nodes/{nodeID}",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Control a workflow (pause/resume/cancel/replan/step/complete)
+   */
+  public control<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      operation?: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
+      fragment?: unknown
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "operation" },
+            { in: "body", key: "fragment" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<DagControlResponses, DagControlErrors, ThrowOnError>({
+      url: "/dag/{dagID}/control",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
   }
 }
 
@@ -7195,6 +7352,11 @@ export class OpencodeClient extends HeyApiClient {
   private _tui?: Tui
   get tui(): Tui {
     return (this._tui ??= new Tui({ client: this.client }))
+  }
+
+  private _dag?: Dag
+  get dag(): Dag {
+    return (this._dag ??= new Dag({ client: this.client }))
   }
 
   private _v2?: V2

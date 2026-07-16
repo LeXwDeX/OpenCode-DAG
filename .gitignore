@@ -32,13 +32,18 @@ UPCOMING_CHANGELOG.md
 logs/
 *.bun-build
 tsconfig.tsbuildinfo
+
 # opencode runtime-generated local project config (created when running the built binary in a package dir)
 **/.opencode/settings.json
 
 # OpenSpec artifacts (local-only, not tracked)
 /openspec/
-.opencode/commands/
-.opencode/skills/
 
 # hooks file
 .opencode/hooks.json
+
+# agent files
+.agents
+.claude
+.opencode/commands/
+.opencode/skills
