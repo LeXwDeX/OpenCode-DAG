@@ -19,8 +19,18 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
-  Goal,
 } from "@opencode-ai/sdk/v2"
+
+/** DAG workflow summary for TUI display. */
+export interface DagWorkflowSummary {
+  id: string
+  title: string
+  status: string
+  nodeCount: number
+  completedNodes: number
+  runningNodes: number
+  failedNodes: number
+}
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -90,9 +100,6 @@ export const {
       todo: {
         [sessionID: string]: Todo[]
       }
-      goal: {
-        [sessionID: string]: Goal | undefined
-      }
       message: {
         [sessionID: string]: Message[]
       }
@@ -108,6 +115,9 @@ export const {
       }
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
+      dag: {
+        [sessionID: string]: DagWorkflowSummary[]
+      }
     }>({
       provider_next: {
         all: [],
@@ -131,7 +141,6 @@ export const {
       session_status: {},
       session_diff: {},
       todo: {},
-      goal: {},
       message: {},
       part: {},
       lsp: [],
@@ -139,6 +148,7 @@ export const {
       mcp_resource: {},
       formatter: [],
       vcs: undefined,
+      dag: {},
     })
 
     const event = useEvent()
@@ -255,13 +265,13 @@ export const {
           setStore("todo", event.properties.sessionID, event.properties.todos)
           break
 
-        case "goal.updated":
-          setStore("goal", event.properties.sessionID, event.properties.goal)
-          break
-
-        case "goal.cleared":
-          setStore("goal", event.properties.sessionID, undefined)
-          break
+        // ── DAG events ──────────────────────────────────────────────
+        // The TUI doesn't receive individual dag.* events from EventV2
+        // (those flow through the server). Instead, DAG state is fetched
+        // on-demand via the HTTP route (dag.bySession). The store slice
+        // is populated by the plugin component's createMemo calling
+        // api.client.v2.dag.bySession(), not by an event reducer case.
+        // This keeps the store shape available for the plugin to write to.
 
         case "session.diff":
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
@@ -595,12 +605,11 @@ export const {
           const tracker = { messages: new Set<string>(), parts: new Set<string>() }
           hydratingSessions.set(sessionID, tracker)
           const task = (async () => {
-            const [session, messages, todo, diff, goal] = await Promise.all([
+            const [session, messages, todo, diff] = await Promise.all([
               sdk.client.session.get({ sessionID }, { throwOnError: true }),
               sdk.client.session.messages({ sessionID, limit: 100 }),
               sdk.client.session.todo({ sessionID }),
               sdk.client.session.diff({ sessionID }),
-              sdk.client.session.goal({ sessionID }).catch(() => ({ data: undefined })),
             ])
             setStore(
               produce((draft) => {
@@ -608,7 +617,6 @@ export const {
                 if (match.found) draft.session[match.index] = session.data!
                 if (!match.found) draft.session.splice(match.index, 0, session.data!)
                 draft.todo[sessionID] = todo.data ?? []
-                draft.goal[sessionID] = goal.data ?? undefined
                 const currentMessages = draft.message[sessionID] ?? []
                 const infos = (messages.data ?? []).flatMap((message) => {
                   if (!tracker.messages.has(message.info.id)) return [message.info]

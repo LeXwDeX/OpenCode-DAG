@@ -12,12 +12,14 @@ import { ReadTool } from "./read"
 import { TaskTool } from "./task"
 import { Database } from "@opencode-ai/core/database/database"
 import { TodoWriteTool } from "./todo"
-import { GoalTool } from "./goal"
 import { SettingsHook } from "@/hook/settings"
 import { WebFetchTool } from "./webfetch"
 import { WriteTool } from "./write"
 import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
+import { WorkflowTool } from "./workflow"
+import { SubmitResultTool } from "./submit_result"
+import { Dag } from "@/dag/dag"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@opencode-ai/plugin"
@@ -96,7 +98,6 @@ export const layer = Layer.effect(
     const read = yield* ReadTool
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
-    const goaltool = yield* GoalTool
     const lsptool = yield* LspTool
     const plan = yield* PlanExitTool
     const webfetch = yield* WebFetchTool
@@ -108,6 +109,8 @@ export const layer = Layer.effect(
     const greptool = yield* GrepTool
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
+    const workflow = yield* WorkflowTool
+    const submitResult = yield* SubmitResultTool
     const agent = yield* Agent.Service
 
     const state = yield* InstanceState.make<State>(
@@ -209,10 +212,11 @@ export const layer = Layer.effect(
           task: Tool.init(task),
           fetch: Tool.init(webfetch),
           todo: Tool.init(todo),
-          goal: Tool.init(goaltool),
           search: Tool.init(websearch),
           skill: Tool.init(skilltool),
           patch: Tool.init(patchtool),
+          workflow: Tool.init(workflow),
+          submitResult: Tool.init(submitResult),
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
@@ -232,10 +236,11 @@ export const layer = Layer.effect(
             tool.task,
             tool.fetch,
             tool.todo,
-            tool.goal,
             tool.search,
             tool.skill,
             tool.patch,
+            tool.workflow,
+            tool.submitResult,
             ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ...(flags.experimentalPlanMode && flags.client === "cli" ? [tool.plan] : []),
           ],
@@ -337,6 +342,7 @@ export const defaultLayer = Layer.suspend(() =>
       Layer.provide(FSUtil.defaultLayer),
       Layer.provide(Ripgrep.defaultLayer),
       Layer.provide(EventV2Bridge.defaultLayer),
+      Layer.provide(Dag.defaultLayer),
       Layer.provide(FetchHttpClient.layer),
       Layer.provide(Format.defaultLayer),
       Layer.provide(CrossSpawnSpawner.defaultLayer),
@@ -442,6 +448,7 @@ export const node = LayerNode.make(layer.pipe(Layer.provide(Ripgrep.defaultLayer
   RuntimeFlags.node,
   Database.node,
   SettingsHook.node,
+  Dag.node,
 ])
 
 export * as ToolRegistry from "./registry"

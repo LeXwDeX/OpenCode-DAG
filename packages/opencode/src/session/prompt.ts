@@ -64,7 +64,6 @@ import { SettingsHook, HOOK_REWAKE_SENTINEL, type TriggerResult } from "@/hook/s
 import { applyPreHookDecision } from "@/hook/pre-hook-decision"
 import { dispatchTrust } from "@/hook/workspace-trust"
 import { HookStartContext } from "@/hook/start-context"
-import { Goal } from "@/goal/goal"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -152,7 +151,6 @@ export const layer = Layer.effect(
     const { db } = database
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const startContext = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
-    const goal = Option.getOrUndefined(yield* Effect.serviceOption(Goal.Service))
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1664,12 +1662,11 @@ export const layer = Layer.effect(
 
             yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
 
-            const [skills, env, instructions, mcpInstructions, goalDocs, hooksDocs, modelMsgs] = yield* Effect.all([
+            const [skills, env, instructions, mcpInstructions, hooksDocs, modelMsgs] = yield* Effect.all([
               sys.skills(agent),
               sys.environment(model),
               instruction.system().pipe(Effect.orDie),
               sys.mcp(agent, session.permission),
-              sys.goal(sessionID),
               sys.hooks(),
               MessageV2.toModelMessagesEffect(msgs, model),
             ])
@@ -1678,7 +1675,6 @@ export const layer = Layer.effect(
               ...instructions,
               ...(mcpInstructions ? [mcpInstructions] : []),
               ...(skills ? [skills] : []),
-              ...goalDocs,
               ...hooksDocs,
             ]
             const format = lastUser.format ?? { type: "text" as const }
@@ -1814,95 +1810,6 @@ export const layer = Layer.effect(
         yield* sessions.updatePart(responsePart)
         yield* sessions.touch(input.sessionID)
         return { info: userMsg, parts: [cmdText, responsePart] }
-      }
-      // Goal/Subgoal command dispatch — early return BEFORE command registry lookup
-      if (goal && (input.command === "goal" || input.command === "subgoal")) {
-        const dispatch = input.command === "goal" ? goal.dispatch : goal.dispatchSubgoal
-        const dispatchResult = yield* dispatch(input.sessionID, input.arguments).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* Effect.logError("goal dispatch failed", { command: input.command, cause: String(cause) })
-              return undefined
-            }),
-          ),
-        )
-        if (!dispatchResult) {
-          // Dispatch failed — return error message to user instead of silent fallthrough
-          const m = yield* currentModel(input.sessionID)
-          const agentName = input.agent ?? (yield* agents.defaultAgent())
-          const userMsg: SessionV1.User = {
-            id: input.messageID ?? MessageID.ascending(),
-            role: "user",
-            sessionID: input.sessionID,
-            time: { created: Date.now() },
-            agent: agentName,
-            model: { providerID: m.providerID, modelID: m.modelID },
-          }
-          yield* sessions.updateMessage(userMsg)
-          const errorPart: SessionV1.TextPart = {
-            id: PartID.ascending(),
-            messageID: userMsg.id,
-            sessionID: input.sessionID,
-            type: "text",
-            text: `⚠️ /${input.command} 执行失败，请检查日志。`,
-            synthetic: true,
-          }
-          yield* sessions.updatePart(errorPart)
-          yield* sessions.touch(input.sessionID)
-          return { info: userMsg, parts: [errorPart] }
-        }
-        if (dispatchResult) {
-          const m = yield* currentModel(input.sessionID)
-          const agentName = input.agent ?? (yield* agents.defaultAgent())
-          const userMsg: SessionV1.User = {
-            id: input.messageID ?? MessageID.ascending(),
-            role: "user",
-            sessionID: input.sessionID,
-            time: { created: Date.now() },
-            agent: agentName,
-            model: { providerID: m.providerID, modelID: m.modelID },
-          }
-          yield* sessions.updateMessage(userMsg)
-          const cmdText: SessionV1.TextPart = {
-            id: PartID.ascending(),
-            messageID: userMsg.id,
-            sessionID: input.sessionID,
-            type: "text",
-            text: `/${input.command} ${input.arguments}`.trim(),
-          }
-          yield* sessions.updatePart(cmdText)
-          // Non-synthetic so UserMessage renders it — the command confirmation
-          // (e.g. "⏸ 目标已暂停") must be visible. Matches the goal "done" case
-          // (loop.ts), which emits visible goal messages as non-synthetic parts.
-          const text = dispatchResult.announce ?? dispatchResult.text
-          const responsePart: SessionV1.TextPart = {
-            id: PartID.ascending(),
-            messageID: userMsg.id,
-            sessionID: input.sessionID,
-            type: "text",
-            text,
-          }
-          yield* sessions.updatePart(responsePart)
-          yield* sessions.touch(input.sessionID)
-          if (dispatchResult.type === "kick" && input.command === "goal") {
-            // Drain SessionStart hook contexts before loop
-            if (startContext) {
-              const contexts = yield* startContext.consume(input.sessionID)
-              for (const ctx of contexts) {
-                yield* sessions.updatePart({
-                  id: PartID.ascending(),
-                  messageID: responsePart.messageID,
-                  sessionID: input.sessionID,
-                  type: "text",
-                  text: ctx,
-                  synthetic: true,
-                } satisfies SessionV1.TextPart)
-              }
-            }
-            return yield* loop({ sessionID: input.sessionID })
-          }
-          return { info: userMsg, parts: [cmdText, responsePart] }
-        }
       }
 
       const cmd = yield* commands.get(input.command)
@@ -2203,7 +2110,7 @@ export const node = LayerNode.make(layer, [
   EventV2Bridge.node,
   RuntimeFlags.node,
   Database.node,
-  Goal.node, HookStartContext.node, SettingsHook.node,
+  HookStartContext.node, SettingsHook.node,
 ])
 
 export * as SessionPrompt from "./prompt"
