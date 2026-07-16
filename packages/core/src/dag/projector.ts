@@ -152,12 +152,31 @@ export const layer = Layer.effectDiscard(
     )
 
     yield* events.project(DagEvent.NodeStarted, (event) =>
-      updateNode(
-        event.data.nodeID,
-        { status: "running", child_session_id: event.data.childSessionID, captured_output: null, started_at: toMillis(event.data.timestamp), deadline_ms: event.data.deadlineMs ?? null, wake_eligible: event.data.wakeEligible ?? false, wake_reported: false },
-        event.durable!.seq,
-        event.data.timestamp,
-      ),
+      db
+        .update(WorkflowNodeTable)
+        .set({
+          status: "running",
+          child_session_id: event.data.childSessionID,
+          captured_output: null,
+          started_at: toMillis(event.data.timestamp),
+          deadline_ms: event.data.deadlineMs ?? null,
+          wake_eligible: event.data.wakeEligible ?? false,
+          wake_reported: false,
+          seq: event.durable!.seq,
+          time_updated: toMillis(event.data.timestamp),
+        })
+        // Only start nodes in a pre-/in-running status. Prevents a stale or
+        // racing NodeStarted (e.g. a spawn fiber resuming after a concurrent
+        // replan(cancel) terminalized the node to "failed") from resurrecting
+        // an already-terminal node back to "running". The legitimate restart
+        // path goes NodeRestarted (running→pending) → re-spawn → NodeStarted
+        // on the "pending" row, so excluding terminal statuses is safe.
+        .where(and(
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          inArray(WorkflowNodeTable.status, ["pending", "queued", "paused", "running"]),
+        ))
+        .run()
+        .pipe(Effect.orDie),
     )
 
     yield* events.project(DagEvent.NodeCompleted, (event) =>

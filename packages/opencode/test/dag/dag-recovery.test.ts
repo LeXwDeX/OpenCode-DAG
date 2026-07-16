@@ -127,6 +127,43 @@ describe("reconcileWorkflow", () => {
     expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
     expect(result.leftRunning).toBe(1)
   })
+
+  it("fails running node whose deadline expired during crash (deadline re-enforcement)", async () => {
+    const events: { type: string; nodeID: string }[] = []
+    const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: Date.now() - 10000 })]
+    const dagLayer = makeDagLayer(nodes, events)
+    const checkStatus = () => Effect.succeed("active" as const)
+
+    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+
+    expect(events).toContainEqual({ type: "nodeFailed", nodeID: "n1" })
+    expect(result.reconciled).toBe(1)
+    expect(result.leftRunning).toBe(0)
+  })
+
+  it("leaves running node with future deadline running (deadline not yet expired)", async () => {
+    const events: { type: string; nodeID: string }[] = []
+    const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: Date.now() + 60000 })]
+    const dagLayer = makeDagLayer(nodes, events)
+    const checkStatus = () => Effect.succeed("active" as const)
+
+    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+
+    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
+    expect(result.leftRunning).toBe(1)
+  })
+
+  it("leaves running node with null deadline running (no deadline to enforce)", async () => {
+    const events: { type: string; nodeID: string }[] = []
+    const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: null })]
+    const dagLayer = makeDagLayer(nodes, events)
+    const checkStatus = () => Effect.succeed("unknown" as const)
+
+    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+
+    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
+    expect(result.leftRunning).toBe(1)
+  })
 })
 
 describe("rehydration via toSchedulingNodes", () => {

@@ -155,3 +155,29 @@ describe("E2E: diamond dependency (A → {B,C} → D)", () => {
     expect(rt.isComplete()).toBe(true)
   })
 })
+
+describe("hasRunningMatching (safety-net gate)", () => {
+  it("returns false when no running nodes have fibers (all orphaned)", () => {
+    const nodes = makeNodes(["a"])
+    const rt = new WorkflowRuntime(nodes, 4)
+    rt.markRunning("a")
+    const fibers = new Map<string, unknown>()
+    expect(rt.hasRunningMatching((id) => fibers.has(id))).toBe(false)
+  })
+
+  it("returns true when at least one running node has a fiber", () => {
+    const nodes = makeNodes(["a", "b"])
+    const rt = new WorkflowRuntime(nodes, 4)
+    rt.markRunning("a")
+    rt.markRunning("b")
+    const fibers = new Map<string, unknown>([["a", {}]])
+    expect(rt.hasRunningMatching((id) => fibers.has(id))).toBe(true)
+  })
+
+  it("returns false when there are no running nodes at all", () => {
+    const nodes = makeNodes(["a"])
+    const rt = new WorkflowRuntime(nodes, 4)
+    const fibers = new Map<string, unknown>([["a", {}]])
+    expect(rt.hasRunningMatching((id) => fibers.has(id))).toBe(false)
+  })
+})

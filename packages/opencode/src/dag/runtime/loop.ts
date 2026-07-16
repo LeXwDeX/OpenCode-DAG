@@ -15,6 +15,7 @@ import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
 import { resolveTemplate } from "../templates/resolve"
+import { sanitizeInput } from "../templates/sanitize"
 import { spawnNode } from "./spawn"
 import { registerCaptureSlot } from "./capture"
 import { evaluateCondition, resolveInputMapping } from "./eval"
@@ -107,6 +108,10 @@ export const layer = Layer.effect(
                 return depNode?.output ?? null
               })
             }
+
+            // Sanitize the dynamic node-output surface (LLM-generated upstream
+            // outputs) before interpolation and Context serialization.
+            resolvedMapping = sanitizeInput(resolvedMapping)
 
             let promptText: string
             if (nodeConfig?.prompt_template) {
@@ -474,7 +479,12 @@ export const layer = Layer.effect(
                     const entry = runtimes.get(dagID)
                     if (!entry) continue
                     if (entry.runtime.isPaused()) continue
-                    if (entry.runtime.hasRunning()) continue
+                    // Suppress the net only if at least one running node has an
+                    // active in-process fiber (actively making progress). All-
+                    // orphaned running nodes (recovered after crash, no fiber)
+                    // should be exposed to the net so a recovered workflow
+                    // cannot hang indefinitely.
+                    if (entry.runtime.hasRunningMatching((id) => entry.fibers.has(id))) continue
                     if (entry.runtime.getReadyNodes().length > 0) continue
                     if (entry.runtime.isComplete()) continue
                     yield* dag.fail(dagID, "orchestrator_unresponsive").pipe(Effect.ignore)

@@ -148,8 +148,9 @@ export function isNodeTerminalStatus(status: NodeStatus): boolean {
  * callers MUST treat attempts to transition further as TerminalViolationError.
  *
  * The `restart` path (running -> paused -> pending -> running) is encoded here:
- * PAUSED returns [RUNNING], FAILED returns [RUNNING, ABORTED] so a replan
- * restart can move a discarded running node back through pending.
+ * PAUSED returns [RUNNING] and RUNNING returns [PENDING]. All terminal states
+ * (COMPLETED/FAILED/ABORTED/SKIPPED) return [] — restarts never originate from
+ * a terminal node; the projector's NodeRestarted resets the row to PENDING.
  */
 export function getValidNextNodeStatuses(currentStatus: NodeStatus): NodeStatus[] {
   switch (currentStatus) {
@@ -161,9 +162,8 @@ export function getValidNextNodeStatuses(currentStatus: NodeStatus): NodeStatus[
       return [NodeStatus.COMPLETED, NodeStatus.FAILED, NodeStatus.PAUSED, NodeStatus.PENDING, NodeStatus.SKIPPED]
     case NodeStatus.PAUSED:
       return [NodeStatus.RUNNING]
-    case NodeStatus.FAILED:
-      return [NodeStatus.RUNNING, NodeStatus.ABORTED, NodeStatus.PENDING]
     case NodeStatus.COMPLETED:
+    case NodeStatus.FAILED:
     case NodeStatus.ABORTED:
     case NodeStatus.SKIPPED:
       return []
