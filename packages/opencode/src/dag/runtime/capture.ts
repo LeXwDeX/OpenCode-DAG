@@ -4,7 +4,8 @@
  * The schema for each child session is held in-memory (it comes from the
  * workflow config and is re-registered on recovery). The validated payload
  * is persisted to the `captured_output` column of `workflow_node` via
- * DagStore — surviving process restarts.
+ * DagStore — surviving a process crash (but reset to null on a replan-restart
+ * via NodeStarted, so each attempt starts with a clean slate).
  */
 
 const schemas = new Map<string, Record<string, unknown>>()

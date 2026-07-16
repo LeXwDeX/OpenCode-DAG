@@ -62,7 +62,7 @@ export const WorkflowNodeTable = sqliteTable(
     child_session_id: text(),
     output: text({ mode: "json" }).$type<unknown>(),
     error_reason: text(),
-    captured_output: text({ mode: "json" }).$type<unknown>(), // durable payload from submit_result (survives restart)
+    captured_output: text({ mode: "json" }).$type<unknown>(), // durable payload from submit_result; survives a process crash, reset to null on a replan-restart via NodeStarted
     deadline_ms: integer(), // absolute deadline (spawnedAt + timeout_ms) for D0 termination boundary
     wake_eligible: integer({ mode: "boolean" }).notNull().default(false), // D6: node has report_to_parent=true
     wake_reported: integer({ mode: "boolean" }).notNull().default(false), // D3: has this node's terminal event been injected into the parent session?
