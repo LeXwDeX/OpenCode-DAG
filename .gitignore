@@ -36,16 +36,14 @@ tsconfig.tsbuildinfo
 # opencode runtime-generated local project config (created when running the built binary in a package dir)
 **/.opencode/settings.json
 
-# claude
-.claude/
-
-# agents
-.agents/
-
 # OpenSpec artifacts (local-only, not tracked)
-openspec/
-.opencode/commands/
-.opencode/skills/
+/openspec/
 
 # hooks file
 .opencode/hooks.json
+
+# agent files
+.agents
+.claude
+.opencode/commands/
+.opencode/skills
