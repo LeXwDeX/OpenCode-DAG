@@ -21,7 +21,7 @@ import { SessionID, MessageID } from "@/session/schema"
 import { deriveSubagentSessionPermission } from "@/agent/subagent-permissions"
 import { SessionPrompt } from "@/session/prompt"
 import { Dag } from "../dag"
-import { InvalidTransitionError } from "@opencode-ai/core/dag/core/types"
+import { InvalidTransitionError, TerminalViolationError } from "@opencode-ai/core/dag/core/types"
 import type { DagStore } from "@opencode-ai/core/dag/store"
 import { registerCaptureSlot, clearCaptureSlot } from "./capture"
 
@@ -98,7 +98,29 @@ export function spawnNode(
     const spawnTime = yield* Clock.currentTimeMillis
     const deadlineMs = spawnTime + timeoutMs
 
-    yield* dag.nodeStarted(input.dagID, input.nodeID, childSession.id, deadlineMs, input.reportToParent)
+    // If a concurrent replan(cancel/restart) terminalized the node during the
+    // async window (agent resolution / session creation above), nodeStarted's
+    // guard rejects with TerminalViolationError. Cancel the orphaned child
+    // session and return a no-op fiber — the winning cancel/restart is the
+    // sole terminalization, no spurious NodeFailed should be published.
+    const terminalized = yield* dag.nodeStarted(input.dagID, input.nodeID, childSession.id, deadlineMs, input.reportToParent).pipe(
+      Effect.map(() => false),
+      Effect.catchIf(
+        (err): err is TerminalViolationError | InvalidTransitionError =>
+          err instanceof TerminalViolationError || err instanceof InvalidTransitionError,
+        () =>
+          Effect.gen(function* () {
+            yield* promptSvc.cancel(childSession.id).pipe(Effect.catch(() => Effect.void))
+            yield* Effect.logWarning(`Node ${input.nodeID} was terminalized during spawn — child session cancelled, no spurious failure published`)
+            return true
+          }),
+      ),
+    )
+
+    if (terminalized) {
+      const fiber = yield* Effect.forkIn(scope)(Effect.void)
+      return { childSessionID: childSession.id as string, fiber }
+    }
 
     if (input.outputSchema) registerCaptureSlot(childSession.id, input.outputSchema)
 

@@ -82,6 +82,14 @@ export class WorkflowRuntime {
     return this.running.size > 0
   }
 
+  /** Check if any running node matches the predicate (e.g. has an active fiber). */
+  hasRunningMatching(pred: (nodeID: string) => boolean): boolean {
+    for (const id of this.running) {
+      if (pred(id)) return true
+    }
+    return false
+  }
+
   /** Returns true if the node is in running or pending (not yet terminal) state. */
   isActive(nodeID: string): boolean {
     return this.running.has(nodeID) || (!this.satisfied.has(nodeID) && !this.unsatisfied.has(nodeID))

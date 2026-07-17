@@ -8,6 +8,7 @@ import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import type { DagStore } from "@opencode-ai/core/dag/store"
 import { spawnNode, type NodeSpawnInput } from "@/dag/runtime/spawn"
+import { TerminalViolationError } from "@opencode-ai/core/dag/core/types"
 import { makeNodeRow } from "./fixtures"
 
 type TrackedEvent = { type: string; dagID: string; nodeID: string; output?: unknown; reason?: string }
@@ -157,5 +158,42 @@ describe("spawnNode completion bridge", () => {
     )
 
     expect(events.filter((event) => event.type === "nodeCompleted")).toHaveLength(2)
+  })
+})
+
+describe("spawnNode terminalization during spawn window", () => {
+  it("does NOT publish spurious NodeFailed when node was cancelled mid-spawn", async () => {
+    const events: TrackedEvent[] = []
+    let cancelCalled = false
+    const dagLayer = Layer.mock(Dag.Service, {
+      store: {} as DagStore.Interface,
+      nodeStarted: () => Effect.fail(new TerminalViolationError("node-1", "failed", "running")),
+      nodeCompleted: Effect.fn("stub.nodeCompleted")((dagID: string, nodeID: string) =>
+        Effect.sync(() => events.push({ type: "nodeCompleted", dagID, nodeID })),
+      ),
+      nodeFailed: Effect.fn("stub.nodeFailed")((dagID: string, nodeID: string, reason: string) =>
+        Effect.sync(() => events.push({ type: "nodeFailed", dagID, nodeID, reason })),
+      ),
+    })
+    const promptLayer = Layer.mock(SessionPrompt.Service, {
+      prompt: () => Effect.die(new Error("prompt should NOT be called after terminalization")),
+      cancel: () => Effect.sync(() => { cancelCalled = true }),
+    })
+
+    const semaphore = Semaphore.makeUnsafe(1)
+    const fullLayer = Layer.mergeAll(dagLayer, agentLayer, sessionLayer, promptLayer)
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const result = yield* spawnNode(semaphore, makeSpawnInput())
+          yield* Fiber.await(result.fiber)
+        }),
+      ).pipe(Effect.provide(fullLayer)) as Effect.Effect<never>,
+    )
+
+    expect(events.filter((e) => e.type === "nodeFailed")).toEqual([])
+    expect(events.filter((e) => e.type === "nodeCompleted")).toEqual([])
+    expect(cancelCalled).toBe(true)
   })
 })

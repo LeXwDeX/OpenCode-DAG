@@ -146,6 +146,9 @@ export const layer = Layer.effect(
       const node = yield* store.getNode(nodeID).pipe(Effect.orDie)
       if (!node) return yield* Effect.fail(new Error(`Node not found: ${nodeID}`))
       const current = node.status as NodeStatus
+      if (isNodeTerminalStatus(current)) {
+        return yield* Effect.fail(new TerminalViolationError(nodeID, current, target))
+      }
       if (!getValidNextNodeStatuses(current).includes(target)) {
         return yield* Effect.fail(new InvalidTransitionError(nodeID, current, target))
       }

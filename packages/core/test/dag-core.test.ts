@@ -151,7 +151,9 @@ describe("iron laws (transition tables)", () => {
 
   it("getValidNextNodeStatuses: terminal returns empty (irreversible)", () => {
     expect(getValidNextNodeStatuses(NodeStatus.COMPLETED)).toEqual([])
-    expect(getValidNextNodeStatuses(NodeStatus.FAILED)).toEqual([NodeStatus.RUNNING, NodeStatus.ABORTED, NodeStatus.PENDING])
+    expect(getValidNextNodeStatuses(NodeStatus.FAILED)).toEqual([])
+    expect(getValidNextNodeStatuses(NodeStatus.ABORTED)).toEqual([])
+    expect(getValidNextNodeStatuses(NodeStatus.SKIPPED)).toEqual([])
   })
 
   it("getValidNextWorkflowStatuses: RUNNING → PAUSED/COMPLETED/FAILED/CANCELLED", () => {

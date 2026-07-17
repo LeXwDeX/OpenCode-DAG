@@ -11,7 +11,7 @@
  * that have running nodes.
  */
 
-import { Effect } from "effect"
+import { Effect, Clock } from "effect"
 import { Dag } from "../dag"
 import { Session } from "@/session/session"
 import { SessionID } from "@/session/schema"
@@ -69,11 +69,23 @@ export function reconcileWorkflow(
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
-        // active or unknown: leave running. The child session's in-process
-        // execution fiber died with the crashed process; its DB status may
-        // not yet reflect terminal. No persistent watcher is forked (by
-        // design — see dag-module-cleanup design D1). Post-crash continuation
-        // recovery requires a separate explicit mechanism not yet built.
+        // active or unknown: check whether the node overshot its persisted
+        // deadline during the crash. If so, fail it deterministically rather
+        // than leaving it to hang with no timeout protection.
+        if (node.deadlineMs !== null) {
+          const now = yield* Clock.currentTimeMillis
+          if (now >= node.deadlineMs) {
+            yield* dag.nodeFailed(dagID, node.id, "deadline exceeded on recovery", "timeout")
+            reconciled++
+            continue
+          }
+        }
+        // Deadline is in the future or unset. Leave running — the child
+        // session's in-process execution fiber died with the crashed process;
+        // its DB status may not yet reflect terminal. No persistent watcher is
+        // forked (by design — see dag-module-cleanup design D1). Post-crash
+        // continuation recovery requires a separate explicit mechanism not yet
+        // built. The orchestrator_unresponsive safety net + deadline bound it.
         leftRunning++
       }
     }
