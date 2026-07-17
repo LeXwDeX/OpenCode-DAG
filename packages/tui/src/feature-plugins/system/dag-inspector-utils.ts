@@ -1,15 +1,9 @@
 /** Pure topology helpers for the DAG inspector. Extracted for unit testing,
  * mirroring the diff-viewer-file-tree-utils pattern in this directory. */
 
-export interface DagNode {
-  id: string
-  name: string
-  status: string
-  worker_type: string
-  depends_on: string[]
-  child_session_id?: string
-  error_reason?: string
-}
+import type { DagNode } from "@opencode-ai/sdk/v2"
+
+export type { DagNode }
 
 /**
  * Group nodes into topological "waves": wave N contains every node whose

@@ -63,5 +63,5 @@ export async function mount(override?: FetchHandler, state?: string) {
 
   await ready
   await wait(() => sync.status === "complete")
-  return { app, emit: events.emit, kv, project, sync, session: calls.session }
+  return { app, emit: events.emit, reconnect: events.reconnect, kv, project, sync, session: calls.session }
 }

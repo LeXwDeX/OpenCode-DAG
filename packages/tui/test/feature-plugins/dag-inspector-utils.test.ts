@@ -3,9 +3,11 @@ import { computeWaves, type DagNode } from "../../src/feature-plugins/system/dag
 
 const node = (id: string, depends_on: string[] = [], name = id): DagNode => ({
   id,
+  workflow_id: "wf-1",
   name,
   status: "pending",
   worker_type: "task",
+  required: false,
   depends_on,
 })
 

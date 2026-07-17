@@ -1,6 +1,6 @@
 export * as DagSummaryPublisher from "./summary-publisher"
 
-import { Effect, Layer, Stream, Context } from "effect"
+import { Effect, Layer, Scope, Context } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -60,8 +60,9 @@ export const layer = Layer.effect(
 
     const state = yield* InstanceState.make(
       Effect.fn("DagSummaryPublisher.state")(function* (ctx) {
+        const scope = yield* Scope.Scope
         // Per-session debounce map. Keys are sessionIDs with an in-flight
-        // recompute; a single fiber yield collapses a burst into one read.
+        // recompute; a bounded window collapses a burst into one read.
         //
         // NOTE: This is request-coalescing state for I/O deduplication, NOT
         // a parallel projection of DAG state. The summary is always recomputed
@@ -74,13 +75,7 @@ export const layer = Layer.effect(
 
         const publishForSession = (sessionID: string) =>
           Effect.gen(function* () {
-            const summaries = yield* store.getWorkflowSummaries(sessionID).pipe(
-              Effect.catchCause((cause) =>
-                Effect.logWarning("DagSummaryPublisher: failed to read summaries", { sessionID, cause }).pipe(
-                  Effect.as([]),
-                ),
-              ),
-            )
+            const summaries = yield* store.getWorkflowSummaries(sessionID)
             GlobalBus.emit("event", {
               directory: ctx.directory,
               project: ctx.project.id,
@@ -95,31 +90,35 @@ export const layer = Layer.effect(
           Effect.gen(function* () {
             // Coalesce: if a recompute is already scheduled for this session,
             // let it absorb this trigger rather than queueing a second read.
+            // The coalesced early return MUST NOT touch `pending` — only the
+            // owning fiber clears its own slot, otherwise a coalesced caller
+            // would delete the owner's entry and reopen the window.
             if (pending.has(sessionID)) return
             pending.add(sessionID)
-            // Yield once so a burst of synchronous events collapse into one read.
-            // Correctness does not depend on the window length, only freshness.
-            yield* Effect.yieldNow
-            pending.delete(sessionID)
-            yield* publishForSession(sessionID)
+            yield* Effect.gen(function* () {
+              yield* Effect.sleep("50 millis")
+              yield* publishForSession(sessionID)
+            }).pipe(Effect.ensuring(Effect.sync(() => pending.delete(sessionID))))
           })
 
-        for (const def of SUMMARY_TRIGGER_EVENTS) {
-          yield* events.subscribe(def).pipe(
-            Stream.mapEffect((evt) => {
-              const dagID = evt.data.dagID as string
-              const sessionID = (evt.data as { sessionID?: string }).sessionID
-              if (sessionID) return schedulePublish(sessionID)
-              // Node events don't carry sessionID — look it up via the workflow.
-              return Effect.gen(function* () {
-                const wf = yield* store.getWorkflow(dagID).pipe(Effect.catch(() => Effect.succeed(undefined)))
+        const unsubscribe = yield* events.listen((evt) => {
+          if (!SUMMARY_TRIGGER_EVENTS.some((def) => def.type === evt.type)) return Effect.void
+          const data = evt.data as { dagID: string; sessionID?: string }
+          const publish = data.sessionID
+            ? schedulePublish(data.sessionID)
+            : Effect.gen(function* () {
+                const wf = yield* store.getWorkflow(data.dagID)
                 if (wf) yield* schedulePublish(wf.sessionId)
-              }).pipe(Effect.catchCause(() => Effect.logWarning("DagSummaryPublisher: lookup failed", { dagID })))
-            }),
-            Stream.runDrain,
-            Effect.forkScoped,
+              })
+          return publish.pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("DagSummaryPublisher: failed to publish summaries", { dagID: data.dagID, cause }),
+            ),
+            Effect.forkIn(scope),
+            Effect.asVoid,
           )
-        }
+        })
+        yield* Effect.addFinalizer(() => unsubscribe)
         return {}
       }),
     )

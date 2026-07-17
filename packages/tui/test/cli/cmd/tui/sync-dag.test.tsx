@@ -2,6 +2,7 @@
 import { describe, expect, test } from "bun:test"
 import { tmpdir } from "../../../fixture/fixture"
 import { directory, mount, wait, json } from "./sync-fixture"
+import { produce } from "solid-js/store"
 import type { GlobalEvent } from "@opencode-ai/sdk/v2"
 import type { DagWorkflowSummary } from "@opencode-ai/sdk/v2"
 
@@ -97,6 +98,85 @@ describe("tui sync dag slice", () => {
       await wait(() => (sync.data.dag[sid]?.length ?? 0) > 0)
       expect(fetched).toContain(`/dag/session/${sid}/summary`)
       expect(sync.data.dag[sid][0]).toMatchObject({ completedNodes: 4, failedNodes: 1 })
+    } finally {
+      app.renderer.destroy()
+    }
+  })
+
+  test("SSE reconnect re-fetches every session already in store.dag", async () => {
+    await using tmp = await tmpdir()
+    await Bun.write(`${tmp.path}/kv.json`, "{}")
+    const sid1 = "ses_reconnect_1"
+    const sid2 = "ses_reconnect_2"
+    // A session that is VISIBLE in the session list but NOT in store.dag —
+    // reconnect compensation must NOT fetch it.
+    const sidVisibleUntracked = "ses_visible_untracked"
+    const summaryFetches: string[] = []
+    let reconnectCallCount = 0
+
+    const visibleSessionRow = {
+      id: sidVisibleUntracked,
+      slug: "visible-untracked",
+      projectID: "proj_test",
+      directory,
+      version: "test",
+      time: { created: 0, updated: 0 },
+    }
+
+    const { app, emit, reconnect, sync } = await mount((url) => {
+      // Expose one visible session that bootstrap will add to store.session.
+      // Its summary endpoint is intentionally NOT mocked so bootstrap's fetch
+      // throws (swallowed by .catch), keeping it OUT of store.dag — proving
+      // reconnect's recovery set is store.dag keys, not the visible-session query.
+      if (url.pathname === "/session") return json([visibleSessionRow])
+      if (url.pathname === `/dag/session/${sidVisibleUntracked}/summary`) {
+        summaryFetches.push(sidVisibleUntracked)
+        return json([])
+      }
+      if (url.pathname === `/dag/session/${sid1}/summary`) {
+        summaryFetches.push(sid1)
+        return json([summary(reconnectCallCount > 0 ? 9 : 1, 10)])
+      }
+      if (url.pathname === `/dag/session/${sid2}/summary`) {
+        summaryFetches.push(sid2)
+        return json([summary(reconnectCallCount > 0 ? 5 : 1, 6)])
+      }
+      return undefined
+    }, tmp.path)
+
+    try {
+      // Confirm the visible session is in store.session and bootstrap created
+      // an empty store.dag entry for it.
+      await wait(() => sync.data.session.some((s) => s.id === sidVisibleUntracked))
+      await wait(() => sidVisibleUntracked in sync.data.dag)
+
+      // Remove the visible session's empty store.dag entry so it is genuinely
+      // NOT tracked at reconnect time — simulating a session with no workflows
+      // that the user never opened a DAG view for.
+      sync.set("dag", produce((draft) => { delete draft[sidVisibleUntracked] }))
+      expect(sync.data.dag[sidVisibleUntracked]).toBeUndefined()
+
+      // Populate store.dag with two sessions via summary events.
+      emit(summaryEvent([summary(1, 10)], sid1))
+      emit(summaryEvent([summary(1, 6)], sid2))
+      await wait(() => !!sync.data.dag[sid1]?.length && !!sync.data.dag[sid2]?.length)
+
+      // Snapshot which sessions were fetched BEFORE reconnect so we can
+      // isolate the reconnect-triggered fetches.
+      const fetchedBefore = [...summaryFetches]
+
+      // Trigger reconnect — should re-fetch BOTH tracked sessions only.
+      reconnectCallCount += 1
+      reconnect()
+      await wait(() => sync.data.dag[sid1]?.[0]?.completedNodes === 9)
+      await wait(() => sync.data.dag[sid2]?.[0]?.completedNodes === 5)
+
+      const fetchedOnReconnect = summaryFetches.filter((s) => !fetchedBefore.includes(s))
+      expect(fetchedOnReconnect).toContain(sid1)
+      expect(fetchedOnReconnect).toContain(sid2)
+      // The visible-but-untracked session must NOT be fetched on reconnect —
+      // the recovery set is store.dag, not the visible-session query.
+      expect(fetchedOnReconnect).not.toContain(sidVisibleUntracked)
     } finally {
       app.renderer.destroy()
     }
