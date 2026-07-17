@@ -27,6 +27,7 @@ export class WorkflowRuntime {
   private readonly running: Set<string> = new Set()
   private readonly required: Set<string>
   private paused = false
+  private stepMode = false
   readonly maxConcurrency: number
 
   constructor(nodes: SchedulingNode[], maxConcurrency: number) {
@@ -97,9 +98,11 @@ export class WorkflowRuntime {
 
   getReadyNodes(): string[] {
     if (this.paused) return []
-    return this.graph
+    const ready = this.graph
       .getExecutableNodes(this.satisfied)
       .filter((id) => !this.satisfied.has(id) && !this.unsatisfied.has(id) && !this.running.has(id))
+    if (this.stepMode && ready.length > 0) return [ready.slice().sort()[0]]
+    return ready
   }
 
   isComplete(): boolean {
@@ -129,5 +132,13 @@ export class WorkflowRuntime {
 
   setPaused(paused: boolean): void {
     this.paused = paused
+  }
+
+  isStepMode(): boolean {
+    return this.stepMode
+  }
+
+  setStepMode(stepMode: boolean): void {
+    this.stepMode = stepMode
   }
 }

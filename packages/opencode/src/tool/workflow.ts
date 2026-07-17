@@ -121,9 +121,13 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
                     metadata: { workflowId: wfId, ...r } as Metadata,
                   }
                 }
-                case "step":
-                  yield* dag.pause(wfId).pipe(Effect.orDie)
-                  return { title: "Workflow stepped (paused)", output: `<workflow id="${wfId}" state="paused" action="step"/>`, metadata: { workflowId: wfId } as Metadata }
+                case "step": {
+                  const r = yield* dag.step(wfId).pipe(Effect.orDie)
+                  if (r.status === "no_ready_nodes") {
+                    return { title: "Workflow step: no ready nodes", output: `<workflow id="${wfId}" state="running" action="step" result="no_ready_nodes"/>`, metadata: { workflowId: wfId } as Metadata }
+                  }
+                  return { title: `Workflow stepped: ${r.nodeID ?? "no node"}`, output: `<workflow id="${wfId}" state="stepping" action="step" node="${r.nodeID ?? ""}"/>`, metadata: { workflowId: wfId, ...r } as Metadata }
+                }
               }
             }
           }

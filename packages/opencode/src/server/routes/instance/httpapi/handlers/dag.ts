@@ -109,8 +109,12 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       // Control ops may fail with InvalidTransitionError/TerminalViolationError for
       // semantically invalid operations (e.g. pause on a completed workflow). Map those
       // to 409 Conflict instead of letting .orDie promote them to 500 defects.
-      if (op === "pause" || op === "step") {
+      if (op === "pause") {
         yield* mapTransitionConflict(dag.pause(dagID))
+        return { status: "ok" }
+      }
+      if (op === "step") {
+        yield* mapTransitionConflict(dag.step(dagID))
         return { status: "ok" }
       }
       if (op === "resume") {

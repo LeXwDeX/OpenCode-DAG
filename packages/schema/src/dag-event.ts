@@ -65,6 +65,7 @@ export const WorkflowStatus = Schema.Literals([
   "pending",
   "running",
   "paused",
+  "stepping",
   "completed",
   "failed",
   "cancelled",
@@ -122,6 +123,16 @@ export const WorkflowResumed = Event.define({
   schema: Base,
 })
 export type WorkflowResumed = typeof WorkflowResumed.Type
+
+export const WorkflowStepped = Event.define({
+  type: "dag.workflow.stepped",
+  ...options,
+  schema: {
+    ...Base,
+    nodeID: Schema.optional(NodeID),
+  },
+})
+export type WorkflowStepped = typeof WorkflowStepped.Type
 
 export const WorkflowCompleted = Event.define({
   type: "dag.workflow.completed",
@@ -271,6 +282,7 @@ export const DurableDefinitions = Event.inventory(
   WorkflowStarted,
   WorkflowPaused,
   WorkflowResumed,
+  WorkflowStepped,
   WorkflowCompleted,
   WorkflowFailed,
   WorkflowCancelled,

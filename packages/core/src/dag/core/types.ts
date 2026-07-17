@@ -19,6 +19,7 @@ export enum WorkflowStatus {
   PENDING = "pending",
   RUNNING = "running",
   PAUSED = "paused",
+  STEPPING = "stepping",
   COMPLETED = "completed",
   FAILED = "failed",
   CANCELLED = "cancelled",
@@ -182,7 +183,9 @@ export function getValidNextWorkflowStatuses(currentStatus: WorkflowStatus): Wor
     case WorkflowStatus.PENDING:
       return [WorkflowStatus.RUNNING]
     case WorkflowStatus.RUNNING:
-      return [WorkflowStatus.PAUSED, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]
+      return [WorkflowStatus.PAUSED, WorkflowStatus.STEPPING, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]
+    case WorkflowStatus.STEPPING:
+      return [WorkflowStatus.RUNNING, WorkflowStatus.PAUSED, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED]
     case WorkflowStatus.PAUSED:
       return [WorkflowStatus.RUNNING, WorkflowStatus.CANCELLED]
     case WorkflowStatus.COMPLETED:

@@ -74,6 +74,7 @@ export const layer = Layer.effectDiscard(
 
     yield* events.project(DagEvent.WorkflowPaused, setWorkflowStatus(ws("paused")))
     yield* events.project(DagEvent.WorkflowResumed, setWorkflowStatus(ws("running")))
+    yield* events.project(DagEvent.WorkflowStepped, setWorkflowStatus(ws("stepping")))
 
     const setWorkflowTerminal = (status: WorkflowStatus) => (event: { data: { dagID: DagEvent.DagID; timestamp: DateTime.Utc }; durable?: { seq: number } }) =>
       db

@@ -86,6 +86,8 @@ export function transitionToWorkflowEvent(from: WorkflowStatus, to: WorkflowStat
       return from === WorkflowStatus.PAUSED ? "workflow.resumed" : "workflow.started"
     case WorkflowStatus.PAUSED:
       return "workflow.paused"
+    case WorkflowStatus.STEPPING:
+      return "workflow.stepped"
     case WorkflowStatus.COMPLETED:
       return "workflow.completed"
     case WorkflowStatus.FAILED:
