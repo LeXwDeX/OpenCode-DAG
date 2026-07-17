@@ -216,7 +216,9 @@ export const layer = Layer.effect(
           const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
           const semaphore = Semaphore.makeUnsafe(maxConcurrency)
           const isPaused = wf.status === "paused"
+          const isStepping = wf.status === "stepping"
           if (isPaused) runtime.setPaused(true)
+          if (isStepping) runtime.setStepMode(true)
           const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
           runtimes.set(dagID, entry)
           // Re-register capture slots for running nodes whose child sessions
@@ -232,7 +234,7 @@ export const layer = Layer.effect(
               registerCaptureSlot(node.childSessionId, nodeConfig.output_schema as Record<string, unknown>)
             }
           }
-          if (!isPaused) {
+          if (!isPaused && !isStepping) {
             yield* entry.evalLock.withPermits(1)(
               Effect.gen(function* () {
                 yield* spawnReady(dagID)
@@ -283,7 +285,10 @@ export const layer = Layer.effect(
                     // back. Mirrors the NodeFailed handler's isActive guard.
                     if (entry.runtime.isActive(evt.data.nodeID as string)) {
                       entry.runtime.markSatisfied(evt.data.nodeID as string)
-                      yield* spawnReady(dagID)
+                      // In stepMode, do NOT auto-advance — wait for the next
+                      // explicit step command. checkCompletion still runs so
+                      // required-node failure / early completion is detected.
+                      if (!entry.runtime.isStepMode()) yield* spawnReady(dagID)
                     }
                     yield* checkCompletion(dagID)
                   }),
@@ -346,6 +351,9 @@ export const layer = Layer.effect(
                       if (fiber) yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                       entry.runtime.markUnsatisfied(nid)
                     }
+                    // In stepMode, checkCompletion (which can trigger autonomous
+                    // fail/complete) still runs, but spawnReady is skipped —
+                    // stepping must NOT auto-advance after a node fails.
                     yield* checkCompletion(dagID)
                   }),
                 )
@@ -367,6 +375,24 @@ export const layer = Layer.effect(
           Effect.forkScoped,
         )
 
+        yield* events.subscribe(DagEvent.WorkflowStepped).pipe(
+          Stream.filter((e) => runtimes.has(e.data.dagID as string)),
+          Stream.runForEach((evt) =>
+            Effect.gen(function* () {
+              const dagID = evt.data.dagID as string
+              const entry = runtimes.get(dagID)
+              if (!entry) return
+              yield* entry.evalLock.withPermits(1)(
+                Effect.gen(function* () {
+                  entry.runtime.setStepMode(true)
+                  yield* spawnReady(dagID)
+                }),
+              )
+            }).pipe(Effect.ignore),
+          ),
+          Effect.forkScoped,
+        )
+
         yield* events.subscribe(DagEvent.WorkflowResumed).pipe(
           Stream.filter((e) => runtimes.has(e.data.dagID as string)),
           Stream.runForEach((evt) =>
@@ -377,6 +403,7 @@ export const layer = Layer.effect(
               yield* entry.evalLock.withPermits(1)(
                 Effect.gen(function* () {
                   entry.runtime.setPaused(false)
+                  entry.runtime.setStepMode(false)
                   yield* spawnReady(dagID)
                 }),
               )
@@ -561,7 +588,8 @@ export const layer = Layer.effect(
         // a child that settles immediately cannot leave the runtime stale.
         const runningWfs = yield* store.listByStatus("running").pipe(Effect.orDie)
         const pausedWfs = yield* store.listByStatus("paused").pipe(Effect.orDie)
-        for (const wf of [...runningWfs, ...pausedWfs]) {
+        const steppingWfs = yield* store.listByStatus("stepping").pipe(Effect.orDie)
+        for (const wf of [...runningWfs, ...pausedWfs, ...steppingWfs]) {
           yield* recoverWorkflow(wf).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("DagLoop recovery failed for workflow", { dagID: wf.id, cause }),

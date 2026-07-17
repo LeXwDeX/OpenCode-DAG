@@ -348,7 +348,7 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 - `cancel` — cancel the entire workflow
 - `replan` — submit a YAML fragment; running nodes can be `restart: true` or `cancel: true`; pending nodes absent from the fragment are cancelled
 - `complete` — early-complete: remaining pending nodes are skipped (non-violation)
-- `step` — pause the workflow (equivalent to `pause`)
+- `step` — advance exactly one ready node (the first by node ID lexicographic order), then wait. Use for controlled debugging or staged verification of a critical path. Unlike `pause`, which freezes all scheduling, `step` advances one node and re-waits. A second `step` while the stepped node is still running is rejected. Use `resume` to return to full-speed scheduling. Nodes are selected in lexicographic ID order for determinism.
 
 ### Node Fields
 

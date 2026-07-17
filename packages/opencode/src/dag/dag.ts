@@ -8,7 +8,7 @@ import { DagStore } from "@opencode-ai/core/dag/store"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Database } from "@opencode-ai/core/database/database"
 import { validateRequiredNodes } from "@opencode-ai/core/dag/core/required-validator"
-import { buildGraph } from "@opencode-ai/core/dag/core/scheduling"
+import { buildGraph, WorkflowRuntime } from "@opencode-ai/core/dag/core/scheduling"
 import { CycleError } from "@opencode-ai/core/dag/core/graph"
 import { planReplan } from "@opencode-ai/core/dag/core/replan"
 import {
@@ -103,6 +103,7 @@ export interface Interface {
   readonly store: DagStore.Interface
   readonly pause: (dagID: string) => Effect.Effect<void, Error>
   readonly resume: (dagID: string) => Effect.Effect<void, Error>
+  readonly step: (dagID: string) => Effect.Effect<{ status: "stepping"; nodeID?: string } | { status: "no_ready_nodes" }, Error>
   readonly cancel: (dagID: string) => Effect.Effect<void, Error>
   readonly complete: (dagID: string) => Effect.Effect<void, Error>
   readonly fail: (dagID: string, reason: string) => Effect.Effect<void, Error>
@@ -218,6 +219,37 @@ export const layer = Layer.effect(
     const resume = Effect.fn("Dag.resume")(function* (dagID: string) {
       yield* guardWorkflow(dagID, WorkflowStatus.RUNNING)
       yield* events.publish(DagEvent.WorkflowResumed, { dagID: dagID as ID, timestamp: yield* DateTime.now })
+    })
+
+    const step = Effect.fn("Dag.step")(function* (dagID: string) {
+      // Guard: only `running` → `stepping` is valid.
+      yield* guardWorkflow(dagID, WorkflowStatus.STEPPING)
+      // Reject if a node is still in-flight (one-at-a-time stepping).
+      const nodes = yield* store.getNodes(dagID)
+      const hasInFlight = nodes.some((n) => n.status === "running")
+      if (hasInFlight) return yield* Effect.fail(new Error(`Node still in-flight: cannot step ${dagID}`))
+      // Compute ready nodes using a transient WorkflowRuntime.
+      const SUCCESS_TERMINAL = new Set(["completed", "skipped", "aborted"])
+      const schedulingNodes = nodes.map((n) => ({
+        id: n.id,
+        dependsOn: n.dependsOn,
+        required: n.required,
+        status: SUCCESS_TERMINAL.has(n.status)
+          ? ("satisfied" as const)
+          : n.status === "failed"
+            ? ("unsatisfied" as const)
+            : n.status === "running"
+              ? ("running" as const)
+              : ("pending" as const),
+      }))
+      const config = parseWorkflowConfig((yield* store.getWorkflow(dagID))?.config ?? "")
+      const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
+      const runtime = new WorkflowRuntime(schedulingNodes, maxConcurrency)
+      const ready = runtime.getReadyNodes()
+      if (ready.length === 0) return { status: "no_ready_nodes" as const }
+      const nodeID = ready.slice().sort()[0]
+      yield* events.publish(DagEvent.WorkflowStepped, { dagID: dagID as ID, nodeID: nodeID as never, timestamp: yield* DateTime.now })
+      return { status: "stepping" as const, nodeID }
     })
     // Publish terminal node events for any non-terminal nodes so the read
     // model stays consistent after workflow termination.  Running nodes get
@@ -434,7 +466,7 @@ export const layer = Layer.effect(
       yield* events.publish(DagEvent.NodeRestarted, { dagID: dagID as ID, nodeID: nodeID as never, childSessionID: childSessionID as never, timestamp: yield* DateTime.now })
     })
 
-    return Service.of({ create, store, pause, resume, cancel, complete, fail, replan, extend, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
+    return Service.of({ create, store, pause, resume, step, cancel, complete, fail, replan, extend, nodeStarted, nodeCompleted, nodeFailed, nodeSkipped, nodeCancelled, nodeRestarted })
   }),
 )
 
