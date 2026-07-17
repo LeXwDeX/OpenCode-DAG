@@ -45,5 +45,6 @@ export const migrations = (
     import("./migration/20260714050622_awesome_bromley"),
     import("./migration/20260715035022_captured_output"),
     import("./migration/20260715040000_drop_retry_count"),
+    import("./migration/20260717034735_fearless_cammi"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]
