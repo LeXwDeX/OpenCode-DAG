@@ -1,151 +1,234 @@
-import { describe, expect, it } from "bun:test"
+import { describe, expect } from "bun:test"
 import { DateTime, Effect, Layer } from "effect"
-import { Database } from "@opencode-ai/core/database/database"
-import { EventV2 } from "@opencode-ai/core/event"
-import { DagProjector } from "@opencode-ai/core/dag/projector"
-import { DagStore } from "@opencode-ai/core/dag/store"
+import { DagStore, type WorkflowRow, type WorkflowSummary } from "@opencode-ai/core/dag/store"
 import { DagEvent } from "@opencode-ai/schema/dag-event"
-import { Project } from "@opencode-ai/core/project"
-import { ProjectTable } from "@opencode-ai/core/project/sql"
-import { SessionTable } from "@opencode-ai/core/session/sql"
-import { AbsolutePath } from "@opencode-ai/core/schema"
 import { EventV2Bridge } from "@/event-v2-bridge"
-import { InstanceRef } from "@/effect/instance-ref"
 import { DagSummaryPublisher } from "@/dag/runtime/summary-publisher"
 import { GlobalBus } from "@/bus/global"
+import { it, pollWithTimeout } from "../lib/effect"
 
 const ts = (n: number) => DateTime.makeUnsafe(n)
-const dagID = "dag_pub" as never
-const nodeID = "node-pub-1" as never
-const sessionID = "ses_pub" as never
-
-const baseLayer = Layer.mergeAll(
-  Database.defaultLayer,
-  EventV2.defaultLayer,
-  DagProjector.defaultLayer,
-  DagStore.defaultLayer,
-  EventV2Bridge.defaultLayer,
-)
-
-// Publisher layer sits on top of baseLayer; provide them together so the test
-// body (which also needs Database/EventV2 for setup) shares the same runtime.
-const runtimeLayer = Layer.provideMerge(DagSummaryPublisher.layer, baseLayer)
-
-const ctx = {
-  directory: "/project" as never,
-  worktree: "/project" as never,
-  project: { id: Project.ID.global, worktree: AbsolutePath.make("/project"), directory: AbsolutePath.make("/project"), config: {} } as never,
-}
-
-function setup() {
-  return Effect.gen(function* () {
-    const { db } = yield* Database.Service
-    yield* db.insert(ProjectTable).values({ id: Project.ID.global, worktree: AbsolutePath.make("/project"), sandboxes: [] }).run().pipe(Effect.orDie)
-    yield* db.insert(SessionTable).values({ id: sessionID, project_id: Project.ID.global, slug: "pub", directory: "/project", title: "pub", version: "test" }).run().pipe(Effect.orDie)
-  })
-}
 
 interface SummaryEmission {
   sessionID: string
-  summaries: unknown[]
+  summaries: WorkflowSummary[]
 }
 
-function startCollector(): { emissions: SummaryEmission[]; stop: () => void } {
+interface StoreControl {
+  failures: number
+  reads: Map<string, number>
+  sessions: Map<string, string>
+  summaries: Map<string, WorkflowSummary[]>
+}
+
+interface EventControl {
+  listener?: (event: never) => Effect.Effect<void>
+}
+
+function control() {
+  return {
+    failures: 0,
+    reads: new Map<string, number>(),
+    sessions: new Map<string, string>(),
+    summaries: new Map<string, WorkflowSummary[]>(),
+  } satisfies StoreControl
+}
+
+function workflow(id: string, sessionId: string): WorkflowRow {
+  return {
+    id,
+    projectId: "global",
+    sessionId,
+    title: id,
+    status: "running",
+    config: "",
+    seq: 0,
+    wakeReported: false,
+    startedAt: null,
+    completedAt: null,
+    timeCreated: 0,
+    timeUpdated: 0,
+  }
+}
+
+function summary(id: string, completedNodes: number): WorkflowSummary {
+  return {
+    id,
+    title: id,
+    status: "running",
+    nodeCount: completedNodes,
+    completedNodes,
+    runningNodes: 0,
+    failedNodes: 0,
+  }
+}
+
+function runtime(state: StoreControl, bus: EventControl) {
+  const store = Layer.mock(DagStore.Service, {
+    getWorkflow: (dagID) => Effect.succeed(state.sessions.get(dagID)).pipe(Effect.map((sid) => sid ? workflow(dagID, sid) : undefined)),
+    getWorkflowSummaries: (sessionID) =>
+      Effect.sync(() => {
+        state.reads.set(sessionID, (state.reads.get(sessionID) ?? 0) + 1)
+        if (state.failures > 0) {
+          state.failures -= 1
+          throw new Error("simulated summary read failure")
+        }
+        return state.summaries.get(sessionID) ?? []
+      }),
+  })
+  const events = Layer.mock(EventV2Bridge.Service, {
+    listen: (listener) =>
+      Effect.sync(() => {
+        bus.listener = listener as never
+        return Effect.sync(() => {
+          bus.listener = undefined
+        })
+      }),
+  })
+  const base = Layer.mergeAll(events, store)
+  return Layer.provideMerge(DagSummaryPublisher.layer, base)
+}
+
+function startCollector() {
   const emissions: SummaryEmission[] = []
-  const handler = (e: { payload?: { type?: string; properties?: { sessionID?: string; summaries?: unknown[] } } }) => {
-    if (e.payload?.type === "dag.workflow.summary.updated") {
-      emissions.push({ sessionID: e.payload.properties!.sessionID!, summaries: e.payload.properties!.summaries! })
-    }
+  const handler = (event: {
+    payload?: { type?: string; properties?: { sessionID?: string; summaries?: WorkflowSummary[] } }
+  }) => {
+    if (event.payload?.type !== "dag.workflow.summary.updated") return
+    emissions.push({
+      sessionID: event.payload.properties!.sessionID!,
+      summaries: event.payload.properties!.summaries!,
+    })
   }
   GlobalBus.on("event", handler)
   return { emissions, stop: () => GlobalBus.off("event", handler) }
 }
 
-describe("DagSummaryPublisher behavior (integration)", () => {
-  it("a dag.node.completed event triggers a summary emission with aggregated counts", async () => {
-    const collector = startCollector()
-    try {
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          // Start the publisher subscriptions first (init drives InstanceState).
-          const publisher = yield* DagSummaryPublisher.Service
-          yield* publisher.init()
-          // init() forks the subscribe fibers; give the EventV2 PubSub subscriptions
-          // a tick to register before publishing, otherwise events published before
-          // the stream is drained are dropped (PubSub does not buffer history).
-          yield* Effect.sleep("20 millis")
-          yield* setup()
-          const events = yield* EventV2.Service
-          yield* events.publish(DagEvent.WorkflowCreated, { dagID, projectID: Project.ID.global as never, sessionID, title: "pub-test", config: "", status: "pending", timestamp: ts(0) })
-          yield* events.publish(DagEvent.NodeRegistered, { dagID, nodeID, name: "Build", workerType: "build", dependsOn: [], required: true, timestamp: ts(1) })
-          yield* events.publish(DagEvent.NodeStarted, { dagID, nodeID, childSessionID: "ses_child" as never, timestamp: ts(2) })
-          yield* events.publish(DagEvent.NodeCompleted, { dagID, nodeID, output: { ok: true }, durationMs: 5, timestamp: ts(3) })
-          // Give the burst-coalesced publish fiber a chance to run.
-          yield* Effect.sleep("150 millis")
-        }).pipe(
-          Effect.scoped,
-          Effect.provideService(InstanceRef, ctx),
-          Effect.provide(runtimeLayer),
-        ) as Effect.Effect<never>,
-      )
+function publishNodeEvents(bus: EventControl, dagID: string, count: number) {
+  if (!bus.listener) return Effect.die(new Error("publisher listener is not ready"))
+  return Effect.forEach(
+    Array.from({ length: count }, (_, index) => index),
+    (index) => bus.listener!({
+      type: DagEvent.NodeRegistered.type,
+      data: {
+        dagID,
+        nodeID: `${dagID}-node-${index}`,
+        name: `Node ${index}`,
+        workerType: "build",
+        dependsOn: [],
+        required: true,
+        timestamp: ts(index),
+      },
+    } as never),
+    { discard: true },
+  )
+}
 
-      expect(collector.emissions.length).toBeGreaterThanOrEqual(1)
-      const last = collector.emissions.at(-1)!
-      expect(last.sessionID).toBe(sessionID)
-      expect(last.summaries).toHaveLength(1)
-      expect(last.summaries[0]).toMatchObject({
-        id: "dag_pub",
-        nodeCount: 1,
-        completedNodes: 1,
-        runningNodes: 0,
-        failedNodes: 0,
-      })
-    } finally {
-      collector.stop()
-    }
+function withCollector<A, E, R>(use: (collector: ReturnType<typeof startCollector>) => Effect.Effect<A, E, R>) {
+  return Effect.acquireUseRelease(
+    Effect.sync(startCollector),
+    use,
+    (collector) => Effect.sync(collector.stop),
+  )
+}
+
+describe("DagSummaryPublisher behavior", () => {
+  it.instance("a node completion triggers one fresh summary recompute", () => {
+    const state = control()
+    const bus = {} satisfies EventControl
+    state.sessions.set("dag-one", "ses-one")
+    state.summaries.set("ses-one", [summary("dag-one", 1)])
+
+    return withCollector((collector) =>
+      Effect.gen(function* () {
+        yield* (yield* DagSummaryPublisher.Service).init()
+        yield* publishNodeEvents(bus, "dag-one", 1)
+        yield* pollWithTimeout(
+          Effect.sync(() => collector.emissions.length === 1 ? collector.emissions[0] : undefined),
+          "summary publisher did not emit",
+        )
+
+        expect(state.reads.get("ses-one")).toBe(1)
+        expect(collector.emissions[0]).toEqual({ sessionID: "ses-one", summaries: [summary("dag-one", 1)] })
+      }),
+    ).pipe(Effect.provide(runtime(state, bus)))
   })
 
-  it("coalesces a burst of node events (fewer emissions than events, final state aggregated)", async () => {
-    const collector = startCollector()
-    try {
-      await Effect.runPromise(
-        Effect.gen(function* () {
-          const publisher = yield* DagSummaryPublisher.Service
-          yield* publisher.init()
-          yield* Effect.sleep("20 millis")
-          yield* setup()
-          const events = yield* EventV2.Service
-          yield* events.publish(DagEvent.WorkflowCreated, { dagID, projectID: Project.ID.global as never, sessionID, title: "burst", config: "", status: "pending", timestamp: ts(0) })
-          yield* events.publish(DagEvent.WorkflowStarted, { dagID, timestamp: ts(1) })
-          for (let i = 1; i <= 5; i++) {
-            yield* events.publish(DagEvent.NodeRegistered, { dagID, nodeID: `n-${i}` as never, name: `N${i}`, workerType: "build", dependsOn: [], required: false, timestamp: ts(2 + i) })
-          }
-          // Fire 5 completed events in a tight burst for the same session.
-          for (let i = 1; i <= 5; i++) {
-            yield* events.publish(DagEvent.NodeStarted, { dagID, nodeID: `n-${i}` as never, childSessionID: `ses_child_${i}` as never, timestamp: ts(10 + i) })
-            yield* events.publish(DagEvent.NodeCompleted, { dagID, nodeID: `n-${i}` as never, output: { ok: true }, durationMs: 1, timestamp: ts(20 + i) })
-          }
-          // Yield window for the burst-coalesced publish fibers to settle.
-          yield* Effect.sleep("200 millis")
-        }).pipe(
-          Effect.scoped,
-          Effect.provideService(InstanceRef, ctx),
-          Effect.provide(runtimeLayer),
-        ) as Effect.Effect<never>,
-      )
+  it.instance("five same-session node events coalesce into one read and emission", () => {
+    const state = control()
+    const bus = {} satisfies EventControl
+    state.sessions.set("dag-burst", "ses-burst")
+    state.summaries.set("ses-burst", [summary("dag-burst", 5)])
 
-      // Coalescing collapses a burst of 10 synchronous node events into far fewer
-      // emissions than the event count. The strict count is scheduler-dependent,
-      // so assert the invariant: the publisher never emitted one-per-event, and
-      // the final emission reflects the fully-aggregated state.
-      const emissions = collector.emissions
-      const triggeredNodeEvents = 10
-      expect(emissions.length).toBeLessThan(triggeredNodeEvents)
-      expect(emissions.length).toBeGreaterThanOrEqual(1)
-      const last = emissions.at(-1)!
-      expect(last.summaries[0]).toMatchObject({ nodeCount: 5, completedNodes: 5, runningNodes: 0 })
-    } finally {
-      collector.stop()
-    }
+    return withCollector((collector) =>
+      Effect.gen(function* () {
+        yield* (yield* DagSummaryPublisher.Service).init()
+        yield* publishNodeEvents(bus, "dag-burst", 5)
+        yield* pollWithTimeout(
+          Effect.sync(() => collector.emissions.length === 1 ? true : undefined),
+          "coalesced summary was not emitted",
+        )
+
+        expect(state.reads.get("ses-burst")).toBe(1)
+        expect(collector.emissions).toEqual([
+          { sessionID: "ses-burst", summaries: [summary("dag-burst", 5)] },
+        ])
+      }),
+    ).pipe(Effect.provide(runtime(state, bus)))
+  })
+
+  it.instance("different sessions coalesce independently", () => {
+    const state = control()
+    const bus = {} satisfies EventControl
+    state.sessions.set("dag-a", "ses-a")
+    state.sessions.set("dag-b", "ses-b")
+    state.summaries.set("ses-a", [summary("dag-a", 1)])
+    state.summaries.set("ses-b", [summary("dag-b", 1)])
+
+    return withCollector((collector) =>
+      Effect.gen(function* () {
+        yield* (yield* DagSummaryPublisher.Service).init()
+        yield* Effect.all([publishNodeEvents(bus, "dag-a", 3), publishNodeEvents(bus, "dag-b", 3)], {
+          concurrency: "unbounded",
+        })
+        yield* pollWithTimeout(
+          Effect.sync(() => collector.emissions.length === 2 ? true : undefined),
+          "independent session summaries were not emitted",
+        )
+
+        expect(state.reads).toEqual(new Map([["ses-a", 1], ["ses-b", 1]]))
+        expect(collector.emissions.map((item) => item.sessionID).toSorted()).toEqual(["ses-a", "ses-b"])
+      }),
+    ).pipe(Effect.provide(runtime(state, bus)))
+  })
+
+  it.instance("failed reads release coordination and later events read fresh state", () => {
+    const state = control()
+    const bus = {} satisfies EventControl
+    state.failures = 1
+    state.sessions.set("dag-retry", "ses-retry")
+    state.summaries.set("ses-retry", [summary("dag-retry", 1)])
+
+    return withCollector((collector) =>
+      Effect.gen(function* () {
+        yield* (yield* DagSummaryPublisher.Service).init()
+        yield* publishNodeEvents(bus, "dag-retry", 1)
+        yield* pollWithTimeout(
+          Effect.sync(() => state.reads.get("ses-retry") === 1 ? true : undefined),
+          "failed summary read did not run",
+        )
+        expect(collector.emissions).toEqual([])
+
+        state.summaries.set("ses-retry", [summary("dag-retry", 2)])
+        yield* publishNodeEvents(bus, "dag-retry", 1)
+        yield* pollWithTimeout(
+          Effect.sync(() => collector.emissions.length === 1 ? true : undefined),
+          "summary publisher did not recover after failure",
+        )
+
+        expect(state.reads.get("ses-retry")).toBe(2)
+        expect(collector.emissions[0].summaries).toEqual([summary("dag-retry", 2)])
+      }),
+    ).pipe(Effect.provide(runtime(state, bus)))
   })
 })

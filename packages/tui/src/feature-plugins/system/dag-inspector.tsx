@@ -50,17 +50,39 @@ function DagInspector(props: { api: TuiPluginApi }) {
     }
   }
 
+  // Per-workflow summary signature for change detection. Only re-fetch nodes
+  // when the selected workflow's node-level state actually changes.
+  let lastSignature = ""
+
+  const signatureFor = (wfId: string): string => {
+    const sid = params()?.sessionID
+    if (!sid) return ""
+    const wfs = props.api.state.session.dag(sid)
+    const wf = wfs.find((w) => w.id === wfId)
+    if (!wf) return ""
+    return `${wf.nodeCount}:${wf.completedNodes}:${wf.runningNodes}:${wf.failedNodes}`
+  }
+
   createEffect(() => {
     const wf = selectedWorkflow()
     if (!wf) {
       setNodes([])
+      lastSignature = ""
       return
     }
+    // Snapshot the signature at open time so the first summary event after
+    // open has something to compare against.
+    lastSignature = signatureFor(wf)
     void fetchNodes(wf)
-    // Re-fetch nodes when the summary publisher signals a change for this session.
-    // The summary event fires on any dag.* event that alters visible state,
-    // so it is the right trigger for refreshing node detail while the inspector is open.
-    const off = props.api.event.on("dag.workflow.summary.updated", () => {
+    // Re-fetch nodes only when a summary event for THIS session indicates the
+    // selected workflow's node-level state changed. Summary events for other
+    // sessions and unchanged summaries do not trigger a fetch.
+    const sid = params()?.sessionID
+    const off = props.api.event.on("dag.workflow.summary.updated", (event) => {
+      if (!sid || event.properties.sessionID !== sid) return
+      const sig = signatureFor(wf)
+      if (sig === lastSignature) return
+      lastSignature = sig
       void fetchNodes(wf)
     })
     onCleanup(() => off())

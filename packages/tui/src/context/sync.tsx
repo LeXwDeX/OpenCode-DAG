@@ -31,7 +31,7 @@ import { useTuiStartup } from "./runtime"
 import { createSimpleContext } from "./helper"
 import { useExit } from "./exit"
 import { useArgs } from "./args"
-import { batch, onMount } from "solid-js"
+import { batch, onCleanup, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { TuiLog } from "../util/log"
@@ -565,8 +565,42 @@ export const {
         })
     }
 
+    // Reconnect recovery for DAG summaries: the summary publisher emits
+    // ephemeral events that are not durable. When the SSE stream reconnects,
+    // any events missed during the disconnect are unrecoverable by replay.
+    // This snapshots every session already represented in `store.dag` (the
+    // exact recovery set, not the visible-session query used by bootstrap)
+    // and replaces each slice with a fresh complete response. Deduplicated
+    // against an in-flight flag so rapid reconnects don't stack requests.
+    const refreshDagSummaries = (): Promise<void> => {
+      const sessionIDs = Object.keys(store.dag)
+      if (sessionIDs.length === 0) return Promise.resolve()
+      const workspace = project.workspace.current()
+      return Promise.all(
+        sessionIDs.map((sessionID) =>
+          sdk.client.dag
+            .summary({ sessionID, workspace })
+            .then((x) => setStore("dag", sessionID, reconcile(x.data ?? [])))
+            .catch(() => {}),
+        ),
+      ).then(() => undefined)
+    }
+
+    let dagReconnectInFlight = false
+    const unsubscribeReconnect = sdk.event.on("reconnected", () => {
+      if (dagReconnectInFlight) return
+      dagReconnectInFlight = true
+      refreshDagSummaries().finally(() => {
+        dagReconnectInFlight = false
+      })
+    })
+
     onMount(() => {
       void bootstrap()
+    })
+
+    onCleanup(() => {
+      unsubscribeReconnect()
     })
 
     const result = {

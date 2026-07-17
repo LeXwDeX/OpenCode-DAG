@@ -1,27 +1,20 @@
 /** @jsxImportSource @opentui/solid */
-import { describe, expect, test, mock } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { createDefaultOpenTuiKeymap } from "@opentui/keymap/opentui"
 import { testRender, useRenderer } from "@opentui/solid"
 import type { TuiPluginApi, TuiRouteCurrent, TuiRouteDefinition } from "@opencode-ai/plugin/tui"
-import type { DagWorkflowSummary } from "@opencode-ai/sdk/v2"
+import type { DagNode, DagWorkflowSummary } from "@opencode-ai/sdk/v2"
 import { KVProvider } from "../../src/context/kv"
 import { ThemeProvider } from "../../src/context/theme"
 import { TuiConfigProvider } from "../../src/config"
 import { OpencodeKeymapProvider } from "../../src/keymap"
+import { createSignal } from "solid-js"
 import dagInspectorPlugin from "../../src/feature-plugins/system/dag-inspector"
 import { createTuiPluginApi } from "../fixture/tui-plugin"
 import { createTuiResolvedConfig } from "../fixture/tui-runtime"
 import { TestTuiContexts } from "../fixture/tui-environment"
 
-interface DagNodeRow {
-  id: string
-  name: string
-  status: string
-  worker_type: string
-  depends_on: string[]
-  child_session_id?: string | null
-  error_reason?: string | null
-}
+const SESSION_ID = "ses_1"
 
 const wfSummary = (overrides: Partial<DagWorkflowSummary> = {}): DagWorkflowSummary => ({
   id: "wf-1",
@@ -36,8 +29,20 @@ const wfSummary = (overrides: Partial<DagWorkflowSummary> = {}): DagWorkflowSumm
 
 type RenderOpts = {
   workflows?: DagWorkflowSummary[]
-  nodes?: DagNodeRow[]
+  nodes?: DagNode[]
   initialRoute?: TuiRouteCurrent
+}
+
+function dagNode(overrides: Partial<DagNode> & { id: string }): DagNode {
+  return {
+    workflow_id: "wf-1",
+    name: overrides.id,
+    status: "pending",
+    worker_type: "build",
+    required: false,
+    depends_on: [],
+    ...overrides,
+  }
 }
 
 async function renderDagInspector(opts: RenderOpts = {}) {
@@ -45,15 +50,17 @@ async function renderDagInspector(opts: RenderOpts = {}) {
     string,
     NonNullable<Parameters<TuiPluginApi["keymap"]["registerLayer"]>[0]["commands"]>[number]
   >()
-  let current: TuiRouteCurrent =
-    opts.initialRoute ?? { name: "dag", params: { sessionID: "ses_1" } }
+  const [current, setCurrent] = createSignal<TuiRouteCurrent>(opts.initialRoute ?? { name: "dag", params: { sessionID: SESSION_ID } })
   let renderInspector: TuiRouteDefinition["render"] | undefined
+
+  // Updatable workflow state for change detection.
+  let workflowsState = opts.workflows ?? []
 
   // Trackable spies
   const nodesCalls: string[] = []
   const navigations: { name: string; params?: Record<string, unknown> }[] = []
   const toasts: { variant?: string; message: string }[] = []
-  const eventHandlers = new Map<string, () => void>()
+  const eventHandlers = new Map<string, (event: never) => void>()
 
   const config = createTuiResolvedConfig()
 
@@ -77,11 +84,11 @@ async function renderDagInspector(opts: RenderOpts = {}) {
       } as unknown as TuiPluginApi["client"],
       state: {
         session: {
-          dag: () => opts.workflows ?? [],
+          dag: () => workflowsState,
         },
       },
       event: {
-        on: ((type: string, handler: () => void) => {
+        on: ((type: string, handler: (event: never) => void) => {
           eventHandlers.set(type, handler)
           return () => eventHandlers.delete(type)
         }) as unknown as TuiPluginApi["event"]["on"],
@@ -96,10 +103,10 @@ async function renderDagInspector(opts: RenderOpts = {}) {
         },
         navigate(name, params) {
           navigations.push({ name, params })
-          current = params ? { name, params } : { name }
+          setCurrent(params ? { name, params } : { name })
         },
         get current() {
-          return current
+          return current()
         },
       },
       ui: {
@@ -116,7 +123,12 @@ async function renderDagInspector(opts: RenderOpts = {}) {
           <TuiConfigProvider config={config}>
             <KVProvider>
               <ThemeProvider mode="dark">
-                {renderInspector?.({ params: "params" in current ? current.params : undefined })}
+                {(() => {
+                  const route = current()
+                  if (route.name !== "dag") return null
+                  const params = "params" in route ? route.params : undefined
+                  return renderInspector?.({ params })
+                })()}
               </ThemeProvider>
             </KVProvider>
           </TuiConfigProvider>
@@ -126,8 +138,9 @@ async function renderDagInspector(opts: RenderOpts = {}) {
   }
 
   const app = await testRender(() => <Harness />, { width: 100, height: 30 })
-  // Wait for the inspector commands to be registered.
   await waitForCommand(app, commands, "dag.close")
+  // Give the initial fetchNodes a chance to resolve.
+  await waitForCondition(() => nodesCalls.length > 0)
 
   return {
     app,
@@ -135,8 +148,16 @@ async function renderDagInspector(opts: RenderOpts = {}) {
     navigations: () => navigations,
     toasts: () => toasts,
     nodesCalls: () => nodesCalls,
-    emitSummaryUpdate: () => eventHandlers.get("dag.workflow.summary.updated")?.(),
-    current: () => current,
+    setWorkflows: (wfs: DagWorkflowSummary[]) => {
+      workflowsState = wfs
+    },
+    emitSummaryUpdate: (sessionID: string = SESSION_ID) => {
+      eventHandlers.get("dag.workflow.summary.updated")?.({
+        type: "dag.workflow.summary.updated",
+        properties: { sessionID, summaries: workflowsState },
+      } as never)
+    },
+    current: () => current(),
   }
 }
 
@@ -154,32 +175,93 @@ async function waitForCommand(
   }
 }
 
+async function waitForCondition(fn: () => boolean, timeout = 2000) {
+  const start = Date.now()
+  while (!fn()) {
+    if (Date.now() - start > timeout) throw new Error("timed out waiting for condition")
+    await Bun.sleep(10)
+  }
+}
+
 describe("DagInspector", () => {
   test("mounting fetches nodes for the auto-selected workflow", async () => {
     const viewer = await renderDagInspector({
       workflows: [wfSummary({ id: "wf-1", nodeCount: 1 })],
-      nodes: [{ id: "n-1", name: "build", status: "pending", worker_type: "build", depends_on: [] }],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "pending" })],
     })
     try {
-      await Bun.sleep(30)
       expect(viewer.nodesCalls()).toContain("wf-1")
     } finally {
       viewer.app.renderer.destroy()
     }
   })
 
-  test("dag.workflow.summary.updated event triggers a node re-fetch", async () => {
+  test("changed summary for the open session triggers a node re-fetch", async () => {
     const viewer = await renderDagInspector({
-      workflows: [wfSummary({ id: "wf-1" })],
-      nodes: [{ id: "n-1", name: "build", status: "running", worker_type: "build", depends_on: [] }],
+      workflows: [wfSummary({ id: "wf-1", completedNodes: 0 })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
     })
     try {
-      await Bun.sleep(20)
       const before = viewer.nodesCalls().length
+      // Update the workflow summary to show a change in completedNodes.
+      viewer.setWorkflows([wfSummary({ id: "wf-1", completedNodes: 1 })])
       viewer.emitSummaryUpdate()
+      await waitForCondition(() => viewer.nodesCalls().length > before)
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("summary for another session does not trigger a re-fetch", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1", completedNodes: 0 })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
+    })
+    try {
+      const before = viewer.nodesCalls().length
+      viewer.setWorkflows([wfSummary({ id: "wf-1", completedNodes: 1 })])
+      // Emit for a different session — should be filtered out.
+      viewer.emitSummaryUpdate("other_session")
+      await Bun.sleep(50)
+      expect(viewer.nodesCalls().length).toBe(before)
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("unchanged summary does not trigger a re-fetch", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1", completedNodes: 0 })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
+    })
+    try {
+      const before = viewer.nodesCalls().length
+      // Don't change the workflow state — signature stays the same.
+      viewer.emitSummaryUpdate()
+      await Bun.sleep(50)
+      expect(viewer.nodesCalls().length).toBe(before)
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("closing the inspector prevents further fetches", async () => {
+    const viewer = await renderDagInspector({
+      initialRoute: { name: "dag", params: { sessionID: SESSION_ID, returnRoute: { name: "session", params: { sessionID: SESSION_ID } } } },
+      workflows: [wfSummary({ id: "wf-1" })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "pending" })],
+    })
+    try {
+      // Close the inspector — navigates away, unmounts the component.
+      viewer.commands.get("dag.close")!.run?.({} as never)
       await Bun.sleep(20)
-      const after = viewer.nodesCalls().length
-      expect(after).toBeGreaterThan(before)
+
+      const before = viewer.nodesCalls().length
+      // After close, summary changes should NOT trigger fetches.
+      viewer.setWorkflows([wfSummary({ id: "wf-1", completedNodes: 5 })])
+      viewer.emitSummaryUpdate()
+      await Bun.sleep(50)
+      expect(viewer.nodesCalls().length).toBe(before)
     } finally {
       viewer.app.renderer.destroy()
     }
@@ -188,20 +270,10 @@ describe("DagInspector", () => {
   test("dag.enter navigates into the selected node's child session", async () => {
     const viewer = await renderDagInspector({
       workflows: [wfSummary({ id: "wf-1" })],
-      nodes: [
-        {
-          id: "n-1",
-          name: "build",
-          status: "running",
-          worker_type: "build",
-          depends_on: [],
-          child_session_id: "child_ses_1",
-        },
-      ],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running", child_session_id: "child_ses_1" })],
     })
     try {
       viewer.commands.get("dag.enter")!.run?.({} as never)
-      await Bun.sleep(10)
       expect(viewer.navigations()).toContainEqual(
         expect.objectContaining({ name: "session", params: expect.objectContaining({ sessionID: "child_ses_1" }) }),
       )
@@ -213,11 +285,10 @@ describe("DagInspector", () => {
   test("dag.enter toasts when the node has no child session yet", async () => {
     const viewer = await renderDagInspector({
       workflows: [wfSummary({ id: "wf-1" })],
-      nodes: [{ id: "n-1", name: "build", status: "pending", worker_type: "build", depends_on: [], child_session_id: null }],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "pending" })],
     })
     try {
       viewer.commands.get("dag.enter")!.run?.({} as never)
-      await Bun.sleep(10)
       expect(viewer.toasts().some((t) => /no session/i.test(t.message))).toBe(true)
     } finally {
       viewer.app.renderer.destroy()
@@ -225,17 +296,57 @@ describe("DagInspector", () => {
   })
 
   test("dag.close navigates back to the return route", async () => {
-    const returnRoute = { name: "session", params: { sessionID: "ses_1" } }
+    const returnRoute = { name: "session", params: { sessionID: SESSION_ID } }
     const viewer = await renderDagInspector({
-      initialRoute: { name: "dag", params: { sessionID: "ses_1", returnRoute } },
+      initialRoute: { name: "dag", params: { sessionID: SESSION_ID, returnRoute } },
       workflows: [wfSummary({ id: "wf-1" })],
     })
     try {
       viewer.commands.get("dag.close")!.run?.({} as never)
-      await Bun.sleep(10)
       expect(viewer.navigations().at(-1)).toEqual(
-        expect.objectContaining({ name: "session", params: { sessionID: "ses_1" } }),
+        expect.objectContaining({ name: "session", params: { sessionID: SESSION_ID } }),
       )
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("changing workflow replaces subscriptions so only the new selection refreshes", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [
+        wfSummary({ id: "wf-1", completedNodes: 0, nodeCount: 2 }),
+        wfSummary({ id: "wf-2", completedNodes: 0, nodeCount: 2 }),
+      ],
+      nodes: [dagNode({ id: "n-1", workflow_id: "wf-1", name: "build", status: "running" })],
+    })
+    try {
+      // Auto-selection picks wf-1; its initial fetch has resolved.
+      await waitForCondition(() => viewer.nodesCalls().some((id) => id === "wf-1"))
+
+      // Switch selection wf-1 -> wf-2.
+      viewer.commands.get("dag.next_workflow")!.run?.({} as never)
+      // The new selection fetches wf-2's nodes.
+      await waitForCondition(() => viewer.nodesCalls().some((id) => id === "wf-2"))
+
+      const before = viewer.nodesCalls().length
+      // Now change ONLY wf-1's summary (the previously selected workflow).
+      // Because the subscription now tracks wf-2's signature, wf-1's change
+      // alone must NOT trigger a fetch.
+      viewer.setWorkflows([
+        wfSummary({ id: "wf-1", completedNodes: 1, nodeCount: 2 }),
+        wfSummary({ id: "wf-2", completedNodes: 0, nodeCount: 2 }),
+      ])
+      viewer.emitSummaryUpdate()
+      await Bun.sleep(50)
+      expect(viewer.nodesCalls().length).toBe(before)
+
+      // Changing wf-2's summary DOES refresh (the active selection).
+      viewer.setWorkflows([
+        wfSummary({ id: "wf-1", completedNodes: 1, nodeCount: 2 }),
+        wfSummary({ id: "wf-2", completedNodes: 2, nodeCount: 2 }),
+      ])
+      viewer.emitSummaryUpdate()
+      await waitForCondition(() => viewer.nodesCalls().length > before)
     } finally {
       viewer.app.renderer.destroy()
     }
@@ -244,20 +355,10 @@ describe("DagInspector", () => {
   test("a failed node renders its error_reason in the inspector", async () => {
     const viewer = await renderDagInspector({
       workflows: [wfSummary({ id: "wf-1", failedNodes: 1, nodeCount: 1 })],
-      nodes: [
-        {
-          id: "n-1",
-          name: "build",
-          status: "failed",
-          worker_type: "build",
-          depends_on: [],
-          error_reason: "compile error in main.ts",
-        },
-      ],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "failed", error_reason: "compile error in main.ts" })],
     })
     try {
       await viewer.app.waitForFrame((frame) => frame.includes("compile error in main.ts"))
-      // The error reason must reach the rendered frame. The guard above throws on timeout if absent.
     } finally {
       viewer.app.renderer.destroy()
     }
