@@ -19,18 +19,10 @@ import type {
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
+  DagWorkflowSummary,
 } from "@opencode-ai/sdk/v2"
 
-/** DAG workflow summary for TUI display. */
-export interface DagWorkflowSummary {
-  id: string
-  title: string
-  status: string
-  nodeCount: number
-  completedNodes: number
-  runningNodes: number
-  failedNodes: number
-}
+export type { DagWorkflowSummary }
 import { createStore, produce, reconcile } from "solid-js/store"
 import { useProject } from "./project"
 import { useEvent } from "./event"
@@ -265,13 +257,13 @@ export const {
           setStore("todo", event.properties.sessionID, event.properties.todos)
           break
 
-        // ── DAG events ──────────────────────────────────────────────
-        // The TUI doesn't receive individual dag.* events from EventV2
-        // (those flow through the server). Instead, DAG state is fetched
-        // on-demand via the HTTP route (dag.bySession). The store slice
-        // is populated by the plugin component's createMemo calling
-        // api.client.v2.dag.bySession(), not by an event reducer case.
-        // This keeps the store shape available for the plugin to write to.
+        // ── DAG workflow summary ────────────────────────────────────
+        // Stateless derived-view publisher (server-side) emits the full
+        // WorkflowSummary[] for a session whenever any dag.* event changes
+        // its visible progress. We just store it — no client-side aggregation.
+        case "dag.workflow.summary.updated":
+          setStore("dag", event.properties.sessionID, event.properties.summaries)
+          break
 
         case "session.diff":
           setStore("session_diff", event.properties.sessionID, event.properties.diff)
@@ -540,6 +532,21 @@ export const {
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
+            // DAG summaries: fetch per visible session as the initial baseline.
+            // The summary publisher's ephemeral events keep these fresh thereafter;
+            // this fetch is the safety net for events missed before subscribe.
+            // Chained off sessionListPromise so store.session is populated first,
+            // and runs on both fresh start and --continue.
+            sessionListPromise.then((sessions) =>
+              Promise.all(
+                sessions.map((s) =>
+                  sdk.client.dag
+                    .summary({ sessionID: s.id, workspace })
+                    .then((x) => setStore("dag", s.id, reconcile(x.data ?? [])))
+                    .catch(() => {}),
+                ),
+              ),
+            ),
           ]).then(() => {
             setStore("status", "complete")
           })

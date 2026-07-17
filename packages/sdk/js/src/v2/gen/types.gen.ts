@@ -69,6 +69,7 @@ export type Event =
   | EventQuestionV2Replied
   | EventQuestionV2Rejected
   | EventTodoUpdated
+  | EventDagWorkflowSummaryUpdated
   | EventLspUpdated
   | EventPermissionAsked
   | EventPermissionReplied
@@ -671,6 +672,16 @@ export type Todo = {
    * Priority level of the task: high, medium, low
    */
   priority: string
+}
+
+export type DagWorkflowSummary = {
+  id: string
+  title: string
+  status: string
+  nodeCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  completedNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  runningNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
+  failedNodes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
 }
 
 export type SessionStatus =
@@ -1423,6 +1434,14 @@ export type GlobalEvent = {
         properties: {
           sessionID: string
           todos: Array<Todo>
+        }
+      }
+    | {
+        id: string
+        type: "dag.workflow.summary.updated"
+        properties: {
+          sessionID: string
+          summaries: Array<DagWorkflowSummary>
         }
       }
     | {
@@ -2747,6 +2766,12 @@ export type EventTuiSessionSelect = {
   }
 }
 
+export type ConflictError = {
+  _tag: "ConflictError"
+  message: string
+  resource?: string
+}
+
 export type Workspace = {
   id: string
   type: string
@@ -2794,12 +2819,6 @@ export type SessionNotFoundError = {
   _tag: "SessionNotFoundError"
   sessionID: string
   message: string
-}
-
-export type ConflictError = {
-  _tag: "ConflictError"
-  message: string
-  resource?: string
 }
 
 export type ServiceUnavailableError = {
@@ -2900,6 +2919,7 @@ export type V2Event =
   | V2EventQuestionV2Replied
   | V2EventQuestionV2Rejected
   | V2EventTodoUpdated
+  | V2EventDagWorkflowSummaryUpdated
   | V2EventLspUpdated
   | V2EventPermissionAsked
   | V2EventPermissionReplied
@@ -2943,6 +2963,16 @@ export type ProjectCopyError = {
 
 export type EffectHttpApiErrorForbidden = {
   _tag: "Forbidden"
+}
+
+export type DagWorkflowSummary1 = {
+  id: string
+  title: string
+  status: string
+  nodeCount: number | "NaN" | "Infinity" | "-Infinity"
+  completedNodes: number | "NaN" | "Infinity" | "-Infinity"
+  runningNodes: number | "NaN" | "Infinity" | "-Infinity"
+  failedNodes: number | "NaN" | "Infinity" | "-Infinity"
 }
 
 export type EventTuiPromptAppend2 = {
@@ -5733,6 +5763,24 @@ export type V2EventTodoUpdated = {
   }
 }
 
+export type V2EventDagWorkflowSummaryUpdated = {
+  id: string
+  metadata?: {
+    [key: string]: unknown
+  }
+  durable?: {
+    aggregateID: string
+    seq: number
+    version: number
+  }
+  location?: LocationRef
+  type: "dag.workflow.summary.updated"
+  data: {
+    sessionID: string
+    summaries: Array<DagWorkflowSummary>
+  }
+}
+
 export type V2EventLspUpdated = {
   id: string
   metadata?: {
@@ -7045,6 +7093,15 @@ export type EventTodoUpdated = {
   properties: {
     sessionID: string
     todos: Array<Todo>
+  }
+}
+
+export type EventDagWorkflowSummaryUpdated = {
+  id: string
+  type: "dag.workflow.summary.updated"
+  properties: {
+    sessionID: string
+    summaries: Array<DagWorkflowSummary1>
   }
 }
 
@@ -11468,7 +11525,9 @@ export type DagListResponse = DagListResponses[keyof DagListResponses]
 
 export type DagBySessionData = {
   body?: never
-  path?: never
+  path: {
+    sessionID: string
+  }
   query?: {
     directory?: string
     workspace?: string
@@ -11498,9 +11557,45 @@ export type DagBySessionResponses = {
 
 export type DagBySessionResponse = DagBySessionResponses[keyof DagBySessionResponses]
 
+export type DagSummaryData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/dag/session/{sessionID}/summary"
+}
+
+export type DagSummaryErrors = {
+  /**
+   * Bad request
+   */
+  400: BadRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type DagSummaryError = DagSummaryErrors[keyof DagSummaryErrors]
+
+export type DagSummaryResponses = {
+  /**
+   * Aggregated per-workflow progress summaries for a session (server-side aggregation)
+   */
+  200: Array<DagWorkflowSummary>
+}
+
+export type DagSummaryResponse = DagSummaryResponses[keyof DagSummaryResponses]
+
 export type DagDetailData = {
   body?: never
-  path?: never
+  path: {
+    dagID: string
+  }
   query?: {
     directory?: string
     workspace?: string
@@ -11532,7 +11627,9 @@ export type DagDetailResponse = DagDetailResponses[keyof DagDetailResponses]
 
 export type DagNodesData = {
   body?: never
-  path?: never
+  path: {
+    dagID: string
+  }
   query?: {
     directory?: string
     workspace?: string
@@ -11564,7 +11661,10 @@ export type DagNodesResponse = DagNodesResponses[keyof DagNodesResponses]
 
 export type DagNodeDetailData = {
   body?: never
-  path?: never
+  path: {
+    dagID: string
+    nodeID: string
+  }
   query?: {
     directory?: string
     workspace?: string
@@ -11599,7 +11699,9 @@ export type DagControlData = {
     operation: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
     fragment?: unknown
   }
-  path?: never
+  path: {
+    dagID: string
+  }
   query?: {
     directory?: string
     workspace?: string
@@ -11616,6 +11718,10 @@ export type DagControlErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * ConflictError
+   */
+  409: ConflictError
 }
 
 export type DagControlError = DagControlErrors[keyof DagControlErrors]

@@ -57,6 +57,7 @@ import { HookRewakeLive } from "@/hook/rewake-live"
 import { Dag } from "@/dag/dag"
 import { DagStore } from "@opencode-ai/core/dag/store"
 import { DagLoop } from "@/dag/runtime/loop"
+import { DagSummaryPublisher } from "@/dag/runtime/summary-publisher"
 
 export const AppLayer = Layer.mergeAll(
   Layer.mergeAll(
@@ -122,6 +123,7 @@ export const AppLayer = Layer.mergeAll(
   // other's outputs, but provideMerge gives the layer access to the full
   // accumulated context (group1 + group2 merged).
   Layer.provideMerge(DagLoop.defaultLayer),
+  Layer.provideMerge(DagSummaryPublisher.defaultLayer),
   Layer.provideMerge(SettingsHook.defaultLayer),
 )
 

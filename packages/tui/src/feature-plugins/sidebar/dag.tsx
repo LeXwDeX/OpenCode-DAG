@@ -52,9 +52,9 @@ function DagIndicator(props: { api: TuiPluginApi; session_id: string }) {
                 <text fg={theme().text} wrapMode="word">
                   {dag.title}{" "}
                   <span style={{ fg: theme().textMuted }}>
-                    ({dag.completedNodes}/{dag.nodeCount}
-                    {dag.runningNodes > 0 ? `, ${dag.runningNodes} running` : ""}
-                    {dag.failedNodes > 0 ? `, ${dag.failedNodes} failed` : ""})
+                    ({Number(dag.completedNodes)}/{Number(dag.nodeCount)}
+                    {Number(dag.runningNodes) > 0 ? `, ${Number(dag.runningNodes)} running` : ""}
+                    {Number(dag.failedNodes) > 0 ? `, ${Number(dag.failedNodes)} failed` : ""})
                   </span>
                 </text>
               </box>

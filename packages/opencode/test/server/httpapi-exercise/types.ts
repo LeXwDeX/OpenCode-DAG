@@ -6,7 +6,6 @@ import type { Project } from "../../../src/project/project"
 import type { Worktree } from "../../../src/worktree"
 import type { MessageV2 } from "../../../src/session/message-v2"
 import type { SessionID } from "../../../src/session/schema"
-
 export const OpenApiMethods = ["get", "post", "put", "delete", "patch"] as const
 export const Methods = ["GET", "POST", "PUT", "DELETE", "PATCH"] as const
 
@@ -66,6 +65,8 @@ export type ScenarioContext = {
   llmText: (value: string) => Effect.Effect<void>
   llmWait: (count: number) => Effect.Effect<void>
   tuiRequest: (request: { path: string; body: unknown }) => Effect.Effect<void>
+  /** Create a DAG workflow owned by sessionID with the given node configs. Returns the dagID. */
+  dag: (input: { sessionID: SessionID; title?: string; nodes: DagNodeSeed[] }) => Effect.Effect<DagWorkflowInfo>
 }
 
 /** Scenario context after `.seeded(...)`; `state` preserves the seed return type in the DSL. */
@@ -121,3 +122,15 @@ export type Result =
 export type SessionInfo = { id: SessionID; title: string; parentID?: SessionID }
 export type TodoInfo = { content: string; status: string; priority: string }
 export type MessageSeed = { info: SessionV1.User; part: SessionV1.TextPart }
+
+/** Minimal node declaration for DAG test fixtures. */
+export type DagNodeSeed = {
+  id: string
+  name: string
+  worker_type: string
+  depends_on: string[]
+  required: boolean
+}
+
+/** Result of creating a DAG workflow fixture. */
+export type DagWorkflowInfo = { dagID: string; sessionID: SessionID }

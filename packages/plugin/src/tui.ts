@@ -15,6 +15,7 @@ import type {
   SessionStatus,
   TextPart,
   Config as SdkConfig,
+  DagWorkflowSummary,
 } from "@opencode-ai/sdk/v2"
 import type { CliRenderer, KeyEvent, RGBA, Renderable, SlotMode } from "@opentui/core"
 import type { Binding, Keymap } from "@opentui/keymap"
@@ -453,15 +454,7 @@ export type TuiSidebarFileItem = {
   deletions: number
 }
 
-export type TuiSidebarDagItem = {
-  id: string
-  title: string
-  status: string
-  nodeCount: number
-  completedNodes: number
-  runningNodes: number
-  failedNodes: number
-}
+export type TuiSidebarDagItem = DagWorkflowSummary
 
 export type TuiHostSlotMap = {
   app: {}
