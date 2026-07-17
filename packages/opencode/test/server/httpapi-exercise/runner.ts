@@ -10,9 +10,10 @@ import { MessageID, PartID } from "../../../src/session/schema"
 import { call, callAuthProbe, disposeApps } from "./backend"
 import { original } from "./environment"
 import { runtime } from "./runtime"
-import type { ActiveScenario, Options, ProjectOptions, Result, Scenario, ScenarioContext, SeededContext } from "./types"
+import type { ActiveScenario, Options, ProjectOptions, Result, Scenario, ScenarioContext, SeededContext, DagNodeSeed } from "./types"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import type { SessionID } from "../../../src/session/schema"
 
 export function runScenario(options: Options) {
   return (scenario: Scenario) => {
@@ -183,6 +184,7 @@ function withContext<A, E>(
           llmText: (value) => Effect.suspend(() => llm().text(value)),
           llmWait: (count) => Effect.suspend(() => llm().wait(count)),
           tuiRequest: (request) => Effect.sync(() => modules.Tui.submitTuiRequest(request)),
+          dag: (input) => run(createDagFixture(input.sessionID, input.title, input.nodes)),
         }
         yield* trace(options, scenario, `${label} seed start`)
         const state = yield* scenario.seed(base)
@@ -265,3 +267,33 @@ const resetState = Effect.promise(async () => {
   await modules.resetDatabase()
   await Bun.sleep(25)
 })
+
+/**
+ * Create a DAG workflow fixture with mixed node statuses for HTTP happy-path tests.
+ * Creates the workflow owned by the session, using the instance's real project ID
+ * so the FK constraint on workflow.project_id is satisfied.
+ */
+function createDagFixture(sessionID: SessionID, title: string | undefined, nodes: DagNodeSeed[]) {
+  return Effect.gen(function* () {
+    const modules = yield* Effect.promise(() => runtime())
+    const dag = yield* modules.Dag.Service
+    const project = (yield* modules.InstanceRef)!.project
+    const dagID = yield* dag.create({
+      projectID: project.id,
+      sessionID,
+      title: title ?? "DAG fixture",
+      config: {
+        name: title ?? "DAG fixture",
+        nodes: nodes.map((n) => ({
+          id: n.id,
+          name: n.name,
+          worker_type: n.worker_type,
+          depends_on: n.depends_on,
+          required: n.required,
+          prompt_template: { inline: n.id },
+        })),
+      },
+    }).pipe(Effect.orDie)
+    return { dagID, sessionID } as const
+  })
+}

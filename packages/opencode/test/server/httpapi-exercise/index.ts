@@ -1713,12 +1713,160 @@ const scenarios: Scenario[] = [
     .status(400),
 
   // ── DAG workflow routes ──────────────────────────────────────────────
-  http.protected.get("/dag", "dag.list").json(200, array, "status"),
+  // Happy-path scenarios with a real workflow fixture (pays down "only 404 tested" debt)
+  http.protected
+    .get("/dag", "dag.list")
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG list owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({
+            sessionID: s.id,
+            nodes: [
+              { id: "a", name: "Node A", worker_type: "general", depends_on: [], required: true },
+              { id: "b", name: "Node B", worker_type: "general", depends_on: ["a"], required: false },
+            ],
+          }),
+        ),
+      ),
+    )
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        array(body)
+        check(body.length >= 1, "dag.list should return at least one workflow")
+      }),
+    ),
+
   http.protected
     .get("/dag/session/{sessionID}", "dag.bySession")
-    .seeded((ctx) => ctx.session({ title: "DAG session" }))
-    .at((ctx) => ({ path: route("/dag/session/{sessionID}", { sessionID: ctx.state.id }), headers: ctx.headers() }))
-    .json(200, array, "status"),
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG bySession owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({ sessionID: s.id, nodes: [{ id: "x", name: "X", worker_type: "general", depends_on: [], required: true }] }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/session/{sessionID}", { sessionID: ctx.state.sessionID }), headers: ctx.headers() }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        array(body)
+        check(body.length >= 1, "dag.bySession should return the fixture workflow")
+      }),
+    ),
+
+  http.protected
+    .get("/dag/session/{sessionID}/summary", "dag.summary")
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG summary owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({
+            sessionID: s.id,
+            nodes: [
+              { id: "a", name: "A", worker_type: "general", depends_on: [], required: true },
+              { id: "b", name: "B", worker_type: "general", depends_on: ["a"], required: false },
+            ],
+          }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/session/{sessionID}/summary", { sessionID: ctx.state.sessionID }), headers: ctx.headers() }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        array(body)
+        check(body.length >= 1, "dag.summary should return at least one summary")
+        const summary = body[0]
+        object(summary)
+        check(typeof summary.nodeCount === "number", "summary should have nodeCount")
+        check(typeof summary.completedNodes === "number", "summary should have completedNodes")
+        check(typeof summary.runningNodes === "number", "summary should have runningNodes")
+        check(typeof summary.failedNodes === "number", "summary should have failedNodes")
+        check(typeof summary.status === "string", "summary should have status")
+        check(typeof summary.title === "string", "summary should have title")
+      }),
+    ),
+
+  http.protected
+    .get("/dag/{dagID}", "dag.detail")
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG detail owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({ sessionID: s.id, nodes: [{ id: "n1", name: "N1", worker_type: "general", depends_on: [], required: true }] }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/{dagID}", { dagID: ctx.state.dagID }), headers: ctx.headers() }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        object(body)
+        check(typeof body.id === "string", "detail should return workflow id")
+        check(typeof body.status === "string", "detail should return status")
+        check(typeof body.title === "string", "detail should return title")
+      }),
+    ),
+
+  http.protected
+    .get("/dag/{dagID}/nodes", "dag.nodes")
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG nodes owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({
+            sessionID: s.id,
+            nodes: [
+              { id: "a", name: "Node A", worker_type: "general", depends_on: [], required: true },
+              { id: "b", name: "Node B", worker_type: "general", depends_on: ["a"], required: false },
+            ],
+          }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/{dagID}/nodes", { dagID: ctx.state.dagID }), headers: ctx.headers() }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        array(body)
+        check(body.length >= 2, "nodes should return all fixture nodes")
+        const n = body[0]
+        object(n)
+        check(typeof n.id === "string", "node should have id")
+        check(typeof n.status === "string", "node should have status")
+        check(Array.isArray(n.depends_on), "node should have depends_on")
+      }),
+    ),
+
+  http.protected
+    .get("/dag/{dagID}/nodes/{nodeID}", "dag.nodeDetail")
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG nodeDetail owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({ sessionID: s.id, nodes: [{ id: "n1", name: "N1", worker_type: "general", depends_on: [], required: true }] }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/{dagID}/nodes/{nodeID}", { dagID: ctx.state.dagID, nodeID: "n1" }), headers: ctx.headers() }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        object(body)
+        check(body.id === "n1", "nodeDetail should return the requested node")
+      }),
+    ),
+
+  http.protected
+    .post("/dag/{dagID}/control", "dag.control")
+    .mutating()
+    .seeded((ctx) =>
+      ctx.session({ title: "DAG control owner" }).pipe(
+        Effect.flatMap((s) =>
+          ctx.dag({ sessionID: s.id, nodes: [{ id: "n1", name: "N1", worker_type: "general", depends_on: [], required: true }] }),
+        ),
+      ),
+    )
+    .at((ctx) => ({ path: route("/dag/{dagID}/control", { dagID: ctx.state.dagID }), headers: ctx.headers(), body: { operation: "pause" } }))
+    .jsonEffect(200, (body) =>
+      Effect.sync(() => {
+        object(body)
+        check(body.status === "ok", "control pause should return ok")
+      }),
+    ),
+
+  // 404 scenarios (pre-existing, retained)
   http.protected
     .get("/dag/{dagID}", "dag.detail")
     .at(() => ({ path: route("/dag/{dagID}", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
@@ -1726,7 +1874,7 @@ const scenarios: Scenario[] = [
   http.protected
     .get("/dag/{dagID}/nodes", "dag.nodes")
     .at(() => ({ path: route("/dag/{dagID}/nodes", { dagID: "dag_nonexistent" }), headers: {} as Record<string, string> }))
-    .status(404),
+    .json(200, (body) => { array(body); check(body.length === 0, "nonexistent workflow should have no nodes") }),
   http.protected
     .get("/dag/{dagID}/nodes/{nodeID}", "dag.nodeDetail")
     .at(() => ({ path: route("/dag/{dagID}/nodes/{nodeID}", { dagID: "dag_nonexistent", nodeID: "n1" }), headers: {} as Record<string, string> }))

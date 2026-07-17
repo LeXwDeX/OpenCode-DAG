@@ -10,6 +10,7 @@ import { ShareNext } from "@/share/share-next"
 import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { DagLoop } from "@/dag/runtime/loop"
+import { DagSummaryPublisher } from "@/dag/runtime/summary-publisher"
 import { SettingsHook } from "@/hook/settings"
 import { Service } from "./bootstrap-service"
 
@@ -60,6 +61,14 @@ export const layer = Layer.effect(
         yield* dagLoop.value
           .init()
           .pipe(Effect.catchCause((cause) => Effect.logWarning("dag loop init failed", { cause })))
+      }
+      // DagSummaryPublisher: same lifecycle pattern. Stateless derived-view
+      // publisher that pushes per-session workflow summaries to the TUI.
+      const dagPublisher = yield* Effect.serviceOption(DagSummaryPublisher.Service)
+      if (dagPublisher._tag === "Some") {
+        yield* dagPublisher.value
+          .init()
+          .pipe(Effect.catchCause((cause) => Effect.logWarning("dag summary publisher init failed", { cause })))
       }
       // SettingsHook: Setup fires once per instance bootstrap. Resolved lazily
       // so bootstrap layers stay self-contained.

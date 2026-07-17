@@ -1,9 +1,23 @@
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import { InstanceHttpApi } from "../api"
-import { InvalidRequestError, notFound } from "../errors"
+import { InvalidRequestError, ConflictError, notFound } from "../errors"
 import { Dag } from "@/dag/dag"
+import { InvalidTransitionError, TerminalViolationError } from "@opencode-ai/core/dag/core/types"
 import type { DagStore } from "@opencode-ai/core/dag/store"
+
+/** Map a DAG control op's typed transition failure into a 409 Conflict, not a 500 defect. */
+function mapTransitionConflict<Success>(effect: Effect.Effect<Success, Error>) {
+  return effect.pipe(
+    Effect.catch((error: unknown) => {
+      if (error instanceof InvalidTransitionError || error instanceof TerminalViolationError) {
+        return Effect.fail(new ConflictError({ message: error.message, resource: "workflow" }))
+      }
+      // Any other Error is re-thrown as a defect (truly unexpected — surfaces as 500).
+      return Effect.die(error)
+    }),
+  )
+}
 
 /**
  * DAG HTTP handlers — read-only queries delegate to DagStore; control mutations
@@ -54,6 +68,19 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       return rows.map(wf)
     })
 
+    const summary = Effect.fn("DagHttpApi.summary")(function* (ctx: { params: { sessionID: string } }) {
+      const summaries = yield* dag.store.getWorkflowSummaries(ctx.params.sessionID).pipe(Effect.orDie)
+      return summaries.map((s) => ({
+        id: s.id,
+        title: s.title,
+        status: s.status,
+        nodeCount: s.nodeCount,
+        completedNodes: s.completedNodes,
+        runningNodes: s.runningNodes,
+        failedNodes: s.failedNodes,
+      }))
+    })
+
     const detail = Effect.fn("DagHttpApi.detail")(function* (ctx: { params: { dagID: string } }) {
       const row = yield* dag.store.getWorkflow(ctx.params.dagID).pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(notFound(`Workflow not found: ${ctx.params.dagID}`))
@@ -75,20 +102,27 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
       const { dagID } = ctx.params
       const op = ctx.payload.operation
 
+      // Pre-check existence so non-existent workflows return 404, not a 500 defect.
+      const existing = yield* dag.store.getWorkflow(dagID).pipe(Effect.orDie)
+      if (!existing) return yield* Effect.fail(notFound(`Workflow not found: ${dagID}`))
+
+      // Control ops may fail with InvalidTransitionError/TerminalViolationError for
+      // semantically invalid operations (e.g. pause on a completed workflow). Map those
+      // to 409 Conflict instead of letting .orDie promote them to 500 defects.
       if (op === "pause" || op === "step") {
-        yield* dag.pause(dagID).pipe(Effect.orDie)
+        yield* mapTransitionConflict(dag.pause(dagID))
         return { status: "ok" }
       }
       if (op === "resume") {
-        yield* dag.resume(dagID).pipe(Effect.orDie)
+        yield* mapTransitionConflict(dag.resume(dagID))
         return { status: "ok" }
       }
       if (op === "cancel") {
-        yield* dag.cancel(dagID).pipe(Effect.orDie)
+        yield* mapTransitionConflict(dag.cancel(dagID))
         return { status: "ok" }
       }
       if (op === "complete") {
-        yield* dag.complete(dagID).pipe(Effect.orDie)
+        yield* mapTransitionConflict(dag.complete(dagID))
         return { status: "ok" }
       }
       if (op === "replan") {
@@ -96,7 +130,7 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
         if (!fragment || typeof fragment !== "object" || !Array.isArray((fragment as Record<string, unknown>).nodes)) {
           return yield* Effect.fail(new InvalidRequestError({ message: "replan requires 'fragment' with a 'nodes' array" }))
         }
-        const result = yield* dag.replan(dagID, fragment as { nodes: Dag.NodeConfig[] }).pipe(Effect.orDie)
+        const result = yield* mapTransitionConflict(dag.replan(dagID, fragment as { nodes: Dag.NodeConfig[] }))
         return { status: "ok", ...result } as never
       }
       return yield* Effect.fail(new InvalidRequestError({ message: `Unknown operation: ${op}` }))
@@ -104,10 +138,11 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
 
     return handlers
       .handle("list", list)
-      .handle("bySession", bySession as never)
-      .handle("detail", detail as never)
-      .handle("nodes", nodes as never)
-      .handle("nodeDetail", nodeDetail as never)
-      .handle("control", control as never)
+      .handle("bySession", bySession)
+      .handle("summary", summary)
+      .handle("detail", detail)
+      .handle("nodes", nodes)
+      .handle("nodeDetail", nodeDetail)
+      .handle("control", control)
   }),
 )

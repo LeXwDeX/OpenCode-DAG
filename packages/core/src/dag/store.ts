@@ -59,6 +59,17 @@ export interface ViolationRow {
   timeCreated: number
 }
 
+/** Aggregated per-workflow progress for UI display. Shape matches the TUI's DagWorkflowSummary. */
+export interface WorkflowSummary {
+  id: string
+  title: string
+  status: string
+  nodeCount: number
+  completedNodes: number
+  runningNodes: number
+  failedNodes: number
+}
+
 const mapWorkflow = (r: typeof WorkflowTable.$inferSelect): WorkflowRow => ({
   id: r.id,
   projectId: r.project_id,
@@ -130,6 +141,7 @@ export interface Interface {
   readonly listBySession: (sessionId: string) => Effect.Effect<WorkflowRow[]>
   readonly listByProject: (projectId: string) => Effect.Effect<WorkflowRow[]>
   readonly listByStatus: (status: string) => Effect.Effect<WorkflowRow[]>
+  readonly getWorkflowSummaries: (sessionId: string) => Effect.Effect<WorkflowSummary[]>
 
   readonly getNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
   readonly getNode: (nodeId: string) => Effect.Effect<NodeRow | undefined>
@@ -197,6 +209,42 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         return rows.map(mapWorkflow)
+      }),
+
+      getWorkflowSummaries: Effect.fn("DagStore.getWorkflowSummaries")(function* (sessionId) {
+        const wfRows = yield* db
+          .select()
+          .from(WorkflowTable)
+          .where(eq(WorkflowTable.session_id, sessionId))
+          .orderBy(desc(WorkflowTable.time_created))
+          .all()
+          .pipe(Effect.orDie)
+        if (wfRows.length === 0) return []
+        const summaries: WorkflowSummary[] = []
+        for (const wf of wfRows) {
+          const nodeRows = yield* db
+            .select({ status: WorkflowNodeTable.status })
+            .from(WorkflowNodeTable)
+            .where(eq(WorkflowNodeTable.workflow_id, wf.id))
+            .all()
+            .pipe(Effect.orDie)
+          const counts = { completed: 0, running: 0, failed: 0 }
+          for (const n of nodeRows) {
+            if (n.status === "completed") counts.completed++
+            else if (n.status === "running") counts.running++
+            else if (n.status === "failed") counts.failed++
+          }
+          summaries.push({
+            id: wf.id,
+            title: wf.title,
+            status: wf.status,
+            nodeCount: nodeRows.length,
+            completedNodes: counts.completed,
+            runningNodes: counts.running,
+            failedNodes: counts.failed,
+          })
+        }
+        return summaries
       }),
 
       getNodes: Effect.fn("DagStore.getNodes")(function* (workflowId) {

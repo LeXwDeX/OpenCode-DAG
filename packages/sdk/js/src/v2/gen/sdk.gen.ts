@@ -36,6 +36,8 @@ import type {
   DagNodeDetailResponses,
   DagNodesErrors,
   DagNodesResponses,
+  DagSummaryErrors,
+  DagSummaryResponses,
   EventSubscribeResponses,
   EventTuiCommandExecute,
   EventTuiPromptAppend,
@@ -5219,7 +5221,8 @@ export class Dag extends HeyApiClient {
    * List workflows by session
    */
   public bySession<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
+      sessionID: string
       directory?: string
       workspace?: string
     },
@@ -5230,6 +5233,7 @@ export class Dag extends HeyApiClient {
       [
         {
           args: [
+            { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
           ],
@@ -5244,10 +5248,11 @@ export class Dag extends HeyApiClient {
   }
 
   /**
-   * Get workflow by ID
+   * Aggregated workflow summaries by session
    */
-  public detail<ThrowOnError extends boolean = false>(
-    parameters?: {
+  public summary<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
       directory?: string
       workspace?: string
     },
@@ -5258,6 +5263,37 @@ export class Dag extends HeyApiClient {
       [
         {
           args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<DagSummaryResponses, DagSummaryErrors, ThrowOnError>({
+      url: "/dag/session/{sessionID}/summary",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Get workflow by ID
+   */
+  public detail<ThrowOnError extends boolean = false>(
+    parameters: {
+      dagID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "dagID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
           ],
@@ -5275,7 +5311,8 @@ export class Dag extends HeyApiClient {
    * List nodes for a workflow
    */
   public nodes<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
+      dagID: string
       directory?: string
       workspace?: string
     },
@@ -5286,6 +5323,7 @@ export class Dag extends HeyApiClient {
       [
         {
           args: [
+            { in: "path", key: "dagID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
           ],
@@ -5303,7 +5341,9 @@ export class Dag extends HeyApiClient {
    * Get node by ID
    */
   public nodeDetail<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
+      dagID: string
+      nodeID: string
       directory?: string
       workspace?: string
     },
@@ -5314,6 +5354,8 @@ export class Dag extends HeyApiClient {
       [
         {
           args: [
+            { in: "path", key: "dagID" },
+            { in: "path", key: "nodeID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
           ],
@@ -5331,7 +5373,8 @@ export class Dag extends HeyApiClient {
    * Control a workflow (pause/resume/cancel/replan/step/complete)
    */
   public control<ThrowOnError extends boolean = false>(
-    parameters?: {
+    parameters: {
+      dagID: string
       directory?: string
       workspace?: string
       operation?: "pause" | "resume" | "cancel" | "replan" | "step" | "complete"
@@ -5344,6 +5387,7 @@ export class Dag extends HeyApiClient {
       [
         {
           args: [
+            { in: "path", key: "dagID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "operation" },

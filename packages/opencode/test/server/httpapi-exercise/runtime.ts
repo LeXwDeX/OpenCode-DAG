@@ -10,6 +10,7 @@ export type Runtime = {
   Worktree: (typeof import("../../../src/worktree"))["Worktree"]
   Project: (typeof import("../../../src/project/project"))["Project"]
   Tui: typeof import("../../../src/server/shared/tui-control")
+  Dag: typeof import("../../../src/dag/dag")
   disposeAllInstances: (typeof import("../../fixture/fixture"))["disposeAllInstances"]
   tmpdir: (typeof import("../../fixture/fixture"))["tmpdir"]
   resetDatabase: (typeof import("../../fixture/db"))["resetDatabase"]
@@ -30,6 +31,7 @@ export function runtime() {
     const worktree = await import("../../../src/worktree")
     const project = await import("../../../src/project/project")
     const tui = await import("../../../src/server/shared/tui-control")
+    const dag = await import("../../../src/dag/dag")
     const fixture = await import("../../fixture/fixture")
     const db = await import("../../fixture/db")
     return {
@@ -44,6 +46,7 @@ export function runtime() {
       Worktree: worktree.Worktree,
       Project: project.Project,
       Tui: tui,
+      Dag: dag,
       disposeAllInstances: fixture.disposeAllInstances,
       tmpdir: fixture.tmpdir,
       resetDatabase: db.resetDatabase,
