@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "e3e2e0f8-3856-4f47-956f-84113683c96b",
+  "id": "747f1cfb-b2d5-45f6-b46b-c38e470bb2d5",
   "prevIds": [
-    "5b6023af-92c0-43b1-8d1c-b1beafd6380c"
+    "e3e2e0f8-3856-4f47-956f-84113683c96b"
   ],
   "ddl": [
     {
@@ -48,10 +48,6 @@
     },
     {
       "name": "event",
-      "entityType": "tables"
-    },
-    {
-      "name": "goal_state",
       "entityType": "tables"
     },
     {
@@ -599,6 +595,16 @@
       "table": "workflow_node"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "captured_output",
+      "entityType": "columns",
+      "table": "workflow_node"
+    },
+    {
       "type": "integer",
       "notNull": false,
       "autoincrement": false,
@@ -977,36 +983,6 @@
       "name": "data",
       "entityType": "columns",
       "table": "event"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "session_id",
-      "entityType": "columns",
-      "table": "goal_state"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "payload",
-      "entityType": "columns",
-      "table": "goal_state"
-    },
-    {
-      "type": "integer",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "updated_at",
-      "entityType": "columns",
-      "table": "goal_state"
     },
     {
       "type": "text",
@@ -2325,15 +2301,6 @@
     },
     {
       "columns": [
-        "session_id"
-      ],
-      "nameExplicit": false,
-      "name": "goal_state_pk",
-      "table": "goal_state",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
         "id"
       ],
       "nameExplicit": false,
@@ -2598,20 +2565,6 @@
       "name": "event_aggregate_type_seq_idx",
       "entityType": "indexes",
       "table": "event"
-    },
-    {
-      "columns": [
-        {
-          "value": "updated_at",
-          "isExpression": false
-        }
-      ],
-      "isUnique": false,
-      "where": null,
-      "origin": "manual",
-      "name": "goal_state_updated_at_idx",
-      "entityType": "indexes",
-      "table": "goal_state"
     },
     {
       "columns": [
