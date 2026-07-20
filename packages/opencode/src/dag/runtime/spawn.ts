@@ -30,6 +30,9 @@ type PromptParts = SessionPrompt.PromptInput["parts"]
 /** System-wide default node timeout (10 minutes) when worker_config.timeout_ms is omitted. */
 const DEFAULT_NODE_TIMEOUT_MS = 10 * 60 * 1000
 
+const isTransitionRejection = (err: unknown): err is InvalidTransitionError | TerminalViolationError =>
+  err instanceof InvalidTransitionError || err instanceof TerminalViolationError
+
 export interface NodeSpawnInput {
   dagID: string
   nodeID: string
@@ -106,8 +109,7 @@ export function spawnNode(
     const terminalized = yield* dag.nodeStarted(input.dagID, input.nodeID, childSession.id, deadlineMs, input.reportToParent).pipe(
       Effect.map(() => false),
       Effect.catchIf(
-        (err): err is TerminalViolationError | InvalidTransitionError =>
-          err instanceof TerminalViolationError || err instanceof InvalidTransitionError,
+        isTransitionRejection,
         () =>
           Effect.gen(function* () {
             yield* promptSvc.cancel(childSession.id).pipe(Effect.catch(() => Effect.void))
@@ -134,7 +136,7 @@ export function spawnNode(
         if (queueRemaining <= 0) {
           yield* dag.nodeFailed(input.dagID, input.nodeID, `node exceeded timeout before acquiring execution permit`, "timeout").pipe(
             Effect.catchIf(
-              (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+              isTransitionRejection,
               () => Effect.logWarning("nodeFailed (pre-permit timeout) guard rejected — node already terminal"),
             ),
           )
@@ -147,7 +149,7 @@ export function spawnNode(
         if (Option.isNone(permitAcquired)) {
           yield* dag.nodeFailed(input.dagID, input.nodeID, `node exceeded timeout while waiting for execution permit`, "timeout").pipe(
             Effect.catchIf(
-              (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+              isTransitionRejection,
               () => Effect.logWarning("nodeFailed (permit-wait timeout) guard rejected — node already terminal"),
             ),
           )
@@ -168,7 +170,7 @@ export function spawnNode(
             yield* promptSvc.cancel(childSession.id).pipe(Effect.ignore)
             yield* dag.nodeFailed(input.dagID, input.nodeID, `node exceeded timeout of ${timeoutMs}ms`, "timeout").pipe(
               Effect.catchIf(
-                (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                isTransitionRejection,
                 () => Effect.logWarning("nodeFailed (timeout) guard rejected — node already terminal"),
               ),
             )
@@ -176,12 +178,12 @@ export function spawnNode(
           }
           if (input.outputSchema) {
             clearCaptureSlot(childSession.id)
-            const updatedNode = yield* dag.store.getNode(input.nodeID).pipe(Effect.orDie)
+            const updatedNode = yield* dag.store.getNode(input.dagID, input.nodeID).pipe(Effect.orDie)
             const captured = updatedNode?.capturedOutput
             if (captured !== undefined && captured !== null) {
               yield* dag.nodeCompleted(input.dagID, input.nodeID, captured).pipe(
                 Effect.catchIf(
-                  (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                  isTransitionRejection,
                   () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
                 ),
               )
@@ -192,7 +194,7 @@ export function spawnNode(
                 "verdict_fail",
               ).pipe(
                 Effect.catchIf(
-                  (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                  isTransitionRejection,
                   () => Effect.logWarning("nodeFailed (verdict_fail) guard rejected — node already terminal"),
                 ),
               )
@@ -201,7 +203,7 @@ export function spawnNode(
             const rawText = resultOpt.value.parts.findLast((p) => p.type === "text")?.text ?? ""
             yield* dag.nodeCompleted(input.dagID, input.nodeID, rawText).pipe(
               Effect.catchIf(
-                (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                isTransitionRejection,
                 () => Effect.logWarning("nodeCompleted guard rejected — node already terminal"),
               ),
             )
@@ -220,7 +222,7 @@ export function spawnNode(
             if (Cause.interruptors(cause).size > 0) return
             yield* dag.nodeFailed(input.dagID, input.nodeID, String(cause), "exec_failed").pipe(
               Effect.catchIf(
-                (err): err is InvalidTransitionError => err instanceof InvalidTransitionError,
+                isTransitionRejection,
                 () => Effect.logWarning("nodeFailed guard rejected — node already terminal"),
               ),
             )

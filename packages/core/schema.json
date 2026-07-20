@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "747f1cfb-b2d5-45f6-b46b-c38e470bb2d5",
+  "id": "a26723c8-be88-4c4e-85cf-0c1ecd3cf638",
   "prevIds": [
-    "e3e2e0f8-3856-4f47-956f-84113683c96b"
+    "747f1cfb-b2d5-45f6-b46b-c38e470bb2d5"
   ],
   "ddl": [
     {
@@ -476,7 +476,7 @@
     },
     {
       "type": "text",
-      "notNull": false,
+      "notNull": true,
       "autoincrement": false,
       "default": null,
       "generated": null,
@@ -2191,6 +2191,16 @@
     },
     {
       "columns": [
+        "workflow_id",
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "workflow_node_pk",
+      "entityType": "pks",
+      "table": "workflow_node"
+    },
+    {
+      "columns": [
         "project_id",
         "directory"
       ],
@@ -2252,15 +2262,6 @@
       "nameExplicit": false,
       "name": "credential_pk",
       "table": "credential",
-      "entityType": "pks"
-    },
-    {
-      "columns": [
-        "id"
-      ],
-      "nameExplicit": false,
-      "name": "workflow_node_pk",
-      "table": "workflow_node",
       "entityType": "pks"
     },
     {

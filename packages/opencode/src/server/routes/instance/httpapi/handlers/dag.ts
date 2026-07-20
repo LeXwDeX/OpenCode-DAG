@@ -93,7 +93,7 @@ export const dagHandlers = HttpApiBuilder.group(InstanceHttpApi, "dag", (handler
     })
 
     const nodeDetail = Effect.fn("DagHttpApi.nodeDetail")(function* (ctx: { params: { dagID: string; nodeID: string } }) {
-      const row = yield* dag.store.getNode(ctx.params.nodeID).pipe(Effect.orDie)
+      const row = yield* dag.store.getNode(ctx.params.dagID, ctx.params.nodeID).pipe(Effect.orDie)
       if (!row) return yield* Effect.fail(notFound(`Node not found: ${ctx.params.nodeID}`))
       return node(row)
     })

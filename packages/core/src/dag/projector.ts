@@ -50,6 +50,14 @@ export const layer = Layer.effectDiscard(
         .pipe(Effect.orDie),
     )
 
+    const setWorkflowStatus = (status: WorkflowStatus, from: WorkflowStatus[]) => (event: { data: { dagID: DagEvent.DagID; timestamp: DateTime.Utc }; durable?: { seq: number } }) =>
+      db
+        .update(WorkflowTable)
+        .set({ status, seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .where(and(eq(WorkflowTable.id, event.data.dagID), inArray(WorkflowTable.status, from)))
+        .run()
+        .pipe(Effect.orDie)
+
     yield* events.project(DagEvent.WorkflowStarted, (event) =>
       db
         .update(WorkflowTable)
@@ -59,40 +67,35 @@ export const layer = Layer.effectDiscard(
           started_at: toMillis(event.data.timestamp),
           time_updated: toMillis(event.data.timestamp),
         })
-        .where(eq(WorkflowTable.id, event.data.dagID))
+        .where(and(eq(WorkflowTable.id, event.data.dagID), eq(WorkflowTable.status, "pending")))
         .run()
         .pipe(Effect.orDie),
     )
 
-    const setWorkflowStatus = (status: WorkflowStatus) => (event: { data: { dagID: DagEvent.DagID; timestamp: DateTime.Utc }; durable?: { seq: number } }) =>
-      db
-        .update(WorkflowTable)
-        .set({ status, seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
-        .where(eq(WorkflowTable.id, event.data.dagID))
-        .run()
-        .pipe(Effect.orDie)
+    yield* events.project(DagEvent.WorkflowPaused, setWorkflowStatus(ws("paused"), [ws("running"), ws("stepping")]))
+    yield* events.project(DagEvent.WorkflowResumed, setWorkflowStatus(ws("running"), [ws("paused"), ws("stepping")]))
+    yield* events.project(DagEvent.WorkflowStepped, setWorkflowStatus(ws("stepping"), [ws("running")]))
 
-    yield* events.project(DagEvent.WorkflowPaused, setWorkflowStatus(ws("paused")))
-    yield* events.project(DagEvent.WorkflowResumed, setWorkflowStatus(ws("running")))
-    yield* events.project(DagEvent.WorkflowStepped, setWorkflowStatus(ws("stepping")))
-
-    const setWorkflowTerminal = (status: WorkflowStatus) => (event: { data: { dagID: DagEvent.DagID; timestamp: DateTime.Utc }; durable?: { seq: number } }) =>
+    const setWorkflowTerminal = (status: WorkflowStatus, from: WorkflowStatus[]) => (event: { data: { dagID: DagEvent.DagID; timestamp: DateTime.Utc }; durable?: { seq: number } }) =>
       db
         .update(WorkflowTable)
         .set({ status, seq: event.durable!.seq, completed_at: toMillis(event.data.timestamp), time_updated: toMillis(event.data.timestamp) })
-        .where(eq(WorkflowTable.id, event.data.dagID))
+        .where(and(eq(WorkflowTable.id, event.data.dagID), inArray(WorkflowTable.status, from)))
         .run()
         .pipe(Effect.orDie)
 
-    yield* events.project(DagEvent.WorkflowCompleted, setWorkflowTerminal(ws("completed")))
-    yield* events.project(DagEvent.WorkflowFailed, setWorkflowTerminal(ws("failed")))
-    yield* events.project(DagEvent.WorkflowCancelled, setWorkflowTerminal(ws("cancelled")))
+    yield* events.project(DagEvent.WorkflowCompleted, setWorkflowTerminal(ws("completed"), [ws("running"), ws("stepping")]))
+    yield* events.project(DagEvent.WorkflowFailed, setWorkflowTerminal(ws("failed"), [ws("running"), ws("stepping")]))
+    yield* events.project(DagEvent.WorkflowCancelled, setWorkflowTerminal(ws("cancelled"), [ws("running"), ws("paused"), ws("stepping")]))
 
     yield* events.project(DagEvent.WorkflowReplanned, (event) =>
       db
         .update(WorkflowTable)
         .set({ seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
-        .where(eq(WorkflowTable.id, event.data.dagID))
+        .where(and(
+          eq(WorkflowTable.id, event.data.dagID),
+          inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping"]),
+        ))
         .run()
         .pipe(Effect.orDie),
     )
@@ -101,25 +104,15 @@ export const layer = Layer.effectDiscard(
       db
         .update(WorkflowTable)
         .set({ config: event.data.config, seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
-        .where(eq(WorkflowTable.id, event.data.dagID))
+        .where(and(
+          eq(WorkflowTable.id, event.data.dagID),
+          inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping"]),
+        ))
         .run()
         .pipe(Effect.orDie),
     )
 
     // ---- Node lifecycle (insert on register, update thereafter) ----
-
-    const updateNode = (
-      nodeID: DagEvent.NodeID,
-      patch: Partial<typeof WorkflowNodeTable.$inferInsert>,
-      seq: number,
-      ts: DateTime.Utc,
-    ) =>
-      db
-        .update(WorkflowNodeTable)
-        .set({ ...patch, seq, time_updated: toMillis(ts) })
-        .where(eq(WorkflowNodeTable.id, nodeID))
-        .run()
-        .pipe(Effect.orDie)
 
     yield* events.project(DagEvent.NodeRegistered, (event) =>
       db
@@ -137,7 +130,7 @@ export const layer = Layer.effectDiscard(
           seq: event.durable!.seq,
         })
         .onConflictDoUpdate({
-          target: WorkflowNodeTable.id,
+          target: [WorkflowNodeTable.workflow_id, WorkflowNodeTable.id],
           set: {
             name: event.data.name,
             worker_type: event.data.workerType,
@@ -173,6 +166,7 @@ export const layer = Layer.effectDiscard(
         // path goes NodeRestarted (running→pending) → re-spawn → NodeStarted
         // on the "pending" row, so excluding terminal statuses is safe.
         .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["pending", "queued", "paused", "running"]),
         ))
@@ -194,6 +188,7 @@ export const layer = Layer.effectDiscard(
         // NodeCompleted from flipping an already-terminal node (e.g. failed by
         // a replan-ceiling check) back to completed.
         .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
@@ -214,6 +209,7 @@ export const layer = Layer.effectDiscard(
         // P1-7: only fail nodes in non-terminal status. Prevents stale
         // replan-ceiling events from overwriting completed/skipped nodes.
         .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["running", "pending"]),
         ))
@@ -226,6 +222,7 @@ export const layer = Layer.effectDiscard(
         .update(WorkflowNodeTable)
         .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
@@ -238,6 +235,7 @@ export const layer = Layer.effectDiscard(
         .update(WorkflowNodeTable)
         .set({ status: "failed", error_reason: "cancelled via replan", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),
           inArray(WorkflowNodeTable.status, ["pending", "queued", "running", "paused"]),
         ))
@@ -260,7 +258,11 @@ export const layer = Layer.effectDiscard(
         // Only restart nodes still in "running" status — if the node completed
         // or failed between replan's snapshot read and this event publish, the
         // UPDATE matches 0 rows and the terminal status is preserved.
-        .where(and(eq(WorkflowNodeTable.id, event.data.nodeID), eq(WorkflowNodeTable.status, "running")))
+        .where(and(
+          eq(WorkflowNodeTable.workflow_id, event.data.dagID),
+          eq(WorkflowNodeTable.id, event.data.nodeID),
+          eq(WorkflowNodeTable.status, "running"),
+        ))
         .run()
         .pipe(Effect.orDie),
     )

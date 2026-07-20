@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, uniqueIndex } from "drizzle-orm/sqlite-core"
 import { ProjectTable } from "../project/sql"
 import { SessionTable } from "../session/sql"
 import { Timestamps } from "../database/schema.sql"
@@ -48,7 +48,7 @@ export const WorkflowTable = sqliteTable(
 export const WorkflowNodeTable = sqliteTable(
   "workflow_node",
   {
-    id: text().primaryKey(),
+    id: text().notNull(),
     workflow_id: text()
       .notNull()
       .references(() => WorkflowTable.id, { onDelete: "cascade" }),
@@ -73,6 +73,7 @@ export const WorkflowNodeTable = sqliteTable(
     ...Timestamps,
   },
   (table) => [
+    primaryKey({ columns: [table.workflow_id, table.id] }),
     index("workflow_node_workflow_idx").on(table.workflow_id),
     index("workflow_node_workflow_status_idx").on(table.workflow_id, table.status),
     uniqueIndex("workflow_node_workflow_id_seq_idx").on(table.workflow_id, table.id, table.seq),

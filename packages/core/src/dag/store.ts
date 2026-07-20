@@ -144,11 +144,11 @@ export interface Interface {
   readonly getWorkflowSummaries: (sessionId: string) => Effect.Effect<WorkflowSummary[]>
 
   readonly getNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
-  readonly getNode: (nodeId: string) => Effect.Effect<NodeRow | undefined>
+  readonly getNode: (workflowId: string, nodeId: string) => Effect.Effect<NodeRow | undefined>
   readonly getRunningNodes: (workflowId: string) => Effect.Effect<NodeRow[]>
   readonly setCapturedOutput: (childSessionID: string, payload: unknown) => Effect.Effect<void>
 
-  readonly markNodeWakeReported: (nodeID: string) => Effect.Effect<void>
+  readonly markNodeWakeReported: (workflowId: string, nodeID: string) => Effect.Effect<void>
   readonly markWorkflowWakeReported: (dagID: string) => Effect.Effect<void>
   readonly getUnreportedWakeNodes: (sessionID: string) => Effect.Effect<NodeRow[]>
   readonly getUnreportedWakeWorkflows: (sessionID: string) => Effect.Effect<WorkflowRow[]>
@@ -220,31 +220,28 @@ export const layer = Layer.effect(
           .all()
           .pipe(Effect.orDie)
         if (wfRows.length === 0) return []
-        const summaries: WorkflowSummary[] = []
-        for (const wf of wfRows) {
-          const nodeRows = yield* db
-            .select({ status: WorkflowNodeTable.status })
-            .from(WorkflowNodeTable)
-            .where(eq(WorkflowNodeTable.workflow_id, wf.id))
-            .all()
-            .pipe(Effect.orDie)
-          const counts = { completed: 0, running: 0, failed: 0 }
-          for (const n of nodeRows) {
-            if (n.status === "completed") counts.completed++
-            else if (n.status === "running") counts.running++
-            else if (n.status === "failed") counts.failed++
-          }
-          summaries.push({
-            id: wf.id,
-            title: wf.title,
-            status: wf.status,
-            nodeCount: nodeRows.length,
-            completedNodes: counts.completed,
-            runningNodes: counts.running,
-            failedNodes: counts.failed,
-          })
-        }
-        return summaries
+        const nodeRows = yield* db
+          .select({ workflowId: WorkflowNodeTable.workflow_id, status: WorkflowNodeTable.status })
+          .from(WorkflowNodeTable)
+          .innerJoin(WorkflowTable, eq(WorkflowNodeTable.workflow_id, WorkflowTable.id))
+          .where(eq(WorkflowTable.session_id, sessionId))
+          .all()
+          .pipe(Effect.orDie)
+        const counts = nodeRows.reduce((all, node) => {
+          const current = all.get(node.workflowId) ?? { nodeCount: 0, completedNodes: 0, runningNodes: 0, failedNodes: 0 }
+          current.nodeCount++
+          if (node.status === "completed") current.completedNodes++
+          if (node.status === "running") current.runningNodes++
+          if (node.status === "failed") current.failedNodes++
+          all.set(node.workflowId, current)
+          return all
+        }, new Map<string, { nodeCount: number; completedNodes: number; runningNodes: number; failedNodes: number }>())
+        return wfRows.map((wf) => ({
+          id: wf.id,
+          title: wf.title,
+          status: wf.status,
+          ...(counts.get(wf.id) ?? { nodeCount: 0, completedNodes: 0, runningNodes: 0, failedNodes: 0 }),
+        }))
       }),
 
       getNodes: Effect.fn("DagStore.getNodes")(function* (workflowId) {
@@ -258,8 +255,13 @@ export const layer = Layer.effect(
         return rows.map(mapNode)
       }),
 
-      getNode: Effect.fn("DagStore.getNode")(function* (nodeId) {
-        const row = yield* db.select().from(WorkflowNodeTable).where(eq(WorkflowNodeTable.id, nodeId)).get().pipe(Effect.orDie)
+      getNode: Effect.fn("DagStore.getNode")(function* (workflowId, nodeId) {
+        const row = yield* db
+          .select()
+          .from(WorkflowNodeTable)
+          .where(and(eq(WorkflowNodeTable.workflow_id, workflowId), eq(WorkflowNodeTable.id, nodeId)))
+          .get()
+          .pipe(Effect.orDie)
         return row ? mapNode(row) : undefined
       }),
 
@@ -282,11 +284,11 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
       }),
 
-      markNodeWakeReported: Effect.fn("DagStore.markNodeWakeReported")(function* (nodeID) {
+      markNodeWakeReported: Effect.fn("DagStore.markNodeWakeReported")(function* (workflowId, nodeID) {
         yield* db
           .update(WorkflowNodeTable)
           .set({ wake_reported: true })
-          .where(eq(WorkflowNodeTable.id, nodeID))
+          .where(and(eq(WorkflowNodeTable.workflow_id, workflowId), eq(WorkflowNodeTable.id, nodeID)))
           .run()
           .pipe(Effect.orDie)
       }),
