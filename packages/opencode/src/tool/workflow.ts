@@ -1,7 +1,9 @@
 import * as Tool from "./tool"
 import { SkillPlugin } from "@opencode-ai/core/plugin/skill"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Schema } from "effect"
 import { Dag } from "@/dag/dag"
+import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
 import type { NodeConfig, WorkflowConfig } from "@/dag/dag"
 
 const id = "workflow"
@@ -47,7 +49,7 @@ export const Parameters = Schema.Struct({
   action: Schema.Literals(["start", "extend", "control"]).annotate({ description: "start: create workflow; extend: add nodes; control: pause/resume/cancel/replan/step/complete" }),
   config: Schema.optional(WorkflowGraphSchema).annotate({ description: "(start) Workflow graph definition" }),
   session_id: Schema.optional(Schema.String).annotate({ description: "(start) Parent session ID" }),
-  project_id: Schema.optional(Schema.String).annotate({ description: "(start) Project ID" }),
+  project_id: Schema.optional(Schema.String).annotate({ description: "(start) Optional Project ID; must match the parent session project" }),
   title: Schema.optional(Schema.String).annotate({ description: "(start) Workflow title" }),
   workflow_id: Schema.optional(Schema.String).annotate({ description: "(extend/control) Target workflow ID" }),
   nodes: Schema.optional(Schema.Array(NodeSchema)).annotate({ description: "(extend) Nodes to add" }),
@@ -61,23 +63,28 @@ export const Parameters = Schema.Struct({
 
 type Metadata = { workflowId?: string; added?: string[]; cancel?: string[]; restart?: string[]; replace?: string[] }
 
-export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service>(
+export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service | Session.Service>(
   id,
   Effect.gen(function* () {
+    const dag = yield* Dag.Service
+    const sessions = yield* Session.Service
+
     return {
       description: SkillPlugin.WorkflowContent,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
-          const dagOpt = yield* Effect.serviceOption(Dag.Service)
-          if (Option.isNone(dagOpt)) return yield* Effect.die(new Error("DAG service not wired"))
-          const dag = dagOpt.value
           switch (params.action) {
             case "start": {
               if (!params.config) return yield* Effect.die(new Error("start requires 'config'"))
+              const sessionID = SessionID.make(params.session_id ?? ctx.sessionID)
+              const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
+              if (params.project_id && params.project_id !== session.projectID) {
+                return yield* Effect.die(new Error("project_id must match the parent session project"))
+              }
               const dagID = yield* dag.create({
-                projectID: params.project_id ?? ctx.sessionID,
-                sessionID: params.session_id ?? ctx.sessionID,
+                projectID: session.projectID,
+                sessionID,
                 title: params.title ?? params.config.name,
                 config: params.config as WorkflowConfig,
               }).pipe(Effect.orDie)
