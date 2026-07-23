@@ -20,7 +20,7 @@ function makeEventTracker() {
   const events: TrackedEvent[] = []
   capturedStore = new Map()
   const storeStub: Partial<DagStore.Interface> = {
-    getNode: Effect.fn("s")((nodeID: string) =>
+    getNode: Effect.fn("s")((_workflowID: string, nodeID: string) =>
       Effect.sync(() => ({ ...makeNodeRow({ id: nodeID }), capturedOutput: capturedStore.get(nodeID) }))),
     setCapturedOutput: Effect.fn("s")((_childSessionID: string, payload: unknown) =>
       Effect.sync(() => { capturedStore.set("node-1", payload) })),

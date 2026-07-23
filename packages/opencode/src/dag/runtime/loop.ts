@@ -74,7 +74,7 @@ export const layer = Layer.effect(
           if (!entry) return
           const ready = entry.runtime.getReadyNodes()
           for (const nodeID of ready) {
-            const node = yield* store.getNode(nodeID)
+            const node = yield* store.getNode(dagID, nodeID)
             if (!node) continue
             const nodeConfig = entry.config?.nodes.find((n) => n.id === nodeID)
 
@@ -314,7 +314,7 @@ export const layer = Layer.effect(
               yield* entry.evalLock.withPermits(1)(
                 Effect.gen(function* () {
                   const fiber = entry.fibers.get(nodeID)
-                  const node = yield* store.getNode(nodeID)
+                  const node = yield* store.getNode(dagID, nodeID)
                   yield* abortChild(nodeID, node?.childSessionId ?? null).pipe(Effect.ignore)
                   if (fiber) {
                     yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
@@ -346,7 +346,7 @@ export const layer = Layer.effect(
                     // a replan-ceiling check after the node already completed)
                     // would incorrectly flip a satisfied node to unsatisfied.
                     if (entry.runtime.isActive(nid)) {
-                      const node = yield* store.getNode(nid)
+                      const node = yield* store.getNode(dagID, nid)
                       yield* abortChild(nid, node?.childSessionId ?? null).pipe(Effect.ignore)
                       if (fiber) yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                       entry.runtime.markUnsatisfied(nid)
@@ -446,7 +446,7 @@ export const layer = Layer.effect(
                   yield* entry.evalLock.withPermits(1)(
                     Effect.gen(function* () {
                       for (const [nodeID, fiber] of entry.fibers) {
-                        const node = yield* store.getNode(nodeID)
+                        const node = yield* store.getNode(dagID, nodeID)
                         yield* abortChild(nodeID, node?.childSessionId ?? null).pipe(Effect.ignore)
                         yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                       }
@@ -551,7 +551,7 @@ export const layer = Layer.effect(
                 Effect.tap(() =>
                   Effect.gen(function* () {
                     if (targetNode) {
-                      yield* store.markNodeWakeReported(targetNode.id)
+                      yield* store.markNodeWakeReported(targetNode.workflowId, targetNode.id)
                       deliveredDagIDs.add(targetNode.workflowId)
                     }
                     if (targetWorkflow) {

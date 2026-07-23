@@ -49,7 +49,7 @@ describe("DagProjector: captured_output reset on NodeStarted", () => {
         // Run #1: start node with child session A, agent submits P1
         yield* events.publish(DagEvent.NodeStarted, { dagID, nodeID, childSessionID: "ses_A" as never, timestamp: ts(2) })
         yield* store.setCapturedOutput("ses_A", { value: "P1" })
-        expect((yield* store.getNode("node-1"))?.capturedOutput).toEqual({ value: "P1" })
+        expect((yield* store.getNode(dagID, "node-1"))?.capturedOutput).toEqual({ value: "P1" })
 
         // Replan restart: NodeRestarted → NodeStarted (child session B)
         yield* events.publish(DagEvent.NodeRestarted, { dagID, nodeID, childSessionID: "ses_A" as never, timestamp: ts(3) })
@@ -57,7 +57,7 @@ describe("DagProjector: captured_output reset on NodeStarted", () => {
 
         // THE FIX: captured_output must be null — stale P1 must not survive the restart.
         // Without the fix, this would still be { value: "P1" }, defeating verdict_fail.
-        expect((yield* store.getNode("node-1"))?.capturedOutput).toBeNull()
+        expect((yield* store.getNode(dagID, "node-1"))?.capturedOutput).toBeNull()
       }).pipe(Effect.provide(testLayer)) as Effect.Effect<never>,
     )
   })
@@ -80,7 +80,7 @@ describe("DagProjector: captured_output reset on NodeStarted", () => {
 
         // Run #2: agent calls submit_result with P2
         yield* store.setCapturedOutput("ses_B", { value: "P2" })
-        const node = yield* store.getNode("node-1")
+        const node = yield* store.getNode(dagID, "node-1")
         expect(node?.capturedOutput).toEqual({ value: "P2" })
       }).pipe(Effect.provide(testLayer)) as Effect.Effect<never>,
     )

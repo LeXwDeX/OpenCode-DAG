@@ -156,9 +156,9 @@ describe("iron laws (transition tables)", () => {
     expect(getValidNextNodeStatuses(NodeStatus.SKIPPED)).toEqual([])
   })
 
-  it("getValidNextWorkflowStatuses: RUNNING → PAUSED/COMPLETED/FAILED/CANCELLED", () => {
+  it("getValidNextWorkflowStatuses: RUNNING → PAUSED/STEPPING/COMPLETED/FAILED/CANCELLED", () => {
     expect(getValidNextWorkflowStatuses(WorkflowStatus.RUNNING).sort()).toEqual(
-      [WorkflowStatus.PAUSED, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED].sort(),
+      [WorkflowStatus.PAUSED, WorkflowStatus.STEPPING, WorkflowStatus.COMPLETED, WorkflowStatus.FAILED, WorkflowStatus.CANCELLED].sort(),
     )
   })
 

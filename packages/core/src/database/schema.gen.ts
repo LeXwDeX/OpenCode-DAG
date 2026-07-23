@@ -71,7 +71,7 @@ export default {
       `)
       yield* tx.run(`
         CREATE TABLE \`workflow_node\` (
-          \`id\` text PRIMARY KEY,
+          \`id\` text NOT NULL,
           \`workflow_id\` text NOT NULL,
           \`name\` text NOT NULL,
           \`worker_type\` text NOT NULL,
@@ -93,6 +93,7 @@ export default {
           \`completed_at\` integer,
           \`time_created\` integer NOT NULL,
           \`time_updated\` integer NOT NULL,
+          CONSTRAINT \`workflow_node_pk\` PRIMARY KEY(\`workflow_id\`, \`id\`),
           CONSTRAINT \`fk_workflow_node_workflow_id_workflow_id_fk\` FOREIGN KEY (\`workflow_id\`) REFERENCES \`workflow\`(\`id\`) ON DELETE CASCADE
         );
       `)

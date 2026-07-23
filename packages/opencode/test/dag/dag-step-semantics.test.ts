@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test"
-import { DateTime, Effect, Layer } from "effect"
+import { DateTime, Effect, Exit, Layer } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { EventV2 } from "@opencode-ai/core/event"
 import { DagProjector } from "@opencode-ai/core/dag/projector"
@@ -175,6 +175,26 @@ describe("Dag.Service.step", () => {
         )
         expect(error).toBeInstanceOf(Error)
         expect((error as Error).message).toContain("in-flight")
+      }).pipe(Effect.scoped, Effect.provide(dagLayer)) as Effect.Effect<never>,
+    )
+  })
+
+  it("serializes concurrent terminal controls for one workflow", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        yield* setupFKs()
+        yield* createRunningWorkflow([])
+        const dag = yield* Dag.Service
+        const exits = yield* Effect.all(
+          [dag.cancel(dagID).pipe(Effect.exit), dag.complete(dagID).pipe(Effect.exit)],
+          { concurrency: "unbounded" },
+        )
+
+        expect(exits.filter(Exit.isSuccess)).toHaveLength(1)
+        expect(exits.filter(Exit.isFailure)).toHaveLength(1)
+        const store = yield* DagStore.Service
+        const status = (yield* store.getWorkflow(dagID))?.status
+        expect(status === "cancelled" || status === "completed").toBe(true)
       }).pipe(Effect.scoped, Effect.provide(dagLayer)) as Effect.Effect<never>,
     )
   })
