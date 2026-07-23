@@ -541,9 +541,13 @@ export const layer = Layer.effect(
               // Persist wake_reported AFTER successful delivery only.
               // A failure stays durable for a later idle event or restart scan;
               // it must not spin synchronously on the same row.
+              // The part is marked synthetic: model-visible (the orchestrator
+              // receives the node result and can act) but NOT rendered as a user
+              // message in the TUI chat — DAG data surfaces via the sidebar panel
+              // and Inspector, keeping the chat conversation clean.
               const didDeliver = yield* promptSvc.prompt({
                 sessionID: SessionID.make(sessionID),
-                parts: [{ type: "text", text: summary }],
+                parts: [{ type: "text", text: summary, synthetic: true }],
               }).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {
