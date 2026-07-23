@@ -17,7 +17,6 @@ import { SessionID } from "@/session/schema"
 import { resolveTemplate } from "../templates/resolve"
 import { sanitizeInput } from "../templates/sanitize"
 import { spawnNode } from "./spawn"
-import { registerCaptureSlot } from "./capture"
 import { evaluateCondition, resolveInputMapping } from "./eval"
 import { reconcileWorkflow, makeSessionStatusChecker } from "./recovery"
 
@@ -207,10 +206,21 @@ export const layer = Layer.effect(
         const recoverWorkflow = Effect.fn("DagLoop.recoverWorkflow")(function* (wf: DagStore.WorkflowRow) {
           const dagID = wf.id
           const config = parseWorkflowConfig(wf.config)
-          yield* reconcileWorkflow(dagID, checkSessionStatus, (sid) => promptSvc.cancel(sid as never), config).pipe(
+          const recovery = yield* reconcileWorkflow(
+            dagID,
+            checkSessionStatus,
+            (sid) => promptSvc.cancel(sid as never),
+            config,
+          ).pipe(
             Effect.provideService(Dag.Service, dag),
-            Effect.ignore,
           )
+          if (recovery.ownershipLost > 0) {
+            yield* Effect.logWarning("DagLoop terminalized recovered nodes after execution ownership loss", {
+              dagID,
+              reconciled: recovery.reconciled,
+              ownershipLost: recovery.ownershipLost,
+            })
+          }
           const nodes = yield* store.getNodes(dagID)
           const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
           const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
@@ -221,19 +231,9 @@ export const layer = Layer.effect(
           if (isStepping) runtime.setStepMode(true)
           const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
           runtimes.set(dagID, entry)
-          // Re-register capture slots for running nodes whose child sessions
-          // may still call submit_result. No persistent watcher is forked
-          // (by design — see dag-module-cleanup design D1). reconcileWorkflow
-          // (above) already published terminal events for settled sessions.
-          // Still-active sessions whose fibers died with the crashed process
-          // remain running until a post-crash continuation mechanism is built.
-          for (const node of nodes) {
-            if (node.status !== "running" || !node.childSessionId) continue
-            const nodeConfig = entry.config?.nodes.find((n) => n.id === node.id)
-            if (nodeConfig?.output_schema && node.childSessionId) {
-              registerCaptureSlot(node.childSessionId, nodeConfig.output_schema as Record<string, unknown>)
-            }
-          }
+          // Reconciliation settles every persisted running attempt before the
+          // runtime is rebuilt. Recovery never adopts or restarts provider work;
+          // a new execution attempt must come from explicit workflow control.
           if (!isPaused && !isStepping) {
             yield* entry.evalLock.withPermits(1)(
               Effect.gen(function* () {
@@ -506,11 +506,8 @@ export const layer = Layer.effect(
                     const entry = runtimes.get(dagID)
                     if (!entry) continue
                     if (entry.runtime.isPaused()) continue
-                    // Suppress the net only if at least one running node has an
-                    // active in-process fiber (actively making progress). All-
-                    // orphaned running nodes (recovered after crash, no fiber)
-                    // should be exposed to the net so a recovered workflow
-                    // cannot hang indefinitely.
+                    // Suppress the net only when current-process execution
+                    // ownership proves that a running node is making progress.
                     if (entry.runtime.hasRunningMatching((id) => entry.fibers.has(id))) continue
                     if (entry.runtime.getReadyNodes().length > 0) continue
                     if (entry.runtime.isComplete()) continue
@@ -544,9 +541,13 @@ export const layer = Layer.effect(
               // Persist wake_reported AFTER successful delivery only.
               // A failure stays durable for a later idle event or restart scan;
               // it must not spin synchronously on the same row.
+              // The part is marked synthetic: model-visible (the orchestrator
+              // receives the node result and can act) but NOT rendered as a user
+              // message in the TUI chat — DAG data surfaces via the sidebar panel
+              // and Inspector, keeping the chat conversation clean.
               const didDeliver = yield* promptSvc.prompt({
                 sessionID: SessionID.make(sessionID),
-                parts: [{ type: "text", text: summary }],
+                parts: [{ type: "text", text: summary, synthetic: true }],
               }).pipe(
                 Effect.tap(() =>
                   Effect.gen(function* () {

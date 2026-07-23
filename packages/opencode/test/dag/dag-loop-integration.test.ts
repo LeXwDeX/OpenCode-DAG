@@ -157,7 +157,7 @@ describe("E2E: diamond dependency (A → {B,C} → D)", () => {
 })
 
 describe("hasRunningMatching (safety-net gate)", () => {
-  it("returns false when no running nodes have fibers (all orphaned)", () => {
+  it("returns false when no running node has current-process fiber ownership", () => {
     const nodes = makeNodes(["a"])
     const rt = new WorkflowRuntime(nodes, 4)
     rt.markRunning("a")

@@ -7,17 +7,32 @@ import { WorkflowRuntime } from "@opencode-ai/core/dag/core/scheduling"
 import { SUCCESS_TERMINAL, toSchedulingNodes } from "@/dag/runtime/loop"
 import { makeNodeRow } from "./fixtures"
 
-function makeDagLayer(nodes: DagStore.NodeRow[], trackedEvents: { type: string; nodeID: string }[]) {
+type TrackedEvent = {
+  type: string
+  nodeID: string
+  output?: unknown
+  reason?: string
+  trigger?: string
+}
+
+function makeDagLayer(nodes: DagStore.NodeRow[], trackedEvents: TrackedEvent[], actions?: string[]) {
   return Layer.mock(Dag.Service, {
     store: {
       getNodes: () => Effect.succeed(nodes),
       getNode: (id: string) => Effect.succeed(nodes.find((n) => n.id === id)),
     } as unknown as DagStore.Interface,
-    nodeCompleted: Effect.fn("stub.nodeCompleted")((dagID: string, nodeID: string) =>
-      Effect.sync(() => trackedEvents.push({ type: "nodeCompleted", nodeID })),
+    nodeCompleted: Effect.fn("stub.nodeCompleted")((dagID: string, nodeID: string, output: unknown) =>
+      Effect.sync(() => trackedEvents.push({
+        type: "nodeCompleted",
+        nodeID,
+        ...(output === undefined ? {} : { output }),
+      })),
     ),
-    nodeFailed: Effect.fn("stub.nodeFailed")((dagID: string, nodeID: string) =>
-      Effect.sync(() => trackedEvents.push({ type: "nodeFailed", nodeID })),
+    nodeFailed: Effect.fn("stub.nodeFailed")((dagID: string, nodeID: string, reason: string, trigger: string) =>
+      Effect.sync(() => {
+        actions?.push(`failed:${trigger}`)
+        trackedEvents.push({ type: "nodeFailed", nodeID, reason, trigger })
+      }),
     ),
     nodeStarted: Effect.fn("stub.nodeStarted")((dagID: string, nodeID: string) =>
       Effect.sync(() => trackedEvents.push({ type: "nodeStarted", nodeID })),
@@ -46,7 +61,7 @@ describe("reconcileWorkflow", () => {
 
     await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
 
-    expect(events).toContainEqual({ type: "nodeFailed", nodeID: "n1" })
+    expect(events).toContainEqual(expect.objectContaining({ type: "nodeFailed", nodeID: "n1" }))
   })
 
   it("publishes NodeFailed for running node with no child session", async () => {
@@ -57,20 +72,29 @@ describe("reconcileWorkflow", () => {
 
     await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
 
-    expect(events).toContainEqual({ type: "nodeFailed", nodeID: "n1" })
+    expect(events).toContainEqual(expect.objectContaining({ type: "nodeFailed", nodeID: "n1" }))
   })
 
-  it("leaves running node active when child session is still active", async () => {
-    const events: { type: string; nodeID: string }[] = []
+  it("cancels and fails an active child with no deadline after execution ownership is lost", async () => {
+    const events: TrackedEvent[] = []
+    const cancelled: string[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1" })]
     const dagLayer = makeDagLayer(nodes, events)
     const checkStatus = () => Effect.succeed("active" as const)
+    const cancelSession = (sessionID: string) => Effect.sync(() => cancelled.push(sessionID))
 
-    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, cancelSession).pipe(Effect.provide(dagLayer)),
+    )
 
-    expect(events).toEqual([])
-    expect(result.leftRunning).toBe(1)
-    expect(result.reconciled).toBe(0)
+    expect(cancelled).toEqual(["ses_1"])
+    expect(events).toContainEqual({
+      type: "nodeFailed",
+      nodeID: "n1",
+      reason: "execution ownership lost on recovery",
+      trigger: "exec_failed",
+    })
+    expect(result).toEqual({ reconciled: 1, ownershipLost: 1 })
   })
 
   it("leaves pending node with no child session for spawnReady", async () => {
@@ -98,7 +122,7 @@ describe("reconcileWorkflow", () => {
     // re-attach to the old session — leave them pending for spawnReady.
     expect(events).not.toContainEqual({ type: "nodeStarted", nodeID: "n1" })
     expect(result.reconciled).toBe(0)
-    expect(result.leftRunning).toBe(0)
+    expect(result.ownershipLost).toBe(0)
   })
 
   it("skips non-running, non-pending nodes", async () => {
@@ -116,53 +140,138 @@ describe("reconcileWorkflow", () => {
     expect(result.reconciled).toBe(0)
   })
 
-  it("leaves unknown session running (watcher handles it, does not falsely fail)", async () => {
-    const events: { type: string; nodeID: string }[] = []
+  it("cancels and fails a zero-message child classified as unknown exactly once", async () => {
+    const events: TrackedEvent[] = []
+    const cancelled: string[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1" })]
     const dagLayer = makeDagLayer(nodes, events)
     const checkStatus = () => Effect.succeed("unknown" as const)
+    const cancelSession = (sessionID: string) => Effect.sync(() => cancelled.push(sessionID))
 
-    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, cancelSession).pipe(Effect.provide(dagLayer)),
+    )
 
-    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
-    expect(result.leftRunning).toBe(1)
+    expect(cancelled).toEqual(["ses_1"])
+    expect(events.filter((event) => event.type === "nodeFailed")).toEqual([
+      {
+        type: "nodeFailed",
+        nodeID: "n1",
+        reason: "execution ownership lost on recovery",
+        trigger: "exec_failed",
+      },
+    ])
+    expect(result).toEqual({ reconciled: 1, ownershipLost: 1 })
   })
 
-  it("fails running node whose deadline expired during crash (deadline re-enforcement)", async () => {
-    const events: { type: string; nodeID: string }[] = []
+  it("cancels before failing a running node whose deadline expired during crash", async () => {
+    const events: TrackedEvent[] = []
+    const actions: string[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: Date.now() - 10000 })]
-    const dagLayer = makeDagLayer(nodes, events)
+    const dagLayer = makeDagLayer(nodes, events, actions)
     const checkStatus = () => Effect.succeed("active" as const)
+    const cancelSession = () => Effect.sync(() => actions.push("cancelled"))
 
-    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, cancelSession).pipe(Effect.provide(dagLayer)),
+    )
 
-    expect(events).toContainEqual({ type: "nodeFailed", nodeID: "n1" })
-    expect(result.reconciled).toBe(1)
-    expect(result.leftRunning).toBe(0)
+    expect(actions).toEqual(["cancelled", "failed:timeout"])
+    expect(events).toContainEqual({
+      type: "nodeFailed",
+      nodeID: "n1",
+      reason: "deadline exceeded on recovery",
+      trigger: "timeout",
+    })
+    expect(result).toEqual({ reconciled: 1, ownershipLost: 1 })
   })
 
-  it("leaves running node with future deadline running (deadline not yet expired)", async () => {
-    const events: { type: string; nodeID: string }[] = []
+  it("cancels and fails an active child with a future deadline after execution ownership is lost", async () => {
+    const events: TrackedEvent[] = []
+    const cancelled: string[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: Date.now() + 60000 })]
     const dagLayer = makeDagLayer(nodes, events)
     const checkStatus = () => Effect.succeed("active" as const)
+    const cancelSession = (sessionID: string) => Effect.sync(() => cancelled.push(sessionID))
 
-    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, cancelSession).pipe(Effect.provide(dagLayer)),
+    )
 
-    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
-    expect(result.leftRunning).toBe(1)
+    expect(cancelled).toEqual(["ses_1"])
+    expect(events).toContainEqual({
+      type: "nodeFailed",
+      nodeID: "n1",
+      reason: "execution ownership lost on recovery",
+      trigger: "exec_failed",
+    })
+    expect(result).toEqual({ reconciled: 1, ownershipLost: 1 })
   })
 
-  it("leaves running node with null deadline running (no deadline to enforce)", async () => {
-    const events: { type: string; nodeID: string }[] = []
+  it("terminalizes the node even when cancelling the lost child session fails", async () => {
+    const events: TrackedEvent[] = []
     const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1", deadlineMs: null })]
     const dagLayer = makeDagLayer(nodes, events)
     const checkStatus = () => Effect.succeed("unknown" as const)
+    const cancelSession = () => Effect.fail(new Error("cancel unavailable"))
 
-    const result = await Effect.runPromise(reconcileWorkflow("wf-1", checkStatus).pipe(Effect.provide(dagLayer)))
+    const result = await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, cancelSession).pipe(Effect.provide(dagLayer)),
+    )
 
-    expect(events.find((e) => e.type === "nodeFailed")).toBeUndefined()
-    expect(result.leftRunning).toBe(1)
+    expect(events).toContainEqual({
+      type: "nodeFailed",
+      nodeID: "n1",
+      reason: "execution ownership lost on recovery",
+      trigger: "exec_failed",
+    })
+    expect(result).toEqual({ reconciled: 1, ownershipLost: 1 })
+  })
+
+  it("preserves captured structured output from an already completed child session", async () => {
+    const events: TrackedEvent[] = []
+    const output = { summary: "done" }
+    const nodes = [
+      makeNodeRow({
+        id: "n1",
+        status: "running",
+        childSessionId: "ses_1",
+        capturedOutput: output,
+      }),
+    ]
+    const dagLayer = makeDagLayer(nodes, events)
+    const checkStatus = () => Effect.succeed("completed" as const)
+    const workflowConfig = {
+      nodes: [{ id: "n1", output_schema: { type: "object" } }],
+    }
+
+    await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, undefined, workflowConfig).pipe(Effect.provide(dagLayer)),
+    )
+
+    expect(events).toContainEqual({ type: "nodeCompleted", nodeID: "n1", output })
+    expect(events.find((event) => event.type === "nodeFailed")).toBeUndefined()
+  })
+
+  it("fails an already completed child whose required structured output was never captured", async () => {
+    const events: TrackedEvent[] = []
+    const nodes = [makeNodeRow({ id: "n1", status: "running", childSessionId: "ses_1" })]
+    const dagLayer = makeDagLayer(nodes, events)
+    const checkStatus = () => Effect.succeed("completed" as const)
+    const workflowConfig = {
+      nodes: [{ id: "n1", output_schema: { type: "object" } }],
+    }
+
+    await Effect.runPromise(
+      reconcileWorkflow("wf-1", checkStatus, undefined, workflowConfig).pipe(Effect.provide(dagLayer)),
+    )
+
+    expect(events).toContainEqual({
+      type: "nodeFailed",
+      nodeID: "n1",
+      reason: "output_schema declared but submit_result was never successfully called (recovered)",
+      trigger: "verdict_fail",
+    })
   })
 })
 

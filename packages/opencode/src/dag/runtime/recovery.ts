@@ -1,10 +1,10 @@
 /**
  * DAG crash recovery — EventV2-driven, no separate recovery table/scan.
  *
- * With D3 (node = real child Session), crash recovery reduces to "what does the
- * child session's actual state say?" — which dev already tracks durably via
- * EventV2. On startup, any node left `running` by an unclean shutdown is
- * reconciled by querying its backing child session's state.
+ * A child Session's durable state can recover an already-settled result, but it
+ * cannot prove that the current process owns provider execution. On startup,
+ * every node left `running` by an unclean shutdown is therefore reconciled to a
+ * DAG terminal event before its WorkflowRuntime is rebuilt.
  *
  * This is NOT a startup-blocking scan (unlike the old recoverOrphanedWorkflows).
  * It runs lazily when a workflow is first accessed, and only touches workflows
@@ -20,14 +20,14 @@ import type { DagStore } from "@opencode-ai/core/dag/store"
 export function reconcileWorkflow(
   dagID: string,
   checkSessionStatus: (childSessionID: string) => Effect.Effect<"active" | "completed" | "failed" | "unknown", Error>,
-  cancelSession?: (sessionID: string) => Effect.Effect<void>,
+  cancelSession?: (sessionID: string) => Effect.Effect<void, Error>,
   workflowConfig?: { nodes: { id: string; output_schema?: Record<string, unknown> }[] } | undefined,
-): Effect.Effect<{ reconciled: number; leftRunning: number }, Error, Dag.Service> {
+): Effect.Effect<{ reconciled: number; ownershipLost: number }, Error, Dag.Service> {
   return Effect.gen(function* () {
     const dag = yield* Dag.Service
     const nodes = yield* dag.store.getNodes(dagID)
     let reconciled = 0
-    let leftRunning = 0
+    let ownershipLost = 0
 
     for (const node of nodes) {
       // Pending nodes have not been admitted to an execution attempt yet. This
@@ -69,9 +69,19 @@ export function reconcileWorkflow(
         yield* dag.nodeFailed(dagID, node.id, "child session failed (recovered)", "exec_failed")
         reconciled++
       } else {
-        // active or unknown: check whether the node overshot its persisted
-        // deadline during the crash. If so, fail it deterministically rather
-        // than leaving it to hang with no timeout protection.
+        ownershipLost++
+        if (cancelSession) {
+          yield* cancelSession(node.childSessionId).pipe(
+            Effect.catchCause((cause) =>
+              Effect.logWarning("DAG recovery failed to cancel child session", {
+                dagID,
+                nodeID: node.id,
+                childSessionID: node.childSessionId,
+                cause,
+              }),
+            ),
+          )
+        }
         if (node.deadlineMs !== null) {
           const now = yield* Clock.currentTimeMillis
           if (now >= node.deadlineMs) {
@@ -80,17 +90,17 @@ export function reconcileWorkflow(
             continue
           }
         }
-        // Deadline is in the future or unset. Leave running — the child
-        // session's in-process execution fiber died with the crashed process;
-        // its DB status may not yet reflect terminal. No persistent watcher is
-        // forked (by design — see dag-module-cleanup design D1). Post-crash
-        // continuation recovery requires a separate explicit mechanism not yet
-        // built. The orchestrator_unresponsive safety net + deadline bound it.
-        leftRunning++
+        yield* dag.nodeFailed(
+          dagID,
+          node.id,
+          "execution ownership lost on recovery",
+          "exec_failed",
+        )
+        reconciled++
       }
     }
 
-    return { reconciled, leftRunning }
+    return { reconciled, ownershipLost }
   })
 }
 

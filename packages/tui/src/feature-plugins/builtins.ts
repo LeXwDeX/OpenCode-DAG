@@ -8,6 +8,7 @@ import SidebarLsp from "./sidebar/lsp"
 import SidebarMcp from "./sidebar/mcp"
 import SidebarTodo from "./sidebar/todo"
 import SidebarDag from "./sidebar/dag"
+import SidebarDagPanel from "./sidebar/dag-panel"
 import DiffViewer from "./system/diff-viewer"
 import DagInspector from "./system/dag-inspector"
 import Notifications from "./system/notifications"
@@ -30,6 +31,7 @@ export function createBuiltinPlugins(options: { experimentalEventSystem: boolean
     SidebarTodo,
     SidebarFiles,
     SidebarDag,
+    SidebarDagPanel,
     SidebarFooter,
     Notifications,
     PluginManager,
