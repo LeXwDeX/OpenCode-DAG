@@ -89,15 +89,35 @@ export const layer = Layer.effectDiscard(
     yield* events.project(DagEvent.WorkflowCancelled, setWorkflowTerminal(ws("cancelled"), [ws("running"), ws("paused"), ws("stepping")]))
 
     yield* events.project(DagEvent.WorkflowReplanned, (event) =>
-      db
-        .update(WorkflowTable)
-        .set({ seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
-        .where(and(
-          eq(WorkflowTable.id, event.data.dagID),
-          inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping"]),
-        ))
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        // Atomic wake can reach the parent only after a leaf checkpoint has
+        // completed the current graph. An additive extend emits this event to
+        // reopen that completed workflow without changing completed nodes.
+        yield* db
+          .update(WorkflowTable)
+          .set({
+            status: "running",
+            wake_reported: false,
+            completed_at: null,
+            seq: event.durable!.seq,
+            time_updated: toMillis(event.data.timestamp),
+          })
+          .where(and(
+            eq(WorkflowTable.id, event.data.dagID),
+            eq(WorkflowTable.status, "completed"),
+          ))
+          .run()
+          .pipe(Effect.orDie)
+        yield* db
+          .update(WorkflowTable)
+          .set({ seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+          .where(and(
+            eq(WorkflowTable.id, event.data.dagID),
+            inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping"]),
+          ))
+          .run()
+          .pipe(Effect.orDie)
+      }),
     )
 
     yield* events.project(DagEvent.WorkflowConfigUpdated, (event) =>
@@ -106,7 +126,7 @@ export const layer = Layer.effectDiscard(
         .set({ config: event.data.config, seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
         .where(and(
           eq(WorkflowTable.id, event.data.dagID),
-          inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping"]),
+          inArray(WorkflowTable.status, ["pending", "running", "paused", "stepping", "completed"]),
         ))
         .run()
         .pipe(Effect.orDie),
