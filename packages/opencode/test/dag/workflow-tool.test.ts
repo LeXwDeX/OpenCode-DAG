@@ -33,6 +33,54 @@ const runtime = testEffect(
             created.push(input)
             return Dag.ID.create()
           }),
+        store: {
+          getWorkflow: (id: string) =>
+            Effect.succeed(
+              id === "dag_status"
+                ? {
+                    id,
+                    projectId: projectID,
+                    sessionId: "ses_workflow_parent",
+                    title: "Status workflow",
+                    status: "running",
+                    config: "{}",
+                    seq: 1,
+                    wakeReported: false,
+                    startedAt: 1,
+                    completedAt: null,
+                    timeCreated: 1,
+                    timeUpdated: 2,
+                  }
+                : undefined,
+            ),
+          getNodes: () =>
+            Effect.succeed([
+              {
+                id: "node_running",
+                workflowId: "dag_status",
+                name: "Running node",
+                workerType: "build",
+                status: "running",
+                required: true,
+                dependsOn: [],
+                modelId: null,
+                modelProviderId: null,
+                childSessionId: "ses_child",
+                output: null,
+                capturedOutput: null,
+                errorReason: null,
+                deadlineMs: null,
+                wakeEligible: true,
+                wakeReported: false,
+                replanAttempts: 0,
+                seq: 1,
+                startedAt: 1,
+                completedAt: null,
+                timeCreated: 1,
+                timeUpdated: 2,
+              },
+            ]),
+        },
       } as unknown as Dag.Interface),
     ),
     Layer.succeed(
@@ -45,17 +93,17 @@ const runtime = testEffect(
 )
 
 describe("workflow tool schema (negative tests)", () => {
-  it("action field accepts start/extend/control", () => {
+  it("action field accepts start/extend/control/status", () => {
     const decode = Schema.decodeUnknownSync(Parameters)
     expect(() => decode({ action: "start", config: { name: "test", nodes: [], max_concurrency: 3 } })).not.toThrow()
     expect(() => decode({ action: "extend", workflow_id: "wf-1", nodes: [] })).not.toThrow()
     expect(() => decode({ action: "control", workflow_id: "wf-1", operation: "pause" })).not.toThrow()
+    expect(() => decode({ action: "status", workflow_id: "wf-1" })).not.toThrow()
   })
 
   it("action field rejects unknown actions", () => {
     const decode = Schema.decodeUnknownSync(Parameters)
     expect(() => decode({ action: "delete" })).toThrow()
-    expect(() => decode({ action: "status" })).toThrow()
   })
 
   it("no node_complete action exists", () => {
@@ -63,9 +111,8 @@ describe("workflow tool schema (negative tests)", () => {
     expect(() => decode({ action: "node_complete" })).toThrow()
   })
 
-  it("no read-only actions exist (status/list/history/logs)", () => {
+  it("no unsupported read-only actions exist (list/history/logs)", () => {
     const decode = Schema.decodeUnknownSync(Parameters)
-    expect(() => decode({ action: "status" })).toThrow()
     expect(() => decode({ action: "list" })).toThrow()
     expect(() => decode({ action: "history" })).toThrow()
     expect(() => decode({ action: "logs" })).toThrow()
@@ -86,6 +133,32 @@ describe("workflow tool schema (negative tests)", () => {
 })
 
 describe("workflow tool execution", () => {
+  runtime.effect("status returns the durable workflow and node state", () =>
+    Effect.gen(function* () {
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+      const result = yield* workflow.execute(
+        {
+          action: "status",
+          workflow_id: "dag_status",
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      expect(result.output).toContain('"status": "running"')
+      expect(result.output).toContain('"id": "node_running"')
+      expect(result.output).toContain('"child_session_id": "ses_child"')
+    }),
+  )
+
   runtime.effect("start derives the project ID from the parent session", () =>
     Effect.gen(function* () {
       created.length = 0

@@ -54,8 +54,8 @@ export const layer = Layer.effect(
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
-      // DagLoop is provided by AppLayer (provideMerge). Activate its event
-      // subscription only when available; skipped in test/standalone contexts.
+      // DAG services are present in the production/default graphs. Keep the
+      // optional lookup so narrow test layers may omit them intentionally.
       const dagLoop = yield* Effect.serviceOption(DagLoop.Service)
       if (dagLoop._tag === "Some") {
         yield* dagLoop.value
@@ -87,6 +87,8 @@ export const layer = Layer.effect(
 export const defaultLayer: Layer.Layer<Service> = layer.pipe(
   Layer.provide([
     Config.defaultLayer,
+    DagLoop.defaultLayer,
+    DagSummaryPublisher.defaultLayer,
     Format.defaultLayer,
     LSP.defaultLayer,
     Plugin.defaultLayer,
@@ -99,6 +101,8 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
 
 export const node = LayerNode.make(layer, [
   Config.node,
+  DagLoop.node,
+  DagSummaryPublisher.node,
   Format.node,
   LSP.node,
   Plugin.node,

@@ -6,6 +6,7 @@ import { Spinner } from "../../component/spinner"
 import { TextAttributes } from "@opentui/core"
 import { useBindings, useCommandShortcut } from "../../keymap"
 import { computeWaves, type DagNode } from "./dag-inspector-utils"
+import type { DagWorkflowSummary } from "@opencode-ai/sdk/v2"
 
 const id = "internal:system-dag-inspector"
 const ROUTE = "dag"
@@ -20,11 +21,38 @@ function DagInspector(props: { api: TuiPluginApi }) {
   const [selectedWorkflow, setSelectedWorkflow] = createSignal<string | undefined>(undefined)
   const [selectedNode, setSelectedNode] = createSignal<string | undefined>(undefined)
   const [nodes, setNodes] = createSignal<DagNode[]>([])
+  const [fetchedWorkflows, setFetchedWorkflows] = createSignal<ReadonlyArray<DagWorkflowSummary> | undefined>()
+  const [workflowLoad, setWorkflowLoad] = createSignal<"loading" | "loaded" | "error">("loading")
 
   const workflows = createMemo(() => {
     const sid = params()?.sessionID
     if (!sid) return []
-    return props.api.state.session.dag(sid)
+    const synced = props.api.state.session.dag(sid)
+    return synced.length > 0 ? synced : (fetchedWorkflows() ?? [])
+  })
+
+  // Refresh authoritative state when the inspector opens. Summary events are
+  // ephemeral, so the shared sync slice can legitimately be empty after a
+  // missed event even though the workflow exists on the server.
+  createEffect(() => {
+    const sessionID = params()?.sessionID
+    if (!sessionID) {
+      setFetchedWorkflows([])
+      setWorkflowLoad("loaded")
+      return
+    }
+    setWorkflowLoad("loading")
+    void props.api.client.dag
+      .summary({ sessionID })
+      .then((response) => {
+        if (params()?.sessionID !== sessionID) return
+        setFetchedWorkflows(response.data ?? [])
+        setWorkflowLoad("loaded")
+      })
+      .catch(() => {
+        if (params()?.sessionID !== sessionID) return
+        setWorkflowLoad("error")
+      })
   })
 
   // Keep a valid workflow selected: adopt the first workflow when nothing is
@@ -251,6 +279,9 @@ function DagInspector(props: { api: TuiPluginApi }) {
             <text fg={theme().text} attributes={TextAttributes.BOLD}>
               Workflows
             </text>
+            <Show when={workflowLoad() !== "loading" && workflows().length === 0}>
+              <text fg={theme().textMuted}>No workflows</text>
+            </Show>
             <For each={workflows().slice(0, 10)}>
               {(wf) => (
                 <box
@@ -280,7 +311,15 @@ function DagInspector(props: { api: TuiPluginApi }) {
         <box flexGrow={1} padding={1}>
           <Show
             when={selectedWorkflow()}
-            fallback={<text fg={theme().textMuted}>Select a workflow from the left</text>}
+            fallback={
+              <text fg={theme().textMuted}>
+                {workflowLoad() === "loading"
+                  ? "Loading workflows..."
+                  : workflowLoad() === "error"
+                    ? "Unable to load workflows"
+                    : "No workflows for this session"}
+              </text>
+            }
           >
             <box flexDirection="column" gap={1}>
               <text fg={theme().text} attributes={TextAttributes.BOLD}>

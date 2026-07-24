@@ -46,12 +46,12 @@ const WorkflowGraphSchema = Schema.Struct({
 })
 
 export const Parameters = Schema.Struct({
-  action: Schema.Literals(["start", "extend", "control"]).annotate({ description: "start: create workflow; extend: add nodes; control: pause/resume/cancel/replan/step/complete" }),
+  action: Schema.Literals(["start", "extend", "control", "status"]).annotate({ description: "start: create workflow; extend: add nodes; control: pause/resume/cancel/replan/step/complete; status: inspect durable workflow and node state" }),
   config: Schema.optional(WorkflowGraphSchema).annotate({ description: "(start) Workflow graph definition" }),
   session_id: Schema.optional(Schema.String).annotate({ description: "(start) Parent session ID" }),
   project_id: Schema.optional(Schema.String).annotate({ description: "(start) Optional Project ID; must match the parent session project" }),
   title: Schema.optional(Schema.String).annotate({ description: "(start) Workflow title" }),
-  workflow_id: Schema.optional(Schema.String).annotate({ description: "(extend/control) Target workflow ID" }),
+  workflow_id: Schema.optional(Schema.String).annotate({ description: "(extend/control/status) Target workflow ID" }),
   nodes: Schema.optional(Schema.Array(NodeSchema)).annotate({ description: "(extend) Nodes to add" }),
   operation: Schema.optional(Schema.Literals(["pause", "resume", "cancel", "replan", "step", "complete"])).annotate({ description: "(control) Operation to perform" }),
   fragment: Schema.optional(WorkflowGraphSchema).annotate({ description: "(control replan) Replan fragment with node definitions" }),
@@ -75,6 +75,35 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
           switch (params.action) {
+            case "status": {
+              if (!params.workflow_id) return yield* Effect.die(new Error("status requires 'workflow_id'"))
+              const workflow = yield* dag.store.getWorkflow(params.workflow_id).pipe(Effect.orDie)
+              if (!workflow) return yield* Effect.die(new Error(`Workflow not found: ${params.workflow_id}`))
+              const nodes = yield* dag.store.getNodes(params.workflow_id).pipe(Effect.orDie)
+              return {
+                title: `Workflow status: ${workflow.title}`,
+                output: JSON.stringify(
+                  {
+                    id: workflow.id,
+                    title: workflow.title,
+                    status: workflow.status,
+                    session_id: workflow.sessionId,
+                    nodes: nodes.map((node) => ({
+                      id: node.id,
+                      name: node.name,
+                      status: node.status,
+                      required: node.required,
+                      depends_on: node.dependsOn,
+                      ...(node.childSessionId ? { child_session_id: node.childSessionId } : {}),
+                      ...(node.errorReason ? { error_reason: node.errorReason } : {}),
+                    })),
+                  },
+                  null,
+                  2,
+                ),
+                metadata: { workflowId: workflow.id } as Metadata,
+              }
+            }
             case "start": {
               if (!params.config) return yield* Effect.die(new Error("start requires 'config'"))
               const sessionID = SessionID.make(params.session_id ?? ctx.sessionID)

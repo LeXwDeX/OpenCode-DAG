@@ -342,6 +342,8 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 
 **extend** — Add nodes to a running workflow. Existing nodes are unaffected; new nodes are immediately eligible for scheduling if their dependencies are met.
 
+**status** — Read the durable state of one workflow and all of its nodes. Pass `workflow_id`. Use it whenever the user asks whether a workflow is running, when progress is uncertain, or before deciding whether to replan/control a workflow.
+
 **control** — Control a running workflow:
 - `pause` — let running nodes finish, don't spawn new ones
 - `resume` — resume scheduling
@@ -372,5 +374,5 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 ### What NOT to expect
 
 - No `node_complete` action — completion is automatic
-- No `status` / `list` / `history` actions — those are TUI-only via HTTP routes
+- No `list` / `history` actions — inspect a known workflow with `status`; broader browsing remains TUI-only
 - No topology templates — templates are prompt fragments only; you design the graph
