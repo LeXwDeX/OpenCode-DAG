@@ -9,7 +9,7 @@ function DagIndicator(props: { api: TuiPluginApi; session_id: string }) {
   const [open, setOpen] = createSignal(true)
   const theme = () => props.api.theme.current
   const dags = createMemo(() => props.api.state.session.dag(props.session_id))
-  const active = createMemo(() => dags().filter((d) => d.status === "running" || d.status === "paused"))
+  const active = createMemo(() => dags().filter((d) => d.status === "running" || d.status === "paused" || d.status === "stepping"))
 
   const statusColor = (status: string) => {
     if (status === "completed") return theme().success
@@ -17,6 +17,7 @@ function DagIndicator(props: { api: TuiPluginApi; session_id: string }) {
     if (status === "cancelled") return theme().textMuted
     if (status === "running") return theme().textMuted
     if (status === "paused") return theme().warning
+    if (status === "stepping") return theme().warning
     return theme().textMuted
   }
 

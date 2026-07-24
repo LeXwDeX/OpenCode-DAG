@@ -29,6 +29,7 @@ const wfSummary = (overrides: Partial<DagWorkflowSummary> = {}): DagWorkflowSumm
 
 type RenderOpts = {
   workflows?: DagWorkflowSummary[]
+  serverWorkflows?: DagWorkflowSummary[]
   nodes?: DagNode[]
   initialRoute?: TuiRouteCurrent
 }
@@ -76,6 +77,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
       keymap,
       client: {
         dag: {
+          summary: async () => ({ data: opts.serverWorkflows ?? workflowsState }),
           nodes: async (input: { dagID: string }) => {
             nodesCalls.push(input.dagID)
             return { data: opts.nodes ?? [] }
@@ -140,7 +142,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
   const app = await testRender(() => <Harness />, { width: 100, height: 30 })
   await waitForCommand(app, commands, "dag.close")
   // Give the initial fetchNodes a chance to resolve.
-  await waitForCondition(() => nodesCalls.length > 0)
+  if (workflowsState.length > 0) await waitForCondition(() => nodesCalls.length > 0)
 
   return {
     app,
@@ -184,6 +186,28 @@ async function waitForCondition(fn: () => boolean, timeout = 2000) {
 }
 
 describe("DagInspector", () => {
+  test("opening dag refreshes workflows from the server when sync state is empty", async () => {
+    const viewer = await renderDagInspector({
+      serverWorkflows: [wfSummary({ id: "wf-server", title: "Live server workflow", nodeCount: 1 })],
+      nodes: [dagNode({ id: "n-1", workflow_id: "wf-server", name: "build", status: "running" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("Live server workflow"))
+      expect(viewer.nodesCalls()).toContain("wf-server")
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("opening dag without visible workflows renders an explanatory empty state", async () => {
+    const viewer = await renderDagInspector()
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("No workflows"))
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
   test("mounting fetches nodes for the auto-selected workflow", async () => {
     const viewer = await renderDagInspector({
       workflows: [wfSummary({ id: "wf-1", nodeCount: 1 })],
