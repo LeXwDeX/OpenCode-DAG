@@ -1,6 +1,6 @@
 export * as DagLoop from "./loop"
 
-import { Effect, Layer, Context, Stream, Semaphore, Fiber } from "effect"
+import { Effect, Layer, Context, Stream, Semaphore, Fiber, Option } from "effect"
 import { LayerNode } from "@opencode-ai/core/effect/layer-node"
 import { InstanceState } from "@/effect/instance-state"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -14,6 +14,7 @@ import { Agent } from "@/agent/agent"
 import { Session } from "@/session/session"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionID } from "@/session/schema"
+import { SessionStatus } from "@/session/status"
 import { resolveTemplate } from "../templates/resolve"
 import { sanitizeInput } from "../templates/sanitize"
 import { spawnNode } from "./spawn"
@@ -61,6 +62,7 @@ export const layer = Layer.effect(
     const agentSvc = yield* Agent.Service
     const sessionSvc = yield* Session.Service
     const promptSvc = yield* SessionPrompt.Service
+    const statusSvc = yield* SessionStatus.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("DagLoop.state")(function* (ctx) {
@@ -266,7 +268,7 @@ export const layer = Layer.effect(
               )
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         for (const def of [DagEvent.NodeCompleted, DagEvent.NodeSkipped]) {
@@ -280,6 +282,9 @@ export const layer = Layer.effect(
                 yield* entry.evalLock.withPermits(1)(
                   Effect.gen(function* () {
                     entry.fibers.delete(evt.data.nodeID as string)
+                    const workflow = yield* store.getWorkflow(dagID)
+                    entry.runtime.setPaused(workflow?.status === "paused")
+                    entry.runtime.setStepMode(workflow?.status === "stepping")
                     // Guard against stale events: a node already cancelled
                     // (markUnsatisfied) or already satisfied must not be flipped
                     // back. Mirrors the NodeFailed handler's isActive guard.
@@ -296,10 +301,10 @@ export const layer = Layer.effect(
                 // P1-2: trigger wake check directly on node terminal —
                 // the parent session may already be idle (no new idle event
                 // will fire), so we can't rely on the idle subscription alone.
-                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore)
+                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore, Effect.forkScoped)
               }).pipe(Effect.ignore),
             ),
-            Effect.forkScoped,
+            Effect.forkScoped({ startImmediately: true }),
           )
         }
 
@@ -326,7 +331,7 @@ export const layer = Layer.effect(
               )
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         yield* events.subscribe(DagEvent.NodeFailed).pipe(
@@ -357,10 +362,10 @@ export const layer = Layer.effect(
                     yield* checkCompletion(dagID)
                   }),
                 )
-                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore)
+                yield* tryDeliverWake(entry.parentSessionID).pipe(Effect.ignore, Effect.forkScoped)
               }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         yield* events.subscribe(DagEvent.WorkflowPaused).pipe(
@@ -372,7 +377,7 @@ export const layer = Layer.effect(
               yield* entry.evalLock.withPermits(1)(Effect.sync(() => entry.runtime.setPaused(true)))
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         yield* events.subscribe(DagEvent.WorkflowStepped).pipe(
@@ -390,7 +395,7 @@ export const layer = Layer.effect(
               )
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         yield* events.subscribe(DagEvent.WorkflowResumed).pipe(
@@ -409,7 +414,7 @@ export const layer = Layer.effect(
               )
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         yield* events.subscribe(DagEvent.WorkflowReplanned).pipe(
@@ -431,7 +436,7 @@ export const layer = Layer.effect(
               )
             }).pipe(Effect.ignore),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         for (const def of [DagEvent.WorkflowCompleted, DagEvent.WorkflowFailed, DagEvent.WorkflowCancelled]) {
@@ -458,11 +463,11 @@ export const layer = Layer.effect(
                 // P1-6: trigger wake on workflow terminal so the parent
                 // learns the final outcome even if no idle event fires.
                 if (parentSessionID) {
-                  yield* tryDeliverWake(parentSessionID).pipe(Effect.ignore)
+                  yield* tryDeliverWake(parentSessionID).pipe(Effect.ignore, Effect.forkScoped)
                 }
               }).pipe(Effect.ignore),
             ),
-            Effect.forkScoped,
+            Effect.forkScoped({ startImmediately: true }),
           )
         }
 
@@ -471,6 +476,56 @@ export const layer = Layer.effect(
         // event handlers, so a wake fires even when the parent session is
         // already idle (P1-2 fix).
 
+        const readWakeBatch = Effect.fn("DagLoop.readWakeBatch")(function* (sessionID: string) {
+          const snapshot = yield* store.getWakeSnapshot(sessionID).pipe(
+            Effect.catch(() =>
+              Effect.succeed({ nodes: [], workflows: [] } satisfies DagStore.WakeSnapshot),
+            ),
+          )
+          const terminalWorkflows = snapshot.workflows.filter(
+            (workflow) => !workflow.wakeReported && isWorkflowTerminalStatus(workflow.status as never),
+          )
+          const workflowIDs = [...new Set([
+            ...snapshot.nodes.map((node) => node.workflowId),
+            ...terminalWorkflows.map((workflow) => workflow.id),
+          ])]
+          const workflowsByID = new Map(snapshot.workflows.map((workflow) => [workflow.id, workflow]))
+          const workflows = workflowIDs.map((workflowID) => workflowsByID.get(workflowID))
+          const boundaryWorkflows = workflows.filter((workflow): workflow is DagStore.WorkflowRow => {
+            if (!workflow) return false
+            if (isWorkflowTerminalStatus(workflow.status as never)) return true
+            const entry = runtimes.get(workflow.id)
+            if (workflow.status === "paused" || workflow.status === "stepping") return true
+            if (entry?.runtime.isPaused() || entry?.runtime.isStepMode()) return true
+            if (workflow.status !== "running" || !entry) return false
+            if (entry.runtime.hasRunningMatching((id) => entry.fibers.has(id))) return false
+            return entry.runtime.getReadyNodes().length === 0
+          })
+          const atBoundary = new Set(boundaryWorkflows.map((workflow) => workflow.id))
+          const batch = {
+            nodes: snapshot.nodes.filter((node) => atBoundary.has(node.workflowId)),
+            workflows: terminalWorkflows.filter((workflow) => atBoundary.has(workflow.id)),
+          } satisfies DagStore.WakeBatch
+          return {
+            batch,
+            actionableDagIDs: new Set(
+              boundaryWorkflows
+                .filter((workflow) => !isWorkflowTerminalStatus(workflow.status as never))
+                .map((workflow) => workflow.id),
+            ),
+            unresponsiveDagIDs: new Set(
+              boundaryWorkflows
+                .filter((workflow) => {
+                  const entry = runtimes.get(workflow.id)
+                  return workflow.status === "running"
+                    && !entry?.runtime.isPaused()
+                    && !entry?.runtime.isStepMode()
+                })
+                .map((workflow) => workflow.id),
+            ),
+          }
+        })
+
         let tryDeliverWake: (sessionID: string) => Effect.Effect<void> = () => Effect.void
         tryDeliverWake = Effect.fn("DagLoop.tryDeliverWake")(function* (sessionID: string) {
           if (wakeInFlight.has(sessionID)) {
@@ -478,19 +533,14 @@ export const layer = Layer.effect(
             return
           }
           wakeInFlight.add(sessionID)
-          // #4: drain loop — deliver ALL pending unreported rows, not just one.
-          // Each iteration delivers at most one to keep messages coherent,
-          // then re-checks for additional rows.
+          // Re-read after each stable batch so rows committed during delivery
+          // remain a separate batch.
           try {
-            const deliveredDagIDs = new Set<string>()
+            const deliveredUnresponsiveDagIDs = new Set<string>()
             for (;;) {
-              const unreportedNodes = yield* store.getUnreportedWakeNodes(sessionID).pipe(
-                Effect.catch(() => Effect.succeed([] as DagStore.NodeRow[])),
-              )
-              const unreportedWorkflows = yield* store.getUnreportedWakeWorkflows(sessionID).pipe(
-                Effect.catch(() => Effect.succeed([] as DagStore.WorkflowRow[])),
-              )
-              const hasUnreported = unreportedNodes.length > 0 || unreportedWorkflows.length > 0
+              const plan = yield* readWakeBatch(sessionID)
+              const batch = plan.batch
+              const hasUnreported = batch.nodes.length > 0 || batch.workflows.length > 0
 
               if (!hasUnreported) {
                 // A terminal event can commit between either query. Coalesce
@@ -500,12 +550,13 @@ export const layer = Layer.effect(
                 // unreported rows remain, check for orchestrator-unresponsive.
                 // #5: scoped per-workflow — only fail the workflow whose node
                 // was reported, not any other workflow under the same session.
-                // Skip paused workflows (they intentionally have no ready nodes).
-                if (deliveredDagIDs.size > 0) {
-                  for (const dagID of deliveredDagIDs) {
+                // Skip paused and stepping workflows; both can intentionally
+                // have no ready nodes.
+                if (deliveredUnresponsiveDagIDs.size > 0) {
+                  for (const dagID of deliveredUnresponsiveDagIDs) {
                     const entry = runtimes.get(dagID)
                     if (!entry) continue
-                    if (entry.runtime.isPaused()) continue
+                    if (entry.runtime.isPaused() || entry.runtime.isStepMode()) continue
                     // Suppress the net only when current-process execution
                     // ownership proves that a running node is making progress.
                     if (entry.runtime.hasRunningMatching((id) => entry.fibers.has(id))) continue
@@ -516,6 +567,8 @@ export const layer = Layer.effect(
                 }
                 return
               }
+
+              if ((yield* statusSvc.get(SessionID.make(sessionID))).type !== "idle") return
 
               // Preemption guard (task 3.3): abort if fresher user message exists
               const msgs = yield* sessionSvc.messages({ sessionID: SessionID.make(sessionID), limit: 20 }).pipe(Effect.catch(() => Effect.succeed([])))
@@ -529,14 +582,24 @@ export const layer = Layer.effect(
               }
               if (lastUserAt > lastAsstAt) return
 
-              // D6: prioritize node-level wake, then workflow-terminal wake
-              const targetNode = unreportedNodes[0]
-              const targetWorkflow = targetNode ? undefined : unreportedWorkflows[0]
-              if (!targetNode && !targetWorkflow) return
-
-              const summary = targetNode
-                ? `[DAG Node Result] Node "${targetNode.name}" ${targetNode.status}: ${typeof targetNode.output === "string" ? targetNode.output.slice(0, 500) : targetNode.errorReason ?? "(no output)"}\n\nYou MUST act on this workflow in this turn (workflow tool: extend / control replan / complete / cancel). If this turn ends with the workflow stalled and no action taken, it will be failed with reason "orchestrator_unresponsive".`
-                : `[DAG Workflow ${targetWorkflow!.status}] Workflow "${targetWorkflow!.title}" has reached terminal status.`
+              const summaries = [
+                ...batch.nodes.map((node) => {
+                  const output = typeof node.output === "string"
+                    ? node.output.slice(0, 500)
+                    : node.errorReason ?? (node.output == null ? "(no output)" : JSON.stringify(node.output).slice(0, 500))
+                  return `[DAG Node Result] Node "${node.name}" ${node.status}: ${output}`
+                }),
+                ...batch.workflows.map(
+                  (workflow) =>
+                    `[DAG Workflow ${workflow.status}] Workflow "${workflow.title}" has reached terminal status.`,
+                ),
+              ]
+              const summary = [
+                ...summaries,
+                ...(plan.actionableDagIDs.size > 0
+                  ? ['You MUST act on these workflows in this turn (workflow tool: extend / control replan / complete / cancel). If this turn ends with a workflow stalled and no action taken, it will be failed with reason "orchestrator_unresponsive".']
+                  : []),
+              ].join("\n\n")
 
               // Persist wake_reported AFTER successful delivery only.
               // A failure stays durable for a later idle event or restart scan;
@@ -545,29 +608,29 @@ export const layer = Layer.effect(
               // receives the node result and can act) but NOT rendered as a user
               // message in the TUI chat — DAG data surfaces via the sidebar panel
               // and Inspector, keeping the chat conversation clean.
-              const didDeliver = yield* promptSvc.prompt({
+              const didDeliver = yield* promptSvc.promptIfIdle({
                 sessionID: SessionID.make(sessionID),
                 parts: [{ type: "text", text: summary, synthetic: true }],
               }).pipe(
-                Effect.tap(() =>
-                  Effect.gen(function* () {
-                    if (targetNode) {
-                      yield* store.markNodeWakeReported(targetNode.workflowId, targetNode.id)
-                      deliveredDagIDs.add(targetNode.workflowId)
-                    }
-                    if (targetWorkflow) {
-                      yield* store.markWorkflowWakeReported(targetWorkflow.id)
-                      deliveredDagIDs.add(targetWorkflow.id)
-                    }
-                  }),
-                ),
-                Effect.as(true),
+                Effect.flatMap(Option.match({
+                  onNone: () => Effect.succeed(false),
+                  onSome: () =>
+                    store.markWakeBatchReported(batch).pipe(
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          plan.unresponsiveDagIDs.forEach((workflowID) =>
+                            deliveredUnresponsiveDagIDs.add(workflowID),
+                          )
+                        }),
+                      ),
+                      Effect.as(true),
+                    ),
+                })),
                 Effect.catchCause(() =>
                   Effect.logWarning("DAG wake delivery failed", { sessionID }).pipe(Effect.as(false)),
                 ),
               )
               if (!didDeliver) return
-              // Loop continues to drain remaining unreported rows
             }
           } finally {
             const retry = wakePending.delete(sessionID)
@@ -580,9 +643,9 @@ export const layer = Layer.effect(
         yield* events.subscribe(SessionStatusEvent.Status).pipe(
           Stream.filter((evt) => evt.data.status.type === "idle"),
           Stream.runForEach((evt) =>
-            tryDeliverWake(evt.data.sessionID as string).pipe(Effect.ignore),
+            tryDeliverWake(evt.data.sessionID as string).pipe(Effect.ignore, Effect.forkScoped),
           ),
-          Effect.forkScoped,
+          Effect.forkScoped({ startImmediately: true }),
         )
 
         // Install all live event handlers before spawning recovery watchers so
@@ -627,6 +690,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Agent.defaultLayer),
   Layer.provide(Session.defaultLayer),
   Layer.provide(SessionPrompt.defaultLayer),
+  Layer.provide(SessionStatus.defaultLayer),
 )
 
 export const node = LayerNode.make(layer, [
@@ -636,4 +700,5 @@ export const node = LayerNode.make(layer, [
   Agent.node,
   Session.node,
   SessionPrompt.node,
+  SessionStatus.node,
 ])

@@ -41,6 +41,10 @@ function DagInspector(props: { api: TuiPluginApi }) {
       setWorkflowLoad("loaded")
       return
     }
+    setFetchedWorkflows([])
+    setSelectedWorkflow(undefined)
+    setSelectedNode(undefined)
+    setNodes([])
     setWorkflowLoad("loading")
     void props.api.client.dag
       .summary({ sessionID })

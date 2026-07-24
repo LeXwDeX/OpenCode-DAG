@@ -122,7 +122,7 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
               }).pipe(Effect.orDie)
               return {
                 title: `Workflow started: ${params.config.name}`,
-                output: `<workflow id="${dagID}" state="running">\n${params.config.nodes.length} nodes registered.\n</workflow>`,
+                output: `<workflow id="${dagID}" state="running">\n${params.config.nodes.length} nodes registered.\nDo not poll this workflow. It runs asynchronously and will wake the parent session when attention is required.\n</workflow>`,
                 metadata: { workflowId: dagID } as Metadata,
               }
             }

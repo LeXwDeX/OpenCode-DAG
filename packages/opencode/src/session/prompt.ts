@@ -42,7 +42,7 @@ import { Truncate } from "@/tool/truncate"
 import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
-import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { Cause, Deferred, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -64,6 +64,7 @@ import { SettingsHook, HOOK_REWAKE_SENTINEL, type TriggerResult } from "@/hook/s
 import { applyPreHookDecision } from "@/hook/pre-hook-decision"
 import { dispatchTrust } from "@/hook/workspace-trust"
 import { HookStartContext } from "@/hook/start-context"
+import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -110,6 +111,7 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
+  readonly promptIfIdle: (input: PromptInput) => Effect.Effect<Option.Option<SessionV1.WithParts>, Image.Error>
   readonly loop: (input: LoopInput) => Effect.Effect<SessionV1.WithParts>
   readonly shell: (input: ShellInput) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<SessionV1.WithParts, Image.Error>
@@ -151,6 +153,7 @@ export const layer = Layer.effect(
     const { db } = database
     const settingsHook = Option.getOrUndefined(yield* Effect.serviceOption(SettingsHook.Service))
     const startContext = Option.getOrUndefined(yield* Effect.serviceOption(HookStartContext.Service))
+    const promptLocks = KeyedMutex.makeUnsafe<SessionID>()
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1295,9 +1298,7 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
-      "SessionPrompt.prompt",
-    )(function* (input: PromptInput) {
+    const admitPrompt = Effect.fn("SessionPrompt.admitPrompt")(function* (input: PromptInput) {
       const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
@@ -1333,7 +1334,7 @@ export const layer = Layer.effect(
                   synthetic: true,
                 } satisfies SessionV1.TextPart),
         })
-        if (hookResult.blocked) return message
+        if (hookResult.blocked) return { message, run: false as const }
       }
 
       // SettingsHook: drain HookStartContext queued by SessionStart hooks (only if not blocked)
@@ -1362,9 +1363,57 @@ export const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
-      if (input.noReply === true) return message
-      return yield* loop({ sessionID: input.sessionID })
+      return { message, run: input.noReply !== true }
     })
+
+    const prompt: (input: PromptInput) => Effect.Effect<SessionV1.WithParts, Image.Error> = Effect.fn(
+      "SessionPrompt.prompt",
+    )(function* (input: PromptInput) {
+      const wait = yield* promptLocks.withLock(input.sessionID)(
+        Effect.gen(function* () {
+          const admitted = yield* admitPrompt(input)
+          if (!admitted.run) return Effect.succeed(admitted.message)
+          return yield* state.ensureRunningHandle(
+            input.sessionID,
+            lastAssistant(input.sessionID),
+            runLoop(input.sessionID),
+          )
+        }),
+      )
+      return yield* wait
+    })
+
+    const promptIfIdle: Interface["promptIfIdle"] = Effect.fn("SessionPrompt.promptIfIdle")(
+      function* (input: PromptInput) {
+        const wait = yield* promptLocks.withLock(input.sessionID)(
+          Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              const admission = yield* Deferred.make<
+                Exit.Exit<{ readonly message: SessionV1.WithParts; readonly run: boolean }, Image.Error>
+              >()
+              const wait = yield* state.startIfIdle(
+                input.sessionID,
+                lastAssistant(input.sessionID),
+                Effect.gen(function* () {
+                  const admitted = yield* Deferred.await(admission)
+                  if (Exit.isFailure(admitted)) return yield* Effect.failCause(admitted.cause)
+                  if (!admitted.value.run) return admitted.value.message
+                  return yield* runLoop(input.sessionID)
+                }).pipe(Effect.orDie),
+              )
+              if (Option.isNone(wait)) return wait
+
+              const admitted = yield* restore(admitPrompt(input)).pipe(Effect.exit)
+              yield* Deferred.succeed(admission, admitted)
+              if (Exit.isFailure(admitted)) return yield* Effect.failCause(admitted.cause)
+              return wait
+            }),
+          ),
+        )
+        if (Option.isNone(wait)) return Option.none()
+        return Option.some(yield* wait.value)
+      },
+    )
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user").pipe(Effect.orDie)
@@ -1879,7 +1928,14 @@ export const layer = Layer.effect(
               prompt: templateParts.find((y) => y.type === "text")?.text ?? "",
             },
           ]
-        : [...uniqueTemplateParts, ...(input.parts ?? [])]
+        : [
+            {
+              type: "text" as const,
+              text: `/${input.command}${input.arguments ? ` ${input.arguments}` : ""}`,
+            },
+            ...uniqueTemplateParts.map((part) => (part.type === "text" ? { ...part, synthetic: true } : part)),
+            ...(input.parts ?? []),
+          ]
 
       const userAgent = isSubtask ? (input.agent ?? (yield* agents.defaultInfo()).name) : agent.name
       const userModel = isSubtask
@@ -1914,6 +1970,7 @@ export const layer = Layer.effect(
     return Service.of({
       cancel,
       prompt,
+      promptIfIdle,
       loop,
       shell,
       command,
