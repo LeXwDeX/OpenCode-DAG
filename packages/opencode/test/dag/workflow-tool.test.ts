@@ -130,9 +130,42 @@ describe("workflow tool schema (negative tests)", () => {
     expect(() => decode({ action: "control", workflow_id: "wf-1", operation: "delete" })).toThrow()
     expect(() => decode({ action: "control", workflow_id: "wf-1", operation: "start" })).toThrow()
   })
+
+  it("defaults an omitted node required flag to false", () => {
+    const decode = Schema.decodeUnknownSync(Parameters)
+    const input = decode({
+      action: "start",
+      config: {
+        name: "required-default",
+        nodes: [
+          {
+            id: "optional-node",
+            name: "Optional node",
+            worker_type: "build",
+            depends_on: [],
+            prompt_template: { inline: "work" },
+          },
+        ],
+      },
+    })
+
+    expect(input.config?.nodes[0]?.required).toBe(false)
+  })
 })
 
 describe("workflow tool execution", () => {
+  runtime.effect("description retains the workflow action reference after guidance migration", () =>
+    Effect.gen(function* () {
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      for (const action of ["start", "extend", "status", "control"]) {
+        expect(workflow.description).toContain(`**${action}**`)
+      }
+      expect(workflow.description).not.toContain("$ARGUMENTS")
+    }),
+  )
+
   runtime.effect("status returns the durable workflow and node state", () =>
     Effect.gen(function* () {
       const info = yield* WorkflowTool
@@ -190,6 +223,43 @@ describe("workflow tool execution", () => {
       expect(created).toHaveLength(1)
       expect(created[0]?.projectID).toBe(projectID)
       expect(created[0]?.sessionID).toBe(parentID)
+    }),
+  )
+
+  runtime.effect("start passes the decoded required default to Dag.create", () =>
+    Effect.gen(function* () {
+      created.length = 0
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      yield* workflow.execute(
+        {
+          action: "start",
+          config: {
+            name: "required-default",
+            nodes: [
+              {
+                id: "optional-node",
+                name: "Optional node",
+                worker_type: "build",
+                depends_on: [],
+                prompt_template: { inline: "work" },
+              },
+            ],
+          },
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      expect(created[0]?.config.nodes[0]?.required).toBe(false)
     }),
   )
 

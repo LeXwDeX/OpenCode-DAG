@@ -59,6 +59,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
 
   // Trackable spies
   const nodesCalls: string[] = []
+  const commandCalls: unknown[] = []
   const navigations: { name: string; params?: Record<string, unknown> }[] = []
   const toasts: { variant?: string; message: string }[] = []
   const eventHandlers = new Map<string, (event: never) => void>()
@@ -81,6 +82,12 @@ async function renderDagInspector(opts: RenderOpts = {}) {
           nodes: async (input: { dagID: string }) => {
             nodesCalls.push(input.dagID)
             return { data: opts.nodes ?? [] }
+          },
+        },
+        session: {
+          command: async (input: unknown) => {
+            commandCalls.push(input)
+            return { data: undefined }
           },
         },
       } as unknown as TuiPluginApi["client"],
@@ -140,7 +147,8 @@ async function renderDagInspector(opts: RenderOpts = {}) {
   }
 
   const app = await testRender(() => <Harness />, { width: 100, height: 30 })
-  await waitForCommand(app, commands, "dag.close")
+  await waitForCommand(app, commands, "dag.open")
+  if (current().name === "dag") await waitForCommand(app, commands, "dag.close")
   // Give the initial fetchNodes a chance to resolve.
   if (workflowsState.length > 0) await waitForCondition(() => nodesCalls.length > 0)
 
@@ -148,6 +156,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
     app,
     commands,
     navigations: () => navigations,
+    commandCalls: () => commandCalls,
     toasts: () => toasts,
     nodesCalls: () => nodesCalls,
     setWorkflows: (wfs: DagWorkflowSummary[]) => {
@@ -186,6 +195,24 @@ async function waitForCondition(fn: () => boolean, timeout = 2000) {
 }
 
 describe("DagInspector", () => {
+  test("/dag dispatches dag.open locally without submitting a model command", async () => {
+    const returnRoute = { name: "session", params: { sessionID: SESSION_ID } }
+    const viewer = await renderDagInspector({ initialRoute: returnRoute })
+    try {
+      expect(viewer.commands.get("dag.open")?.slashName).toBe("dag")
+      viewer.commands.get("dag.open")!.run?.({} as never)
+      await waitForCommand(viewer.app, viewer.commands, "dag.close")
+
+      expect(viewer.navigations().at(-1)).toEqual({
+        name: "dag",
+        params: { sessionID: SESSION_ID, returnRoute },
+      })
+      expect(viewer.commandCalls()).toEqual([])
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
   test("opening dag refreshes workflows from the server when sync state is empty", async () => {
     const viewer = await renderDagInspector({
       serverWorkflows: [wfSummary({ id: "wf-server", title: "Live server workflow", nodeCount: 1 })],

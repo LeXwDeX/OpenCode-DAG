@@ -43,6 +43,15 @@ describe("CommandPlugin.Plugin", () => {
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         subtask: true,
       })
+      expect(yield* command.get("dag-flow")).toMatchObject({
+        name: "dag-flow",
+        description: CommandPlugin.DagFlowDescription,
+        template: CommandPlugin.DagFlowContent,
+      })
+      expect(CommandPlugin.DagFlowContent).toContain("$ARGUMENTS")
+      expect(CommandPlugin.DagFlowContent).toContain("workflow` tool with `action=start")
+      expect(CommandPlugin.DagFlowContent).toContain("exact Workflow ID")
+      expect(CommandPlugin.DagFlowContent).toContain("run `/dag`")
     }),
   )
 })

@@ -1,5 +1,5 @@
 import * as Tool from "./tool"
-import { SkillPlugin } from "@opencode-ai/core/plugin/skill"
+import { CommandPlugin } from "@opencode-ai/core/plugin/command"
 import { Effect, Schema } from "effect"
 import { Dag } from "@/dag/dag"
 import { Session } from "@/session/session"
@@ -17,7 +17,10 @@ const NodeSchema = Schema.Struct({
   name: Schema.String.annotate({ description: "Human-readable node name" }),
   worker_type: Schema.String.annotate({ description: "Agent type (explore, build, general, plan, or custom)" }),
   depends_on: Schema.Array(Schema.String).annotate({ description: "Node IDs this node waits for ([] for root)" }),
-  required: Schema.optional(Schema.Boolean).annotate({ description: "If true and this node fails, the workflow is cancelled. Default: false" }),
+  required: Schema.Boolean.pipe(
+    Schema.optional,
+    Schema.withDecodingDefaultType(Effect.succeed(false)),
+  ).annotate({ description: "If true and this node fails, the workflow is cancelled. Default: false" }),
   prompt_template: Schema.Struct({
     id: Schema.optional(Schema.String),
     inline: Schema.optional(Schema.String),
@@ -70,7 +73,7 @@ export const WorkflowTool = Tool.define<typeof Parameters, Metadata, Dag.Service
     const sessions = yield* Session.Service
 
     return {
-      description: SkillPlugin.WorkflowContent,
+      description: CommandPlugin.WorkflowContent,
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
         Effect.gen(function* () {
