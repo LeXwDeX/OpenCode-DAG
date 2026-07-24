@@ -9,14 +9,20 @@ The `workflow` tool orchestrates heavy tasks as dependency-graph multi-agent wor
 
 ## When to start a workflow
 
-A task needs a workflow when ANY of these hold:
+A task is an implicit workflow candidate only when it has both a scenario
+signal—such as multi-role review, brainstorming, swarm/cluster work,
+multi-model analysis, or end-to-end development—and one of these structural
+signals:
 
 - **Staged**: clear phase boundaries where later phases depend on earlier outputs (explore → plan → implement → verify).
 - **Parallelizable**: ≥3 independent sub-units can execute concurrently (same fix across 5 packages).
 - **Quality gate**: intermediate output must pass review before downstream work begins (architecture review before implementation).
-- **Multi-model**: different phases have different cognitive demands and benefit from different models (expensive model for planning, fast model for mechanical edits).
+- **Adaptive scope**: discovery may reveal an unknown number of work packages or require a bounded repair wave.
 
-If a task fits in one context window and has no inter-step dependencies, use the `task` tool instead. For trivial work, use direct tools.
+A lone keyword such as "review" is not enough. An explicit `/dag-flow` request
+does not require this implicit-trigger test. If a task fits in one context
+window and has no inter-step dependencies, use the `task` tool instead. For
+trivial work, use direct tools.
 
 ## Orchestration Lifecycle
 
@@ -372,8 +378,27 @@ config:
       worker_type: general
       depends_on: [review-arch, review-logic, review-style]
       required: true
+      report_to_parent: true
+      output_schema:
+        type: object
+        required: [verdict, summary, findings, required_actions, next_action]
+        properties:
+          verdict:
+            type: string
+            enum: [ACCEPT, REVISE, REJECT, BLOCKED]
+          summary: { type: string }
+          findings: { type: array }
+          required_actions: { type: array }
+          next_action:
+            type: object
+            required: [operation, targets]
+            properties:
+              operation:
+                type: string
+                enum: [continue, extend, replan, complete, stop]
+              targets: { type: array }
       prompt_template:
-        inline: "Three reviewers produced verdicts. Synthesize a final decision: ACCEPT, REJECT, or REVISE with specific actions."
+        inline: "Three reviewers produced findings. Submit one structured ACCEPT, REVISE, REJECT, or BLOCKED decision with deduplicated findings, required actions, and the next bounded workflow action."
 ```
 
 Reviewer nodes may use different exact models when the user selected them;
@@ -512,7 +537,11 @@ at the tool-call top level is only for `extend`, not `start`. Returns the
 workflow ID. Nodes declare `depends_on` (node IDs); layers and execution order
 are computed automatically.
 
-**extend** — Add nodes to a running workflow. Existing nodes are unaffected; new nodes are immediately eligible for scheduling if their dependencies are met.
+**extend** — Add nodes to a running workflow. Existing nodes are unaffected;
+new nodes are immediately eligible for scheduling if their dependencies are
+met. It also accepts a genuinely additive wave after a reporting leaf
+checkpoint naturally completed the current graph; an early
+`control(complete)` workflow remains terminal.
 
 **status** — Read the durable state of one workflow and all of its nodes. Pass `workflow_id`. Use it when the user explicitly asks for current state or once before a decision that requires fresh state, such as replan/control. Do not poll a running workflow merely to wait: node reports and terminal outcomes wake the parent session automatically.
 

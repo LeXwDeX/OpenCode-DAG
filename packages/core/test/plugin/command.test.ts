@@ -61,6 +61,9 @@ describe("CommandPlugin.Plugin", () => {
       expect(CommandPlugin.WorkflowContent).toContain("direct execution")
       expect(CommandPlugin.WorkflowContent).toContain("single `task` subagent")
       expect(CommandPlugin.WorkflowContent).toContain("both a scenario signal and a structural signal")
+      expect(CommandPlugin.WorkflowFactsContent).toContain("both a scenario")
+      expect(CommandPlugin.WorkflowFactsContent).not.toContain("when ANY")
+      expect(CommandPlugin.WorkflowFactsContent).not.toContain("- **Multi-model**:")
       expect(CommandPlugin.DagFlowContent).toContain("workflow` tool with `action=start")
     }),
   )
@@ -152,6 +155,17 @@ describe("CommandPlugin.Plugin", () => {
       expect(CommandPlugin.WorkflowFactsContent).toContain("provider-local model ID")
       expect(CommandPlugin.WorkflowFactsContent).toContain("agent model and then the parent session model")
       expect(CommandPlugin.WorkflowFactsContent).toContain("Propose-then-assemble")
+      const reviewExample = CommandPlugin.WorkflowFactsContent
+        .slice(
+          CommandPlugin.WorkflowFactsContent.indexOf("### 3. Adversarial Review"),
+          CommandPlugin.WorkflowFactsContent.indexOf("### 4. Diverge-Converge"),
+        )
+      expect(reviewExample).toContain("report_to_parent: true")
+      expect(reviewExample).toContain("output_schema:")
+      expect(reviewExample).toContain("required: [verdict, summary, findings, required_actions, next_action]")
+      expect(reviewExample).toContain("required: [operation, targets]")
+      expect(reviewExample).toContain("enum: [continue, extend, replan, complete, stop]")
+      expect(CommandPlugin.WorkflowFactsContent).toContain("an early\n`control(complete)` workflow remains terminal")
       expect(CommandPlugin.DagFlowContent).toContain("must actually contain the requested synthesis")
     }),
   )

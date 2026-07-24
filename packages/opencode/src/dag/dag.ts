@@ -389,8 +389,7 @@ export const layer = Layer.effect(
       ) {
         return yield* Effect.fail(new TerminalViolationError(dagID, workflow.status, "replan"))
       }
-      const wf = workflow
-      const wfConfig = parseWorkflowConfig(wf.config)
+      const wfConfig = parseWorkflowConfig(workflow.config)
       const defaults = normalizeNodeDefaults(wfConfig?.node_defaults)
       const normalizedFragment = { nodes: fragment.nodes.map((node) => normalizeNodeConfig(node, defaults)) }
       const nodes = yield* store.getNodes(dagID)
@@ -518,12 +517,23 @@ export const layer = Layer.effect(
       const preserved = toPreserve
         .map((n) => cfgById.get(n.id))
         .filter((n): n is NodeConfig => n !== undefined)
+      const configuredNodes = config?.nodes ?? []
+      const hasReportingLeafCheckpoint = nodes.some(
+        (node) =>
+          node.status === NodeStatus.COMPLETED
+          && node.wakeEligible
+          && configuredNodes.some((candidate) => candidate.id === node.id)
+          && !configuredNodes.some((candidate) => candidate.depends_on.includes(node.id)),
+      )
       const reopenCompleted =
         wf.status === WorkflowStatus.COMPLETED
         && newNodes.some((node) => !nodes.some((existing) => existing.id === node.id))
+        && hasReportingLeafCheckpoint
+        && !nodes.some((node) => node.errorReason === "agent_complete")
       // A terminal atomic wake may ask the parent to add the next bounded wave.
-      // Keep the exception private to additive extend; public replan and
-      // non-additive terminal mutations remain rejected by _replan.
+      // Keep the exception private to naturally completed additive extension;
+      // an early control(complete) leaves an agent_complete marker and remains
+      // terminal, as do public replan and non-additive terminal mutations.
       // Internal call to _replan — shares the caller's lock holding period,
       // does NOT re-acquire the per-workflow lock or go through Service.of.
       return yield* _replan(dagID, { nodes: [...preserved, ...newNodes] }, reopenCompleted)

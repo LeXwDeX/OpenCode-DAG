@@ -240,7 +240,12 @@ export const layer = Layer.effectDiscard(
     yield* events.project(DagEvent.NodeSkipped, (event) =>
       db
         .update(WorkflowNodeTable)
-        .set({ status: "skipped", seq: event.durable!.seq, time_updated: toMillis(event.data.timestamp) })
+        .set({
+          status: "skipped",
+          error_reason: event.data.reason,
+          seq: event.durable!.seq,
+          time_updated: toMillis(event.data.timestamp),
+        })
         .where(and(
           eq(WorkflowNodeTable.workflow_id, event.data.dagID),
           eq(WorkflowNodeTable.id, event.data.nodeID),

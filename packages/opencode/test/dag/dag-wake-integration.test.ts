@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import { Deferred, Effect, Layer, Option, Queue } from "effect"
 import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Database } from "@opencode-ai/core/database/database"
+import { TerminalViolationError } from "@opencode-ai/core/dag/core/types"
 import { DagProjector } from "@opencode-ai/core/dag/projector"
 import { WorkflowNodeTable, WorkflowTable } from "@opencode-ai/core/dag/sql"
 import { DagStore } from "@opencode-ai/core/dag/store"
@@ -17,7 +18,9 @@ import { SessionPrompt } from "@/session/prompt"
 import { MessageID } from "@/session/schema"
 import { Session } from "@/session/session"
 import { SessionStatus } from "@/session/status"
-import { pollWithTimeout } from "../lib/effect"
+import { pollWithTimeout, testEffect } from "../lib/effect"
+
+const integration = testEffect(Layer.empty)
 
 interface PromptGate {
   readonly title: string
@@ -248,6 +251,110 @@ describe("DagLoop atomic wake integration", () => {
       ),
     )
   })
+
+  integration.live("runs an additive wave after a terminal checkpoint wake", () =>
+    runWakeTest(({ dag, store, childPrompts, parentPrompts }) =>
+      Effect.gen(function* () {
+        const dagID = yield* dag.create({
+          projectID: "project-1",
+          sessionID: "ses_parent",
+          title: "Additive checkpoint continuation",
+          config: {
+            name: "additive-checkpoint-continuation",
+            nodes: [node("checkpoint")],
+          },
+        })
+
+        const checkpoint = yield* takeWithin(childPrompts, "checkpoint did not start")
+        yield* Deferred.succeed(checkpoint.release, "REVISE")
+        yield* pollWithTimeout(
+          store.getWorkflow(dagID).pipe(
+            Effect.map((workflow) => workflow?.status === "completed" ? true : undefined),
+          ),
+          "checkpoint workflow did not complete",
+        )
+
+        const parent = yield* takeWithin(parentPrompts, "terminal checkpoint did not wake the parent")
+        const result = yield* dag.extend(dagID, [node("repair", ["checkpoint"])])
+        expect(result.add).toEqual(["repair"])
+
+        const repair = yield* takeWithin(childPrompts, "additive repair node did not start")
+        expect(repair.title).toBe("repair")
+        expect((yield* store.getWorkflow(dagID))?.status).toBe("running")
+        expect((yield* store.getNode(dagID, "checkpoint"))?.status).toBe("completed")
+        yield* Deferred.succeed(parent.release, "success")
+        yield* Deferred.succeed(repair.release, "fixed")
+        yield* pollWithTimeout(
+          store.getWorkflow(dagID).pipe(
+            Effect.map((workflow) => workflow?.status === "completed" ? true : undefined),
+          ),
+          "extended workflow did not complete",
+        )
+      }),
+    ),
+  )
+
+  integration.live("keeps an early-completed workflow terminal", () =>
+    runWakeTest(({ dag, store, childPrompts }) =>
+      Effect.gen(function* () {
+        const dagID = yield* dag.create({
+          projectID: "project-1",
+          sessionID: "ses_parent",
+          title: "Early completion",
+          config: {
+            name: "early-completion",
+            nodes: [node("checkpoint"), node("later", ["checkpoint"])],
+          },
+        })
+
+        yield* takeWithin(childPrompts, "checkpoint did not start")
+        yield* dag.complete(dagID)
+        yield* pollWithTimeout(
+          store.getWorkflow(dagID).pipe(
+            Effect.map((workflow) => workflow?.status === "completed" ? true : undefined),
+          ),
+          "workflow did not early-complete",
+        )
+        expect((yield* store.getNode(dagID, "later"))?.errorReason).toBe("agent_complete")
+
+        const error = yield* dag.extend(dagID, [node("repair", ["checkpoint"])]).pipe(
+          Effect.catch((cause: Error) => Effect.succeed(cause)),
+        )
+        expect(error).toBeInstanceOf(TerminalViolationError)
+      }),
+    ),
+  )
+
+  integration.live("keeps a completed non-reporting leaf workflow terminal", () =>
+    runWakeTest(({ dag, store, childPrompts }) =>
+      Effect.gen(function* () {
+        const dagID = yield* dag.create({
+          projectID: "project-1",
+          sessionID: "ses_parent",
+          title: "Non-reporting completion",
+          config: {
+            name: "non-reporting-completion",
+            nodes: [{ ...node("leaf"), report_to_parent: false }],
+          },
+        })
+
+        const leaf = yield* takeWithin(childPrompts, "leaf did not start")
+        yield* Deferred.succeed(leaf.release, "done")
+        yield* pollWithTimeout(
+          store.getWorkflow(dagID).pipe(
+            Effect.map((workflow) => workflow?.status === "completed" ? true : undefined),
+          ),
+          "non-reporting workflow did not complete",
+        )
+        expect((yield* store.getNode(dagID, "leaf"))?.wakeEligible).toBe(false)
+
+        const error = yield* dag.extend(dagID, [node("extra", ["leaf"])]).pipe(
+          Effect.catch((cause: Error) => Effect.succeed(cause)),
+        )
+        expect(error).toBeInstanceOf(TerminalViolationError)
+      }),
+    ),
+  )
 
   it("fails an aggregate node before execution when template placeholders remain unresolved", async () => {
     await Effect.runPromise(
