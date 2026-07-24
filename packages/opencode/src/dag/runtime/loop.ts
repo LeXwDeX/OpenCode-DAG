@@ -432,12 +432,15 @@ export const layer = Layer.effect(
         )
 
         yield* events.subscribe(DagEvent.WorkflowReplanned).pipe(
-          Stream.filter((e) => runtimes.has(e.data.dagID as string)),
           Stream.runForEach((evt) =>
             Effect.gen(function* () {
               const dagID = evt.data.dagID as string
               const entry = runtimes.get(dagID)
-              if (!entry) return
+              if (!entry) {
+                const workflow = yield* store.getWorkflow(dagID)
+                if (workflow) yield* recoverWorkflow(workflow)
+                return
+              }
               yield* entry.evalLock.withPermits(1)(
                 Effect.gen(function* () {
                   const wf = yield* store.getWorkflow(dagID).pipe(Effect.orDie)

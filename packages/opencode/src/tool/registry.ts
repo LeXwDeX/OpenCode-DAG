@@ -71,6 +71,12 @@ type State = {
   read: ReadDef
 }
 
+type AgentCatalogOptions = {
+  heading: string
+  includeHidden: boolean
+  includeModelState: boolean
+}
+
 export interface Interface {
   readonly ids: () => Effect.Effect<string[]>
   readonly all: () => Effect.Effect<Tool.Def[]>
@@ -259,19 +265,21 @@ export const layer = Layer.effect(
       return (yield* all()).map((tool) => tool.id)
     })
 
-    const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
-      const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
-      const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
-      const description = list
+    const describeAgents = Effect.fn("ToolRegistry.describeAgents")(function* (
+      caller: Agent.Info,
+      options: AgentCatalogOptions,
+    ) {
+      const description = (yield* agents.list())
+        .filter((item) => item.mode !== "primary")
+        .filter((item) => options.includeHidden || !item.hidden)
+        .filter((item) => Permission.evaluate("task", item.name, caller.permission).action !== "deny")
+        .toSorted((a, b) => a.name.localeCompare(b.name))
         .map(
           (item) =>
-            `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}`,
+            `- ${item.name}: ${item.description ?? "This subagent should only be called manually by the user."}${options.includeModelState ? ` [model: ${item.model ? "configured" : "inherited"}]` : ""}`,
         )
         .join("\n")
-      return ["Available agent types and the tools they have access to:", description].join("\n")
+      return [options.heading, description].join("\n")
     })
 
     const tools: Interface["tools"] = Effect.fn("ToolRegistry.tools")(function* (input) {
@@ -303,7 +311,23 @@ export const layer = Layer.effect(
               : undefined
           return {
             id: tool.id,
-            description: [output.description, tool.id === TaskTool.id ? yield* describeTask(input.agent) : undefined]
+            description: [
+              output.description,
+              tool.id === TaskTool.id
+                ? yield* describeAgents(input.agent, {
+                    heading: "Available agent types and the tools they have access to:",
+                    includeHidden: true,
+                    includeModelState: false,
+                  })
+                : undefined,
+              tool.id === WorkflowTool.id
+                ? yield* describeAgents(input.agent, {
+                    heading: "Available workflow worker_type values:",
+                    includeHidden: false,
+                    includeModelState: true,
+                  })
+                : undefined,
+            ]
               .filter(Boolean)
               .join("\n"),
             parameters: output.parameters,

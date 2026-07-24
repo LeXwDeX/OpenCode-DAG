@@ -5,6 +5,7 @@ import { validatePayload } from "@/dag/runtime/capture"
 import { DagStore } from "@opencode-ai/core/dag/store"
 
 const id = "submit_result"
+const parseJsonOption = Schema.decodeUnknownOption(Schema.UnknownFromJsonString)
 
 export const Parameters = Schema.Struct({
   payload: Schema.Unknown.annotate({
@@ -30,7 +31,11 @@ export const SubmitResultTool = Tool.define<typeof Parameters, Metadata, never>(
               metadata: {} as Metadata,
             }
           }
-          const result = validatePayload(ctx.sessionID, params.payload)
+          const initial = validatePayload(ctx.sessionID, params.payload)
+          const parsed =
+            !initial.ok && typeof params.payload === "string" ? parseJsonOption(params.payload) : Option.none()
+          const payload = Option.isSome(parsed) ? parsed.value : params.payload
+          const result = Option.isSome(parsed) ? validatePayload(ctx.sessionID, payload) : initial
           if (!result.ok) {
             if (result.notAvailable) {
               return {
@@ -45,7 +50,7 @@ export const SubmitResultTool = Tool.define<typeof Parameters, Metadata, never>(
               metadata: {} as Metadata,
             }
           }
-          yield* storeOpt.value.setCapturedOutput(ctx.sessionID, params.payload).pipe(Effect.orDie)
+          yield* storeOpt.value.setCapturedOutput(ctx.sessionID, payload).pipe(Effect.orDie)
           return {
             title: "Structured output submitted",
             output: "submit_result succeeded. Your structured output has been captured.",

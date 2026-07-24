@@ -88,6 +88,22 @@ describe("legacy command registry", () => {
     }),
   )
 
+  it.effect("requires profile-aware compilation without dropping task constraints", () =>
+    Effect.sync(() => {
+      const expanded = SessionPrompt.expandCommandTemplate(
+        CommandPlugin.DagFlowContent,
+        "Use @security-reviewer to review this project. Do not modify files.",
+      )
+
+      expect(expanded).toContain("classify the task as `brainstorm`, `review`, or `develop`")
+      expect(expanded).toContain("preserve every user constraint")
+      expect(expanded).toContain("eligible configured worker types")
+      expect(expanded).toContain("Do not invent a missing role or model")
+      expect(expanded).toContain("actual error")
+      expect(expanded).toContain("must actually contain the requested synthesis")
+    }),
+  )
+
   it.effect("keeps the blank-task guard when dag-flow has no arguments", () =>
     Effect.sync(() => {
       const expanded = SessionPrompt.expandCommandTemplate(CommandPlugin.DagFlowContent, "   ")
