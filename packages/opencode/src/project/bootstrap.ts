@@ -24,6 +24,8 @@ export const layer = Layer.effect(
     // InstanceStore imports only the lightweight tag from bootstrap-service.ts,
     // so it can depend on bootstrap without importing this implementation graph.
     const config = yield* Config.Service
+    const dagLoop = yield* DagLoop.Service
+    const dagPublisher = yield* DagSummaryPublisher.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
     const plugin = yield* Plugin.Service
@@ -54,22 +56,12 @@ export const layer = Layer.effect(
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
-      // DAG services are present in the production/default graphs. Keep the
-      // optional lookup so narrow test layers may omit them intentionally.
-      const dagLoop = yield* Effect.serviceOption(DagLoop.Service)
-      if (dagLoop._tag === "Some") {
-        yield* dagLoop.value
-          .init()
-          .pipe(Effect.catchCause((cause) => Effect.logWarning("dag loop init failed", { cause })))
-      }
+      yield* dagLoop.init().pipe(Effect.catchCause((cause) => Effect.logWarning("dag loop init failed", { cause })))
       // DagSummaryPublisher: same lifecycle pattern. Stateless derived-view
       // publisher that pushes per-session workflow summaries to the TUI.
-      const dagPublisher = yield* Effect.serviceOption(DagSummaryPublisher.Service)
-      if (dagPublisher._tag === "Some") {
-        yield* dagPublisher.value
-          .init()
-          .pipe(Effect.catchCause((cause) => Effect.logWarning("dag summary publisher init failed", { cause })))
-      }
+      yield* dagPublisher
+        .init()
+        .pipe(Effect.catchCause((cause) => Effect.logWarning("dag summary publisher init failed", { cause })))
       // SettingsHook: Setup fires once per instance bootstrap. Resolved lazily
       // so bootstrap layers stay self-contained.
       const settingsHook = yield* Effect.serviceOption(SettingsHook.Service)

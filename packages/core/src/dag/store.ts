@@ -1,6 +1,6 @@
 export * as DagStore from "./store"
 
-import { and, desc, eq, gte, lte, inArray } from "drizzle-orm"
+import { and, asc, desc, eq, gte, lte, inArray } from "drizzle-orm"
 import { Context, Effect, Layer } from "effect"
 import { Database } from "../database/database"
 import { LayerNode } from "../effect/layer-node"
@@ -46,6 +46,16 @@ export interface NodeRow {
   seq: number
   startedAt: number | null
   completedAt: number | null
+}
+
+export interface WakeBatch {
+  readonly nodes: readonly NodeRow[]
+  readonly workflows: readonly WorkflowRow[]
+}
+
+export interface WakeSnapshot {
+  readonly nodes: readonly NodeRow[]
+  readonly workflows: readonly WorkflowRow[]
 }
 
 export interface ViolationRow {
@@ -150,6 +160,8 @@ export interface Interface {
 
   readonly markNodeWakeReported: (workflowId: string, nodeID: string) => Effect.Effect<void>
   readonly markWorkflowWakeReported: (dagID: string) => Effect.Effect<void>
+  readonly markWakeBatchReported: (batch: WakeBatch) => Effect.Effect<void>
+  readonly getWakeSnapshot: (sessionID: string) => Effect.Effect<WakeSnapshot>
   readonly getUnreportedWakeNodes: (sessionID: string) => Effect.Effect<NodeRow[]>
   readonly getUnreportedWakeWorkflows: (sessionID: string) => Effect.Effect<WorkflowRow[]>
   readonly getSessionsWithUnreportedWakes: () => Effect.Effect<string[]>
@@ -302,6 +314,80 @@ export const layer = Layer.effect(
           .pipe(Effect.orDie)
       }),
 
+      markWakeBatchReported: Effect.fn("DagStore.markWakeBatchReported")(function* (batch) {
+        yield* db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              yield* Effect.forEach(
+                batch.nodes,
+                (node) =>
+                  tx
+                    .update(WorkflowNodeTable)
+                    .set({ wake_reported: true })
+                    .where(and(
+                      eq(WorkflowNodeTable.workflow_id, node.workflowId),
+                      eq(WorkflowNodeTable.id, node.id),
+                      eq(WorkflowNodeTable.seq, node.seq),
+                      eq(WorkflowNodeTable.wake_reported, false),
+                    ))
+                    .run(),
+                { discard: true },
+              )
+              yield* Effect.forEach(
+                batch.workflows,
+                (workflow) =>
+                  tx
+                    .update(WorkflowTable)
+                    .set({ wake_reported: true })
+                    .where(and(
+                      eq(WorkflowTable.id, workflow.id),
+                      eq(WorkflowTable.seq, workflow.seq),
+                      eq(WorkflowTable.wake_reported, false),
+                    ))
+                    .run(),
+                { discard: true },
+              )
+            }),
+          )
+          .pipe(Effect.orDie)
+      }),
+
+      getWakeSnapshot: Effect.fn("DagStore.getWakeSnapshot")(function* (sessionID) {
+        return yield* db
+          .transaction((tx) =>
+            Effect.gen(function* () {
+              const nodes = yield* tx
+                .select()
+                .from(WorkflowNodeTable)
+                .innerJoin(WorkflowTable, eq(WorkflowNodeTable.workflow_id, WorkflowTable.id))
+                .where(and(
+                  eq(WorkflowTable.session_id, sessionID),
+                  eq(WorkflowNodeTable.wake_eligible, true),
+                  eq(WorkflowNodeTable.wake_reported, false),
+                  inArray(WorkflowNodeTable.status, ["completed", "failed"]),
+                ))
+                .orderBy(
+                  asc(WorkflowTable.seq),
+                  asc(WorkflowTable.id),
+                  asc(WorkflowNodeTable.seq),
+                  asc(WorkflowNodeTable.id),
+                )
+                .all()
+              const workflows = yield* tx
+                .select()
+                .from(WorkflowTable)
+                .where(eq(WorkflowTable.session_id, sessionID))
+                .orderBy(asc(WorkflowTable.seq), asc(WorkflowTable.id))
+                .all()
+              return {
+                nodes: nodes.map((row) => mapNode(row.workflow_node)),
+                workflows: workflows.map(mapWorkflow),
+              }
+            }),
+          )
+          .pipe(Effect.orDie)
+      }),
+
       getUnreportedWakeNodes: Effect.fn("DagStore.getUnreportedWakeNodes")(function* (sessionID) {
         const rows = yield* db
           .select()
@@ -313,6 +399,12 @@ export const layer = Layer.effect(
             eq(WorkflowNodeTable.wake_reported, false),
             inArray(WorkflowNodeTable.status, ["completed", "failed"]),
           ))
+          .orderBy(
+            asc(WorkflowTable.seq),
+            asc(WorkflowTable.id),
+            asc(WorkflowNodeTable.seq),
+            asc(WorkflowNodeTable.id),
+          )
           .all()
           .pipe(Effect.orDie)
         return rows.map((r) => mapNode(r.workflow_node))
@@ -326,6 +418,7 @@ export const layer = Layer.effect(
             eq(WorkflowTable.session_id, sessionID),
             eq(WorkflowTable.wake_reported, false),
           ))
+          .orderBy(asc(WorkflowTable.seq), asc(WorkflowTable.id))
           .all()
           .pipe(Effect.orDie)
         return rows

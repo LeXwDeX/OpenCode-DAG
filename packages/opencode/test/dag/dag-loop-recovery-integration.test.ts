@@ -14,6 +14,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { SessionPrompt } from "@/session/prompt"
 import { Session } from "@/session/session"
+import { SessionStatus } from "@/session/status"
 
 type ChildStatus = "active" | "completed" | "failed" | "unknown"
 
@@ -38,6 +39,7 @@ function recoveryLayer(input: {
   const events = EventV2.layer.pipe(Layer.provide(database))
   const bridge = EventV2Bridge.layer.pipe(Layer.provide(events))
   const store = DagStore.layer.pipe(Layer.provide(database))
+  const status = SessionStatus.layer.pipe(Layer.provide(bridge))
   const projector = DagProjector.layer.pipe(
     Layer.provide(events),
     Layer.provide(database),
@@ -46,7 +48,7 @@ function recoveryLayer(input: {
     Layer.provide(bridge),
     Layer.provide(store),
   )
-  const base = Layer.mergeAll(database, events, bridge, store, projector, dag)
+  const base = Layer.mergeAll(database, events, bridge, store, projector, dag, status)
   const session = Layer.mock(Session.Service, {
     create: Effect.fn("test.Session.create")((_value?: unknown) =>
       Effect.sync(() => {

@@ -79,6 +79,15 @@ describe("legacy command registry", () => {
     }),
   )
 
+  it.effect("returns after starting a DAG instead of polling its status", () =>
+    Effect.sync(() => {
+      const expanded = SessionPrompt.expandCommandTemplate(CommandPlugin.DagFlowContent, "Run two parallel workers")
+
+      expect(expanded).toContain("Do not poll")
+      expect(expanded).toContain("End the current response")
+    }),
+  )
+
   it.effect("keeps the blank-task guard when dag-flow has no arguments", () =>
     Effect.sync(() => {
       const expanded = SessionPrompt.expandCommandTemplate(CommandPlugin.DagFlowContent, "   ")

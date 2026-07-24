@@ -2,6 +2,9 @@ import { describe, expect, it } from "bun:test"
 import { Effect, Exit, Layer, Schema } from "effect"
 import { Dag } from "@/dag/dag"
 import { Agent } from "@/agent/agent"
+import { DagStore } from "@opencode-ai/core/dag/store"
+import { DagEvent } from "@opencode-ai/schema/dag-event"
+import { EventV2Bridge } from "@/event-v2-bridge"
 import { Session } from "@/session/session"
 import { MessageID, SessionID } from "@/session/schema"
 import type { Tool } from "@/tool/tool"
@@ -10,85 +13,88 @@ import { Parameters, WorkflowTool } from "@/tool/workflow"
 import { testEffect } from "../lib/effect"
 
 const projectID = "project_test"
-const created: Parameters<Dag.Interface["create"]>[0][] = []
+const published: Array<{ type: string; data: unknown }> = []
+const store = Layer.mock(DagStore.Service, {
+  getWorkflow: (id: string) =>
+    Effect.succeed(
+      id === "dag_status"
+        ? {
+            id,
+            projectId: projectID,
+            sessionId: "ses_workflow_parent",
+            title: "Status workflow",
+            status: "running",
+            config: "{}",
+            seq: 1,
+            wakeReported: false,
+            startedAt: 1,
+            completedAt: null,
+            timeCreated: 1,
+            timeUpdated: 2,
+          }
+        : undefined,
+    ),
+  getNodes: () =>
+    Effect.succeed([
+      {
+        id: "node_running",
+        workflowId: "dag_status",
+        name: "Running node",
+        workerType: "build",
+        status: "running",
+        required: true,
+        dependsOn: [],
+        modelId: null,
+        modelProviderId: null,
+        childSessionId: "ses_child",
+        output: null,
+        capturedOutput: null,
+        errorReason: null,
+        deadlineMs: null,
+        wakeEligible: true,
+        wakeReported: false,
+        replanAttempts: 0,
+        seq: 1,
+        startedAt: 1,
+        completedAt: null,
+        timeCreated: 1,
+        timeUpdated: 2,
+      },
+    ]),
+})
+const events = Layer.mock(EventV2Bridge.Service, {
+  publish: (definition, data) =>
+    Effect.sync(() => {
+      published.push({ type: definition.type, data })
+      return { id: "event_test", type: definition.type, data } as never
+    }),
+})
+const dag = Dag.layer.pipe(
+  Layer.provide(store),
+  Layer.provide(events),
+)
 const runtime = testEffect(
   Layer.mergeAll(
-    Layer.succeed(
-      Agent.Service,
-      Agent.Service.of({
-        get: () => Effect.succeed({}),
-      } as unknown as Agent.Interface),
-    ),
-    Layer.succeed(
-      Truncate.Service,
-      Truncate.Service.of({
-        output: (content) => Effect.succeed({ content, truncated: false }),
-      } as Truncate.Interface),
-    ),
-    Layer.succeed(
-      Dag.Service,
-      Dag.Service.of({
-        create: (input: Parameters<Dag.Interface["create"]>[0]) =>
-          Effect.sync(() => {
-            created.push(input)
-            return Dag.ID.create()
-          }),
-        store: {
-          getWorkflow: (id: string) =>
-            Effect.succeed(
-              id === "dag_status"
-                ? {
-                    id,
-                    projectId: projectID,
-                    sessionId: "ses_workflow_parent",
-                    title: "Status workflow",
-                    status: "running",
-                    config: "{}",
-                    seq: 1,
-                    wakeReported: false,
-                    startedAt: 1,
-                    completedAt: null,
-                    timeCreated: 1,
-                    timeUpdated: 2,
-                  }
-                : undefined,
-            ),
-          getNodes: () =>
-            Effect.succeed([
-              {
-                id: "node_running",
-                workflowId: "dag_status",
-                name: "Running node",
-                workerType: "build",
-                status: "running",
-                required: true,
-                dependsOn: [],
-                modelId: null,
-                modelProviderId: null,
-                childSessionId: "ses_child",
-                output: null,
-                capturedOutput: null,
-                errorReason: null,
-                deadlineMs: null,
-                wakeEligible: true,
-                wakeReported: false,
-                replanAttempts: 0,
-                seq: 1,
-                startedAt: 1,
-                completedAt: null,
-                timeCreated: 1,
-                timeUpdated: 2,
-              },
-            ]),
-        },
-      } as unknown as Dag.Interface),
-    ),
-    Layer.succeed(
-      Session.Service,
-      Session.Service.of({
-        get: (id: Parameters<Session.Interface["get"]>[0]) => Effect.succeed({ id, projectID } as Session.Info),
-      } as unknown as Session.Interface),
-    ),
+    Layer.mock(Agent.Service, {
+      get: () =>
+        Effect.succeed({
+          name: "build",
+          mode: "all",
+          permission: [],
+          options: {},
+          description: "",
+          prompt: "",
+          tools: {},
+          hooks: {},
+        }),
+    }),
+    Layer.mock(Truncate.Service, {
+      output: (content) => Effect.succeed({ content, truncated: false }),
+    }),
+    dag,
+    Layer.mock(Session.Service, {
+      get: (id: Parameters<Session.Interface["get"]>[0]) => Effect.succeed({ id, projectID } as Session.Info),
+    }),
   ),
 )
 
@@ -162,6 +168,7 @@ describe("workflow tool execution", () => {
       for (const action of ["start", "extend", "status", "control"]) {
         expect(workflow.description).toContain(`**${action}**`)
       }
+      expect(workflow.description).toContain("Do not poll")
       expect(workflow.description).not.toContain("$ARGUMENTS")
     }),
   )
@@ -194,7 +201,7 @@ describe("workflow tool execution", () => {
 
   runtime.effect("start derives the project ID from the parent session", () =>
     Effect.gen(function* () {
-      created.length = 0
+      published.length = 0
       const parentID = SessionID.make("ses_workflow_parent")
       const info = yield* WorkflowTool
       const workflow = yield* info.init()
@@ -220,15 +227,16 @@ describe("workflow tool execution", () => {
 
       const workflowID = result.metadata.workflowId
       expect(workflowID).toBeDefined()
-      expect(created).toHaveLength(1)
-      expect(created[0]?.projectID).toBe(projectID)
-      expect(created[0]?.sessionID).toBe(parentID)
+      expect(result.output).toContain("Do not poll")
+      expect(published.find((event) => event.type === DagEvent.WorkflowCreated.type)?.data).toEqual(
+        expect.objectContaining({ projectID, sessionID: parentID }),
+      )
     }),
   )
 
   runtime.effect("start passes the decoded required default to Dag.create", () =>
     Effect.gen(function* () {
-      created.length = 0
+      published.length = 0
       const info = yield* WorkflowTool
       const workflow = yield* info.init()
 
@@ -259,13 +267,15 @@ describe("workflow tool execution", () => {
         } satisfies Tool.Context,
       )
 
-      expect(created[0]?.config.nodes[0]?.required).toBe(false)
+      expect(published.find((event) => event.type === DagEvent.NodeRegistered.type)?.data).toEqual(
+        expect.objectContaining({ required: false }),
+      )
     }),
   )
 
   runtime.effect("start rejects a project ID outside the parent session project", () =>
     Effect.gen(function* () {
-      created.length = 0
+      published.length = 0
       const parentID = SessionID.make("ses_workflow_parent")
       const info = yield* WorkflowTool
       const workflow = yield* info.init()
@@ -292,7 +302,7 @@ describe("workflow tool execution", () => {
         .pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
-      expect(created).toHaveLength(0)
+      expect(published).toHaveLength(0)
     }),
   )
 })

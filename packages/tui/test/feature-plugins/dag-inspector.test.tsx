@@ -32,6 +32,7 @@ type RenderOpts = {
   serverWorkflows?: DagWorkflowSummary[]
   nodes?: DagNode[]
   initialRoute?: TuiRouteCurrent
+  summary?: (sessionID: string) => Promise<{ data: DagWorkflowSummary[] }>
 }
 
 function dagNode(overrides: Partial<DagNode> & { id: string }): DagNode {
@@ -78,7 +79,8 @@ async function renderDagInspector(opts: RenderOpts = {}) {
       keymap,
       client: {
         dag: {
-          summary: async () => ({ data: opts.serverWorkflows ?? workflowsState }),
+          summary: async (input: { sessionID: string }) =>
+            opts.summary?.(input.sessionID) ?? { data: opts.serverWorkflows ?? workflowsState },
           nodes: async (input: { dagID: string }) => {
             nodesCalls.push(input.dagID)
             return { data: opts.nodes ?? [] }
@@ -169,6 +171,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
       } as never)
     },
     current: () => current(),
+    setRoute: setCurrent,
   }
 }
 
@@ -231,6 +234,29 @@ describe("DagInspector", () => {
     try {
       await viewer.app.waitForFrame((frame) => frame.includes("No workflows"))
     } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("switching sessions clears the previous server snapshot before the new fetch resolves", async () => {
+    let resolveSecond: ((value: { data: DagWorkflowSummary[] }) => void) | undefined
+    const second = new Promise<{ data: DagWorkflowSummary[] }>((resolve) => {
+      resolveSecond = resolve
+    })
+    const viewer = await renderDagInspector({
+      summary: (sessionID) =>
+        sessionID === SESSION_ID
+          ? Promise.resolve({ data: [wfSummary({ title: "Previous session workflow" })] })
+          : second,
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("Previous session workflow"))
+      viewer.setRoute({ name: "dag", params: { sessionID: "ses_2" } })
+      await viewer.app.waitForFrame(
+        (frame) => frame.includes("Loading workflows...") && !frame.includes("Previous session workflow"),
+      )
+    } finally {
+      resolveSecond?.({ data: [] })
       viewer.app.renderer.destroy()
     }
   })

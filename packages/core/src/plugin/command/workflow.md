@@ -341,7 +341,7 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 
 **extend** — Add nodes to a running workflow. Existing nodes are unaffected; new nodes are immediately eligible for scheduling if their dependencies are met.
 
-**status** — Read the durable state of one workflow and all of its nodes. Pass `workflow_id`. Use it whenever the user asks whether a workflow is running, when progress is uncertain, or before deciding whether to replan/control a workflow.
+**status** — Read the durable state of one workflow and all of its nodes. Pass `workflow_id`. Use it when the user explicitly asks for current state or once before a decision that requires fresh state, such as replan/control. Do not poll a running workflow merely to wait: node reports and terminal outcomes wake the parent session automatically.
 
 **control** — Control a running workflow:
 - `pause` — let running nodes finish, don't spawn new ones
