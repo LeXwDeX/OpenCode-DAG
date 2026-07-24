@@ -11,6 +11,7 @@ import PROMPT_REVIEW from "./template/review.txt"
 import PROMPT_IMPORT_HOOKS from "./template/import-claude-hooks.txt"
 import PROMPT_CREATE_HOOK from "./template/create-hook.txt"
 import { LegacyEvent } from "@opencode-ai/schema/legacy-event"
+import { CommandPlugin } from "@opencode-ai/core/plugin/command"
 
 type State = {
   commands: Record<string, Info>
@@ -47,6 +48,7 @@ export function hints(template: string) {
 export const Default = {
   INIT: "init",
   REVIEW: "review",
+  DAG_FLOW: "dag-flow",
   IMPORT_HOOKS: "import-claude-hooks",
   CREATE_HOOK: "create-hook",
 } as const
@@ -88,6 +90,13 @@ export const layer = Layer.effect(
         },
         subtask: true,
         hints: hints(PROMPT_REVIEW),
+      }
+      commands[Default.DAG_FLOW] = {
+        name: Default.DAG_FLOW,
+        description: CommandPlugin.DagFlowDescription,
+        source: "command",
+        template: CommandPlugin.DagFlowContent,
+        hints: hints(CommandPlugin.DagFlowContent),
       }
       commands[Default.IMPORT_HOOKS] = {
         name: Default.IMPORT_HOOKS,

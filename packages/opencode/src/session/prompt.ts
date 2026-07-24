@@ -1822,30 +1822,8 @@ export const layer = Layer.effect(
       }
       const agentName = cmd.agent ?? input.agent
 
-      const raw = input.arguments.match(argsRegex) ?? []
-      const args = raw.map((arg) => arg.replace(quoteTrimRegex, ""))
       const templateCommand = yield* Effect.promise(async () => cmd.template)
-
-      const placeholders = templateCommand.match(placeholderRegex) ?? []
-      let last = 0
-      for (const item of placeholders) {
-        const value = Number(item.slice(1))
-        if (value > last) last = value
-      }
-
-      const withArgs = templateCommand.replaceAll(placeholderRegex, (_, index) => {
-        const position = Number(index)
-        const argIndex = position - 1
-        if (argIndex >= args.length) return ""
-        if (position === last) return args.slice(argIndex).join(" ")
-        return args[argIndex]
-      })
-      const usesArgumentsPlaceholder = templateCommand.includes("$ARGUMENTS")
-      let template = withArgs.replaceAll("$ARGUMENTS", input.arguments)
-
-      if (placeholders.length === 0 && !usesArgumentsPlaceholder && input.arguments.trim()) {
-        template = template + "\n\n" + input.arguments
-      }
+      let template = expandCommandTemplate(templateCommand, input.arguments)
 
       const shellMatches = ConfigMarkdown.shell(template)
       if (shellMatches.length > 0) {
@@ -2082,6 +2060,25 @@ const bashRegex = /!`([^`]+)`/g
 const argsRegex = /(?:\[Image\s+\d+\]|"[^"]*"|'[^']*'|[^\s"']+)/gi
 const placeholderRegex = /\$(\d+)/g
 const quoteTrimRegex = /^["']|["']$/g
+
+/** @internal Exported for command-template regression tests. */
+export function expandCommandTemplate(template: string, input: string) {
+  const args = (input.match(argsRegex) ?? []).map((arg) => arg.replace(quoteTrimRegex, ""))
+  const placeholders = template.match(placeholderRegex) ?? []
+  const last = placeholders.reduce((max, item) => Math.max(max, Number(item.slice(1))), 0)
+  const expanded = template
+    .replaceAll(placeholderRegex, (_, index) => {
+      const position = Number(index)
+      const argIndex = position - 1
+      if (argIndex >= args.length) return ""
+      if (position === last) return args.slice(argIndex).join(" ")
+      return args[argIndex]
+    })
+    .replaceAll("$ARGUMENTS", input)
+
+  if (placeholders.length > 0 || template.includes("$ARGUMENTS") || !input.trim()) return expanded
+  return `${expanded}\n\n${input}`
+}
 
 export const node = LayerNode.make(layer, [
   SessionStatus.node,

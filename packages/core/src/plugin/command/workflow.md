@@ -1,7 +1,6 @@
 <!--
-  Built-in skill. Name and description are registered in code at
-  packages/core/src/plugin/skill.ts (WorkflowDescription).
-  The body below becomes the skill's content.
+  Shared workflow-tool guidance. The /dag-flow command prepends its launch
+  contract, while the workflow tool uses this neutral reference directly.
 -->
 
 # Workflow Orchestration

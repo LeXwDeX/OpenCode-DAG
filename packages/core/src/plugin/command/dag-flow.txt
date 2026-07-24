@@ -1,0 +1,19 @@
+# Start a DAG Workflow
+
+The user invoked `/dag-flow` to start a new orchestration task.
+
+<dag-flow-task>
+$ARGUMENTS
+</dag-flow-task>
+
+If the content inside `<dag-flow-task>` is empty or contains only whitespace, ask the user what task should be orchestrated. Do not call the `workflow` tool until the user provides a task.
+
+For a non-empty task:
+
+1. Choose the smallest useful dependency graph for the task.
+2. Call the `workflow` tool with `action=start` in this response. Merely printing a plan, graph, JSON, or YAML does not mean a workflow was started.
+3. Do not claim the workflow is running unless the tool call succeeds.
+4. On success, report the exact Workflow ID and initial state returned by the tool, then tell the user to run `/dag` for live inspection.
+5. On failure, state that the workflow was not started and report the actual error. Never invent a Workflow ID.
+
+Use the orchestration guidance below to design and manage the workflow.
