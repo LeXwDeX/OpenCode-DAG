@@ -16,5 +16,7 @@ For a non-empty task:
 4. On success, report the exact Workflow ID and initial state returned by the tool, then tell the user to run `/dag` for live inspection.
 5. The workflow runs asynchronously and wakes this parent session when attention or a terminal result is ready. Do not poll it with `action=status`, sleep, retry, or loop merely to wait. End the current response after the brief success report.
 6. On failure, state that the workflow was not started and report the actual error. Never invent a Workflow ID.
+7. Do not start replacement workflows merely to repair an orchestration mistake. Report the failure and its exact cause unless the user explicitly asked for automatic retries.
+8. A completed aggregate node must actually contain the requested synthesis. Never describe unresolved placeholders or an aggregate-node error message as a successful final result.
 
 Use the orchestration guidance below to design and manage the workflow.

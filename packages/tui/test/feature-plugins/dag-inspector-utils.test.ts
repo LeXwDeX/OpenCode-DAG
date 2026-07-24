@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test"
-import { computeWaves, type DagNode } from "../../src/feature-plugins/system/dag-inspector-utils"
+import {
+  computeWaves,
+  dagControlProgressMessage,
+  dagControlUnavailableMessage,
+  formatDagError,
+  type DagNode,
+} from "../../src/feature-plugins/system/dag-inspector-utils"
 
 const node = (id: string, depends_on: string[] = [], name = id): DagNode => ({
   id,
@@ -45,5 +51,41 @@ describe("computeWaves", () => {
   test("dependency on a missing node is treated as satisfied (replan removed it)", () => {
     const waves = computeWaves([node("a", ["ghost"]), node("b", ["a"])])
     expect(waves.map((w) => w.map((n) => n.id))).toEqual([["a"], ["b"]])
+  })
+})
+
+describe("formatDagError", () => {
+  test("removes Effect and provider error wrappers without hiding the useful message", () => {
+    expect(
+      formatDagError(
+        "Cause([Die(ProviderModelNotFoundError: Model not found: local/local/glm. Did you mean: glm?)])",
+      ),
+    ).toBe("Model not found: local/local/glm. Did you mean: glm?")
+  })
+})
+
+describe("DAG control state", () => {
+  test("allows only operations valid for the current workflow status", () => {
+    expect(dagControlUnavailableMessage("running", "pause")).toBeUndefined()
+    expect(dagControlUnavailableMessage("stepping", "pause")).toBeUndefined()
+    expect(dagControlUnavailableMessage("paused", "resume")).toBeUndefined()
+    expect(dagControlUnavailableMessage("completed", "pause")).toBe(
+      "Workflow is completed and cannot be paused",
+    )
+    expect(dagControlUnavailableMessage("cancelled", "cancel")).toBe(
+      "Workflow is cancelled and cannot be cancelled",
+    )
+    expect(dagControlUnavailableMessage("pending", "cancel")).toBe(
+      "Workflow is pending and cannot be cancelled",
+    )
+    expect(dagControlUnavailableMessage("archived", "cancel")).toBe(
+      "Workflow is archived and cannot be cancelled",
+    )
+  })
+
+  test("formats progress without component-level branching", () => {
+    expect(dagControlProgressMessage("pause")).toBe("Pausing workflow...")
+    expect(dagControlProgressMessage("resume")).toBe("Resuming workflow...")
+    expect(dagControlProgressMessage("cancel")).toBe("Cancelling workflow...")
   })
 })

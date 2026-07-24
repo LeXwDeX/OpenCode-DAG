@@ -41,3 +41,29 @@ export function computeWaves(nodes: readonly DagNode[]): DagNode[][] {
   }
   return result
 }
+
+export function formatDagError(error: string) {
+  return error
+    .replace(/^Cause\(\[Die\((.*)\)\]\)$/, "$1")
+    .replace(/^ProviderModelNotFoundError:\s*/, "")
+}
+
+export type DagControlOperation = "pause" | "resume" | "cancel"
+
+export function dagControlUnavailableMessage(status: string | undefined, operation: DagControlOperation) {
+  const allowed =
+    operation === "pause"
+      ? status === "running" || status === "stepping"
+      : operation === "resume"
+        ? status === "paused" || status === "stepping"
+        : status === "running" || status === "stepping" || status === "paused"
+  if (allowed) return undefined
+  const action = operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "cancelled"
+  return `Workflow is ${status ?? "unavailable"} and cannot be ${action}`
+}
+
+export function dagControlProgressMessage(operation: DagControlOperation) {
+  if (operation === "pause") return "Pausing workflow..."
+  if (operation === "resume") return "Resuming workflow..."
+  return "Cancelling workflow..."
+}

@@ -29,6 +29,15 @@ export type ID = typeof ID.Type
 export const NodeID = DagEvent.NodeID
 export type NodeID = typeof NodeID.Type
 
+export const DEFAULT_WORKFLOW_CONFIG = {
+  maxConcurrency: 5,
+  maxNodeReplanAttempts: 5,
+  maxTotalNodes: 100,
+  nodeTimeoutMs: 10 * 60 * 1000,
+  nodeRequired: false,
+  reportToParent: false,
+} as const
+
 /** A node as declared in the workflow's YAML config. */
 export interface NodeConfig {
   id: string
@@ -47,12 +56,70 @@ export interface NodeConfig {
   output_schema?: Record<string, unknown>
 }
 
+export interface NodeDefaults {
+  required?: boolean
+  worker_config?: { timeout_ms?: number }
+  report_to_parent?: boolean
+  model?: { modelID: string; providerID: string }
+}
+
 export interface WorkflowConfig {
   name: string
   max_concurrency?: number
   max_node_replan_attempts?: number
   max_total_nodes?: number
+  node_defaults?: NodeDefaults
   nodes: NodeConfig[]
+}
+
+export function normalizeModel(model: NodeConfig["model"]) {
+  if (!model) return undefined
+  const prefix = `${model.providerID}/`
+  if (!model.modelID.startsWith(prefix)) return model
+  const modelID = model.modelID.slice(prefix.length)
+  if (!modelID) return model
+  return {
+    ...model,
+    modelID,
+  }
+}
+
+function normalizeNodeDefaults(defaults: NodeDefaults | undefined): NodeDefaults {
+  return {
+    required: defaults?.required ?? DEFAULT_WORKFLOW_CONFIG.nodeRequired,
+    worker_config: {
+      timeout_ms: defaults?.worker_config?.timeout_ms ?? DEFAULT_WORKFLOW_CONFIG.nodeTimeoutMs,
+    },
+    report_to_parent: defaults?.report_to_parent ?? DEFAULT_WORKFLOW_CONFIG.reportToParent,
+    ...(defaults?.model ? { model: normalizeModel(defaults.model) } : {}),
+  }
+}
+
+function normalizeNodeConfig(node: NodeConfig, defaults: NodeDefaults): NodeConfig {
+  const model = normalizeModel(node.model ?? defaults.model)
+  return {
+    ...node,
+    required: node.required ?? defaults.required ?? DEFAULT_WORKFLOW_CONFIG.nodeRequired,
+    worker_config: {
+      ...defaults.worker_config,
+      ...node.worker_config,
+      timeout_ms: node.worker_config?.timeout_ms ?? defaults.worker_config?.timeout_ms ?? DEFAULT_WORKFLOW_CONFIG.nodeTimeoutMs,
+    },
+    report_to_parent: node.report_to_parent ?? defaults.report_to_parent ?? DEFAULT_WORKFLOW_CONFIG.reportToParent,
+    ...(model ? { model } : {}),
+  }
+}
+
+function normalizeWorkflowConfig(config: WorkflowConfig): WorkflowConfig {
+  const defaults = normalizeNodeDefaults(config.node_defaults)
+  return {
+    ...config,
+    max_concurrency: config.max_concurrency ?? DEFAULT_WORKFLOW_CONFIG.maxConcurrency,
+    max_node_replan_attempts: config.max_node_replan_attempts ?? DEFAULT_WORKFLOW_CONFIG.maxNodeReplanAttempts,
+    max_total_nodes: config.max_total_nodes ?? DEFAULT_WORKFLOW_CONFIG.maxTotalNodes,
+    node_defaults: defaults,
+    nodes: config.nodes.map((node) => normalizeNodeConfig(node, defaults)),
+  }
 }
 
 /**
@@ -126,9 +193,6 @@ export interface Interface {
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Dag") {}
 
-const DEFAULT_MAX_NODE_REPLAN_ATTEMPTS = 5
-const DEFAULT_MAX_TOTAL_NODES = 100
-
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -174,8 +238,9 @@ export const layer = Layer.effect(
       title: string
       config: WorkflowConfig
     }) {
+      const config = normalizeWorkflowConfig(input.config)
       const validation = validateRequiredNodes({
-        nodes: input.config.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, required: n.required })),
+        nodes: config.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, required: n.required })),
       })
       if (!validation.valid) return yield* Effect.fail(new Error(`Invalid workflow config: ${validation.errors.join("; ")}`))
 
@@ -185,7 +250,7 @@ export const layer = Layer.effect(
       const cyclePath: string[] | null = yield* Effect.sync(() => {
         try {
           const graph = buildGraph(
-            input.config.nodes.map((n) => ({ id: n.id, dependsOn: n.depends_on, status: "pending" as const, required: n.required })),
+            config.nodes.map((n) => ({ id: n.id, dependsOn: n.depends_on, status: "pending" as const, required: n.required })),
           )
           return graph.hasCycle() ? (graph.findCycles()[0] ?? null) : null
         } catch (e) {
@@ -204,11 +269,11 @@ export const layer = Layer.effect(
         projectID: input.projectID as never,
         sessionID: input.sessionID as never,
         title: input.title,
-        config: JSON.stringify(input.config),
+        config: JSON.stringify(config),
         status: "pending",
         timestamp: ts,
       })
-      for (const node of input.config.nodes) {
+      for (const node of config.nodes) {
         yield* events.publish(DagEvent.NodeRegistered, {
           dagID,
           nodeID: node.id as never,
@@ -256,7 +321,7 @@ export const layer = Layer.effect(
               : ("pending" as const),
       }))
       const config = parseWorkflowConfig((yield* store.getWorkflow(dagID))?.config ?? "")
-      const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
+      const maxConcurrency = Math.max(1, config?.max_concurrency ?? DEFAULT_WORKFLOW_CONFIG.maxConcurrency)
       const runtime = new WorkflowRuntime(schedulingNodes, maxConcurrency)
       const ready = runtime.getReadyNodes()
       if (ready.length === 0) return { status: "no_ready_nodes" as const }
@@ -313,16 +378,18 @@ export const layer = Layer.effect(
 
     const _replan = Effect.fn("Dag._replan")(function* (dagID: string, fragment: { nodes: NodeConfig[] }) {
       const wf = yield* guardWorkflowNotTerminal(dagID, "replan")
+      const wfConfig = parseWorkflowConfig(wf.config)
+      const defaults = normalizeNodeDefaults(wfConfig?.node_defaults)
+      const normalizedFragment = { nodes: fragment.nodes.map((node) => normalizeNodeConfig(node, defaults)) }
       const nodes = yield* store.getNodes(dagID)
       const plan = planReplan(
         { nodes: nodes.map((n) => ({ id: n.id, status: n.status as never, depends_on: n.dependsOn })) },
-        { nodes: fragment.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, restart: n.restart, cancel: n.cancel })) },
+        { nodes: normalizedFragment.nodes.map((n) => ({ id: n.id, depends_on: n.depends_on, restart: n.restart, cancel: n.cancel })) },
       )
       if (plan.errors.length > 0) return yield* Effect.fail(new Error(`Replan rejected: ${plan.errors.join("; ")}`))
 
-      const wfConfig = parseWorkflowConfig(wf.config)
-      const maxReplanAttempts = wfConfig?.max_node_replan_attempts ?? DEFAULT_MAX_NODE_REPLAN_ATTEMPTS
-      const maxTotalNodes = wfConfig?.max_total_nodes ?? DEFAULT_MAX_TOTAL_NODES
+      const maxReplanAttempts = wfConfig?.max_node_replan_attempts ?? DEFAULT_WORKFLOW_CONFIG.maxNodeReplanAttempts
+      const maxTotalNodes = wfConfig?.max_total_nodes ?? DEFAULT_WORKFLOW_CONFIG.maxTotalNodes
 
       // Enforce total node ceiling BEFORE any event publication so a rejected
       // replan leaves no durable side effects. Count ALL nodes ever registered
@@ -342,7 +409,7 @@ export const layer = Layer.effect(
       }
       const effectiveRestart = plan.restart.filter((id) => !ceilingBreached.includes(id))
 
-      const fragmentById = new Map(fragment.nodes.map((n) => [n.id, n]))
+      const fragmentById = new Map(normalizedFragment.nodes.map((n) => [n.id, n]))
       for (const id of plan.add) {
         const node = fragmentById.get(id)!
         yield* events.publish(DagEvent.NodeRegistered, {
@@ -393,7 +460,7 @@ export const layer = Layer.effect(
 
       // Persist the merged config using the effective plan (without ceiling-breached restarts)
       if (wfConfig) {
-        const mergedConfig = computeMergedConfig(wfConfig, fragment, effectivePlan)
+        const mergedConfig = computeMergedConfig(wfConfig, normalizedFragment, effectivePlan)
         yield* events.publish(DagEvent.WorkflowConfigUpdated, {
           dagID: dagID as ID,
           config: JSON.stringify(mergedConfig),

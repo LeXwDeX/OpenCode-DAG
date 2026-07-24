@@ -17,24 +17,31 @@ const NodeSchema = Schema.Struct({
   name: Schema.String.annotate({ description: "Human-readable node name" }),
   worker_type: Schema.String.annotate({ description: "Agent type (explore, build, general, plan, or custom)" }),
   depends_on: Schema.Array(Schema.String).annotate({ description: "Node IDs this node waits for ([] for root)" }),
-  required: Schema.Boolean.pipe(
-    Schema.optional,
-    Schema.withDecodingDefaultType(Effect.succeed(false)),
-  ).annotate({ description: "If true and this node fails, the workflow is cancelled. Default: false" }),
+  required: Schema.optional(Schema.Boolean).annotate({
+    description: "If true and this node fails, the workflow is cancelled. Inherits config.node_defaults.required",
+  }),
   prompt_template: Schema.Struct({
     id: Schema.optional(Schema.String),
     inline: Schema.optional(Schema.String),
     input: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-  }).annotate({ description: 'Template: { id: "..." } or { inline: "...", input: {...} }' }),
+  }).annotate({
+    description: 'Template: { id: "..." } or { inline: "...", input: {...} }. Direct dependency outputs are available as {{node-id}} by default',
+  }),
   worker_config: Schema.optional(
     Schema.Struct({
       timeout_ms: Schema.optional(Schema.Number),
     }),
-  ).annotate({ description: "{ timeout_ms } — bounds node execution (defaults to 10 minutes)" }),
-  input_mapping: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({ description: "Map upstream node outputs into template variables" }),
-  report_to_parent: Schema.optional(Schema.Boolean).annotate({ description: "If true, the parent agent is woken when this node completes or fails" }),
+  ).annotate({ description: "{ timeout_ms } — bounds node execution. Inherits config.node_defaults.worker_config" }),
+  input_mapping: Schema.optional(Schema.Record(Schema.String, Schema.String)).annotate({
+    description: 'Optional variable-to-source map, e.g. { resultA: "node-a", count: "node-b.output.count" }. Omit to expose each direct dependency under its node ID',
+  }),
+  report_to_parent: Schema.optional(Schema.Boolean).annotate({
+    description: "If true, the parent agent is woken when this node completes or fails. Inherits config.node_defaults.report_to_parent",
+  }),
   condition: Schema.optional(Schema.String).annotate({ description: "Expression evaluated before spawn; node is skipped if false" }),
-  model: Schema.optional(Schema.Struct({ modelID: Schema.String, providerID: Schema.String })).annotate({ description: "{ modelID, providerID } override for this node" }),
+  model: Schema.optional(Schema.Struct({ modelID: Schema.String, providerID: Schema.String })).annotate({
+    description: 'Optional node override. modelID is provider-local, e.g. { providerID: "local-proxy-compatible", modelID: "glm-5.2" }, never repeat providerID inside modelID. Omit to inherit config.node_defaults.model, then the agent or parent-session model',
+  }),
   restart: Schema.optional(Schema.Boolean).annotate({ description: "(replan only) Re-spawn this running node with new prompt" }),
   cancel: Schema.optional(Schema.Boolean).annotate({ description: "(replan only) Cancel this node" }),
   output_schema: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)).annotate({ description: "JSON Schema; child agent must call submit_result to submit structured output" }),
@@ -42,6 +49,25 @@ const NodeSchema = Schema.Struct({
 
 const WorkflowGraphSchema = Schema.Struct({
   name: Schema.String.annotate({ description: "Workflow name" }),
+  node_defaults: Schema.optional(
+    Schema.Struct({
+      required: Schema.optional(Schema.Boolean),
+      worker_config: Schema.optional(
+        Schema.Struct({
+          timeout_ms: Schema.optional(Schema.Number),
+        }),
+      ),
+      report_to_parent: Schema.optional(Schema.Boolean),
+      model: Schema.optional(
+        Schema.Struct({
+          modelID: Schema.String,
+          providerID: Schema.String,
+        }),
+      ),
+    }),
+  ).annotate({
+    description: "Defaults inherited by nodes that omit required, worker_config, report_to_parent, or model",
+  }),
   max_concurrency: Schema.optional(Schema.Number).annotate({ description: "Max parallel nodes. Default: 5" }),
   max_node_replan_attempts: Schema.optional(Schema.Number).annotate({ description: "Max replan restarts per node ID. Default: 5" }),
   max_total_nodes: Schema.optional(Schema.Number).annotate({ description: "Cumulative node cap across the workflow lifetime. Default: 100" }),

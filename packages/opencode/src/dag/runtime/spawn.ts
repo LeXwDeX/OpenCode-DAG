@@ -27,9 +27,6 @@ import { registerCaptureSlot, clearCaptureSlot } from "./capture"
 
 type PromptParts = SessionPrompt.PromptInput["parts"]
 
-/** System-wide default node timeout (10 minutes) when worker_config.timeout_ms is omitted. */
-const DEFAULT_NODE_TIMEOUT_MS = 10 * 60 * 1000
-
 const isTransitionRejection = (err: unknown): err is InvalidTransitionError | TerminalViolationError =>
   err instanceof InvalidTransitionError || err instanceof TerminalViolationError
 
@@ -68,18 +65,28 @@ export function spawnNode(
       return yield* Effect.fail(new Error(`Unknown worker_type: ${input.node.workerType}`))
     }
 
-    const nodeModel =
+    const parent = yield* sessions.get(SessionID.make(input.parentSessionID))
+    const persistedNodeModel =
       input.node.modelId && input.node.modelProviderId
-        ? { modelID: input.node.modelId as never, providerID: input.node.modelProviderId as never }
+        ? Dag.normalizeModel({
+            modelID: input.node.modelId,
+            providerID: input.node.modelProviderId,
+          })
         : undefined
+    const nodeModel = persistedNodeModel
+      ? {
+          modelID: persistedNodeModel.modelID as never,
+          providerID: persistedNodeModel.providerID as never,
+        }
+      : undefined
     const model = nodeModel
       ?? (agent.model ? { modelID: agent.model.modelID, providerID: agent.model.providerID } : undefined)
+      ?? (parent.model ? { modelID: parent.model.id, providerID: parent.model.providerID } : undefined)
     if (!model) {
       yield* dag.nodeFailed(input.dagID, input.nodeID, `no model configured for agent: ${agent.name}`, "exec_failed")
       return yield* Effect.fail(new Error(`No model configured for agent: ${agent.name}`))
     }
 
-    const parent = yield* sessions.get(SessionID.make(input.parentSessionID))
     const childPermission = deriveSubagentSessionPermission({
       parentSessionPermission: parent.permission ?? [],
       subagent: agent,
@@ -89,6 +96,7 @@ export function spawnNode(
       parentID: SessionID.make(input.parentSessionID),
       title: `${input.node.name} (DAG node)`,
       agent: agent.name,
+      model: { id: model.modelID, providerID: model.providerID },
       permission: childPermission,
     })
 
@@ -97,7 +105,7 @@ export function spawnNode(
     // can inherit it. The actual timeout race uses the REMAINING time from
     // when the semaphore permit is acquired — queue wait counts toward the
     // deadline, preventing a node that queued past its deadline from running.
-    const timeoutMs = input.timeoutMs ?? DEFAULT_NODE_TIMEOUT_MS
+    const timeoutMs = input.timeoutMs ?? Dag.DEFAULT_WORKFLOW_CONFIG.nodeTimeoutMs
     const spawnTime = yield* Clock.currentTimeMillis
     const deadlineMs = spawnTime + timeoutMs
 
@@ -201,6 +209,20 @@ export function spawnNode(
             }
           } else {
             const rawText = resultOpt.value.parts.findLast((p) => p.type === "text")?.text ?? ""
+            if (rawText.trim() === "") {
+              yield* dag.nodeFailed(
+                input.dagID,
+                input.nodeID,
+                "provider returned empty output",
+                "verdict_fail",
+              ).pipe(
+                Effect.catchIf(
+                  isTransitionRejection,
+                  () => Effect.logWarning("nodeFailed (empty output) guard rejected — node already terminal"),
+                ),
+              )
+              return
+            }
             yield* dag.nodeCompleted(input.dagID, input.nodeID, rawText).pipe(
               Effect.catchIf(
                 isTransitionRejection,

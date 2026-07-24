@@ -21,6 +21,7 @@ import { pollWithTimeout } from "../lib/effect"
 
 interface PromptGate {
   readonly title: string
+  readonly input: SessionPrompt.PromptInput
   readonly release: Deferred.Deferred<string>
 }
 
@@ -125,6 +126,7 @@ function wakeLayer(input: {
     const release = yield* Deferred.make<string>()
     yield* Queue.offer(input.childPrompts, {
       title: childTitles.get(sessionID) ?? sessionID,
+      input: value,
       release,
     })
     return reply(sessionID, yield* Deferred.await(release))
@@ -209,6 +211,82 @@ function runWakeTest<A>(
 }
 
 describe("DagLoop atomic wake integration", () => {
+  it("injects direct dependency outputs into an aggregate node by default", async () => {
+    await Effect.runPromise(
+      runWakeTest(({ dag, childPrompts }) =>
+        Effect.gen(function* () {
+          yield* dag.create({
+            projectID: "project-1",
+            sessionID: "ses_parent",
+            title: "Default aggregate inputs",
+            config: {
+              name: "default-aggregate-inputs",
+              nodes: [
+                node("node-a"),
+                node("node-b"),
+                {
+                  ...node("summary", ["node-a", "node-b"]),
+                  prompt_template: { inline: "汇总结果：{{node-a}} 和 {{node-b}}" },
+                },
+              ],
+            },
+          })
+
+          const first = yield* takeWithin(childPrompts, "first parallel node did not start")
+          const second = yield* takeWithin(childPrompts, "second parallel node did not start")
+          const roots = new Map([first, second].map((item) => [item.title, item]))
+          yield* Deferred.succeed(roots.get("node-a")!.release, "A")
+          yield* Deferred.succeed(roots.get("node-b")!.release, "B")
+
+          const summary = yield* takeWithin(childPrompts, "summary node did not start")
+          expect(summary.title).toBe("summary")
+          expect(promptText(summary.input)).toContain("汇总结果：A 和 B")
+          expect(promptText(summary.input)).not.toContain("{{node-a}}")
+          expect(promptText(summary.input)).not.toContain("{{node-b}}")
+          yield* Deferred.succeed(summary.release, "A and B")
+        }),
+      ),
+    )
+  })
+
+  it("fails an aggregate node before execution when template placeholders remain unresolved", async () => {
+    await Effect.runPromise(
+      runWakeTest(({ dag, store, childPrompts }) =>
+        Effect.gen(function* () {
+          const dagID = yield* dag.create({
+            projectID: "project-1",
+            sessionID: "ses_parent",
+            title: "Unresolved aggregate input",
+            config: {
+              name: "unresolved-aggregate-input",
+              nodes: [
+                node("node-a"),
+                {
+                  ...node("summary", ["node-a"]),
+                  input_mapping: {},
+                  prompt_template: { inline: "汇总结果：{{node-a}}" },
+                },
+              ],
+            },
+          })
+
+          const root = yield* takeWithin(childPrompts, "root node did not start")
+          yield* Deferred.succeed(root.release, "A")
+
+          yield* pollWithTimeout(
+            store.getNode(dagID, "summary").pipe(
+              Effect.map((item) => item?.status === "failed" ? item : undefined),
+            ),
+            "summary node did not fail",
+          )
+          const summary = yield* store.getNode(dagID, "summary")
+          expect(summary?.errorReason).toContain("Unresolved template placeholders")
+          expect(yield* Queue.poll(childPrompts)).toEqual(Option.none())
+        }),
+      ),
+    )
+  })
+
   it("does not block a second workflow's downstream scheduling on a parent wake", async () => {
     await Effect.runPromise(
       runWakeTest(({ dag, childPrompts, parentPrompts }) =>

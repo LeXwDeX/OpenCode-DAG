@@ -101,6 +101,89 @@ function findEvent(events: TrackedEvent[], type: string) {
 }
 
 describe("spawnNode completion bridge", () => {
+  it("inherits the parent session model when the node and agent omit one", async () => {
+    const { events, dagLayer } = makeEventTracker()
+    let promptModel: SessionPrompt.PromptInput["model"]
+    const agentWithoutModel = Layer.mock(Agent.Service, {
+      get: () =>
+        Effect.succeed({
+          name: "general",
+          mode: "all",
+          permission: [],
+          options: {},
+          description: "",
+          prompt: "",
+          tools: {},
+          hooks: {},
+        }),
+    })
+    const parentWithModel = Layer.mock(Session.Service, {
+      get: () =>
+        Effect.succeed({
+          id: "ses_parent",
+          permission: [],
+          agent: "build",
+          model: { providerID: "local-proxy-compatible", id: "glm-5.2" },
+        } as never),
+      create: () => Effect.succeed({ id: "ses_child" as never } as never),
+    })
+    const prompt = Layer.mock(SessionPrompt.Service, {
+      prompt: (input) =>
+        Effect.sync(() => {
+          promptModel = input.model
+          return reply("done")
+        }),
+    })
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const result = yield* spawnNode(Semaphore.makeUnsafe(1), makeSpawnInput())
+          yield* Fiber.await(result.fiber)
+        }),
+      ).pipe(Effect.provide(Layer.mergeAll(dagLayer, agentWithoutModel, parentWithModel, prompt))) as Effect.Effect<never>,
+    )
+
+    expect(promptModel as unknown).toEqual({
+      providerID: "local-proxy-compatible",
+      modelID: "glm-5.2",
+    })
+    expect(findEvent(events, "nodeCompleted")).toBeDefined()
+  })
+
+  it("canonicalizes a provider-qualified model from a persisted node", async () => {
+    const { events, dagLayer } = makeEventTracker()
+    let promptModel: SessionPrompt.PromptInput["model"]
+    const prompt = Layer.mock(SessionPrompt.Service, {
+      prompt: (input) =>
+        Effect.sync(() => {
+          promptModel = input.model
+          return reply("done")
+        }),
+    })
+
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const result = yield* spawnNode(Semaphore.makeUnsafe(1), {
+            ...makeSpawnInput(),
+            node: makeNodeRow({
+              modelId: "local-proxy-compatible/glm-5.2",
+              modelProviderId: "local-proxy-compatible",
+            }),
+          })
+          yield* Fiber.await(result.fiber)
+        }),
+      ).pipe(Effect.provide(Layer.mergeAll(dagLayer, agentLayer, sessionLayer, prompt))) as Effect.Effect<never>,
+    )
+
+    expect(promptModel as unknown).toEqual({
+      providerID: "local-proxy-compatible",
+      modelID: "glm-5.2",
+    })
+    expect(findEvent(events, "nodeCompleted")).toBeDefined()
+  })
+
   it("publishes NodeCompleted with output text on success", async () => {
     const { events, dagLayer } = makeEventTracker()
     await runSpawn(dagLayer, makePromptLayer(reply("Task completed successfully")))
@@ -113,13 +196,12 @@ describe("spawnNode completion bridge", () => {
     expect(started).toBeDefined()
   })
 
-  it("publishes NodeCompleted with empty output when no text part", async () => {
+  it("publishes NodeFailed when the provider returns no text output", async () => {
     const { events, dagLayer } = makeEventTracker()
     await runSpawn(dagLayer, makePromptLayer(reply("")))
 
-    const completed = findEvent(events, "nodeCompleted")
-    expect(completed).toBeDefined()
-    expect(completed!.output).toBe("")
+    expect(findEvent(events, "nodeCompleted")).toBeUndefined()
+    expect(findEvent(events, "nodeFailed")?.reason).toContain("empty output")
   })
 
   it("publishes NodeFailed when prompt fails", async () => {

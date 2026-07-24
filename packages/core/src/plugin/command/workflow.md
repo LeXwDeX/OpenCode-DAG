@@ -135,6 +135,52 @@ Phase 5 (expand? iterate? complete?)
 
 Not every task needs all five phases. A well-specified task may skip directly to Phase 3. A task with a clear design but uncertain scope may start at Phase 2. The lifecycle is a decision tree, not a pipeline.
 
+## Node inputs and model selection
+
+Every node automatically receives the outputs of its direct `depends_on` nodes:
+
+- The exact dependency ID is the default template variable. A node with `depends_on: [node-a, node-b]` can use `{{node-a}}` and `{{node-b}}` directly.
+- The same values are appended to the child prompt as structured context, so a downstream node can aggregate them without interpolation.
+- Use `input_mapping` only to rename a variable or select a field. Its direction is **template variable → upstream source**, for example:
+
+```yaml
+input_mapping:
+  resultA: node-a
+  resultB: node-b
+  count: node-c.output.count
+prompt_template:
+  inline: "Summarize {{resultA}}, {{resultB}}, and count={{count}}."
+```
+
+Put shared node defaults in the workflow's `config.node_defaults`. Every node
+inherits omitted values from this durable workflow config, while an explicit
+node value wins:
+
+```yaml
+node_defaults:
+  required: false
+  report_to_parent: false
+  worker_config:
+    timeout_ms: 600000
+  model:
+    providerID: local-proxy-compatible
+    modelID: glm-5.2
+```
+
+This is the preferred place for a workflow-wide model. If both the node and
+`config.node_defaults.model` omit it, resolution continues to the selected
+agent model and then the parent session model.
+
+When overriding a model, split the provider and provider-local model ID:
+
+```yaml
+model:
+  providerID: local-proxy-compatible
+  modelID: glm-5.2
+```
+
+Do not put `local-proxy-compatible/glm-5.2` into `modelID` while also setting `providerID`; that repeats the provider prefix.
+
 ## Collaboration Patterns
 
 Four structural patterns cover the common cases. Real workflows often combine them.
