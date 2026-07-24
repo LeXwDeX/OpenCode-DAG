@@ -29,50 +29,91 @@ Goal: fill in design gaps and understand the project architecture before committ
 When the task description is underspecified, the architecture is unfamiliar, or multiple solution approaches exist, start here. A single workflow runs diverge-converge (multiple generators propose approaches) in parallel with exploration nodes (code-explore, test-explore, config-explore) that map the codebase. The workflow outputs a completed design + architecture inventory.
 
 ```yaml
-nodes:
-  - id: explore-code
-    worker_type: explore
-    prompt_template: { id: code-explore }
-    required: true
+action: start
+config:
+  name: explore-and-brainstorm
+  nodes:
+    - id: explore-code
+      name: explore-code
+      worker_type: explore
+      depends_on: []
+      prompt_template: { id: code-explore }
+      required: true
 
-  - id: explore-tests
-    worker_type: explore
-    prompt_template: { id: test-explore }
+    - id: explore-tests
+      name: explore-tests
+      worker_type: explore
+      depends_on: []
+      prompt_template: { id: test-explore }
 
-  - id: gen-approach-a
-    worker_type: general
-    depends_on: [explore-code]
-    prompt_template: { inline: "Propose an approach based on findings." }
+    - id: gen-approach-a
+      name: gen-approach-a
+      worker_type: general
+      depends_on: [explore-code]
+      prompt_template: { inline: "Propose an approach based on findings." }
 
-  - id: gen-approach-b
-    worker_type: general
-    depends_on: [explore-code]
-    prompt_template: { inline: "Propose an alternative approach based on findings." }
+    - id: gen-approach-b
+      name: gen-approach-b
+      worker_type: general
+      depends_on: [explore-code]
+      prompt_template: { inline: "Propose an alternative approach based on findings." }
 
-  - id: converge-design
-    worker_type: general
-    depends_on: [explore-code, explore-tests, gen-approach-a, gen-approach-b]
-    required: true
-    prompt_template: { id: plan }
+    - id: converge-design
+      name: converge-design
+      worker_type: general
+      depends_on: [explore-code, explore-tests, gen-approach-a, gen-approach-b]
+      required: true
+      prompt_template: { id: plan }
 ```
 
 ### Phase 2 — Design Review Gate
 
 Goal: validate the design before execution begins.
 
-A short workflow (or a single gate node) reviews the Phase 1 output. If the design is rejected, replan Phase 1 with adjusted direction. If accepted, proceed to execution.
+A gate node reviews the Phase 1 output. When the gate is in the same workflow,
+declare the design node as a dependency and map its output explicitly. If a
+separate workflow performs the review, the parent must embed the accepted
+Phase 1 result as static input; dependencies cannot cross workflow boundaries.
+If the design is rejected, replan Phase 1 with adjusted direction. If accepted,
+proceed to execution.
 
 ```yaml
-nodes:
-  - id: arch-gate
-    worker_type: general
-    depends_on: []  # receives design from Phase 1 output
-    required: true
-    model: { modelID: "<strong-model>", providerID: "<provider>" }
-    prompt_template: { id: arch-gate }
+action: start
+config:
+  name: design-review-gate
+  nodes:
+    - id: converge-design
+      name: converge-design
+      worker_type: general
+      depends_on: []
+      prompt_template:
+        inline: "Produce the design that must pass architecture review."
+
+    - id: arch-gate
+      name: arch-gate
+      worker_type: general
+      depends_on: [converge-design]
+      input_mapping:
+        design: converge-design
+      required: true
+      report_to_parent: true
+      output_schema:
+        type: object
+        required: [verdict, summary]
+        properties:
+          verdict:
+            type: string
+            enum: [ACCEPT, REVISE, REJECT, BLOCKED]
+          summary: { type: string }
+      prompt_template:
+        inline: "Review this design and submit a structured verdict: {{design}}"
 ```
 
-Gate failure cancels the workflow automatically (required: true). Replan by starting a new Phase 1 workflow with the gate's feedback incorporated.
+`required: true` cancels the workflow only when the gate node fails to execute
+or satisfy its output contract. A successful `REVISE` or `REJECT` result is a
+business verdict, not an execution failure. Use a downstream `condition` for a
+static ACCEPT path, or let the reported checkpoint wake the parent to perform a
+bounded `control(replan)`.
 
 ### Phase 3 — Parallel Execution
 
@@ -81,26 +122,36 @@ Goal: implement across independent modules concurrently.
 The design from Phase 2 is decomposed into module-level nodes. Each module is a worker node. Modules with no dependencies between them run concurrently (fan-out). A required assembler node collects results.
 
 ```yaml
-nodes:
-  - id: module-auth
-    worker_type: build
-    prompt_template: { id: implement }
-    required: true
+action: start
+config:
+  name: parallel-execution
+  nodes:
+    - id: module-auth
+      name: module-auth
+      worker_type: build
+      depends_on: []
+      prompt_template: { id: implement }
+      required: true
 
-  - id: module-server
-    worker_type: build
-    prompt_template: { id: implement }
-    required: true
+    - id: module-server
+      name: module-server
+      worker_type: build
+      depends_on: []
+      prompt_template: { id: implement }
+      required: true
 
-  - id: module-cli
-    worker_type: build
-    prompt_template: { id: implement }
+    - id: module-cli
+      name: module-cli
+      worker_type: build
+      depends_on: []
+      prompt_template: { id: implement }
 
-  - id: assemble
-    worker_type: build
-    depends_on: [module-auth, module-server, module-cli]
-    required: true
-    prompt_template: { id: patcher-assemble }
+    - id: assemble
+      name: assemble
+      worker_type: build
+      depends_on: [module-auth, module-server, module-cli]
+      required: true
+      prompt_template: { id: patcher-assemble }
 ```
 
 ### Phase 4 — Audit + Merge
@@ -113,9 +164,10 @@ A workflow runs review nodes (adversarial review pattern) on the assembled outpu
 
 After Phase 4, assess whether the task is complete or needs another cycle:
 
-- **Iterate**: gaps found in audit → start a new Phase 1 or Phase 3 workflow targeting the gaps.
+- **Iterate**: gaps found in audit → prefer bounded `control(replan)` of the affected nodes in the current workflow.
 - **Extend**: new work discovered during execution → `extend` the Phase 3 workflow with additional parallel nodes.
-- **Complete**: all modules shipped, audit passed → `control(complete)` on remaining workflows, task done.
+- **Separate phase**: start a new workflow only when the previous phase is terminal and a separately authorized phase needs a fresh graph.
+- **Complete**: all modules shipped, audit passed → `control(complete)` on the active workflow, task done.
 
 ### Lifecycle Summary
 
@@ -157,14 +209,15 @@ inherits omitted values from this durable workflow config, while an explicit
 node value wins:
 
 ```yaml
-node_defaults:
-  required: false
-  report_to_parent: false
-  worker_config:
-    timeout_ms: 600000
-  model:
-    providerID: local-proxy-compatible
-    modelID: glm-5.2
+config:
+  node_defaults:
+    required: false
+    report_to_parent: false
+    worker_config:
+      timeout_ms: 600000
+    model:
+      providerID: local-proxy-compatible
+      modelID: glm-5.2
 ```
 
 This is the preferred place for a workflow-wide model. If both the node and
@@ -180,6 +233,9 @@ model:
 ```
 
 Do not put `local-proxy-compatible/glm-5.2` into `modelID` while also setting `providerID`; that repeats the provider prefix.
+Omit `node.model` unless the user supplied an exact provider/model selection.
+Qualitative requests such as "use a strong model" must not be converted into an
+invented model identifier.
 
 ## Collaboration Patterns
 
@@ -190,59 +246,89 @@ Four structural patterns cover the common cases. Real workflows often combine th
 Sequential phases where each depends on the previous. Insert a gate node between phases to block downstream execution until quality is confirmed.
 
 ```yaml
-nodes:
-  - id: explore
-    worker_type: explore
-    prompt_template: { id: code-explore, input: { target: "auth module" } }
-    required: true
+action: start
+config:
+  name: staged-gate
+  nodes:
+    - id: explore
+      name: explore
+      worker_type: explore
+      depends_on: []
+      prompt_template: { id: code-explore, input: { target: "auth module" } }
+      required: true
 
-  - id: gate
-    worker_type: general
-    depends_on: [explore]
-    required: true
-    prompt_template:
-      inline: "Review these findings. Output PASS or FAIL with reasons: {{findings}}"
-      input: { findings: "from explore" }
+    - id: gate
+      name: gate
+      worker_type: general
+      depends_on: [explore]
+      input_mapping:
+        findings: explore
+      required: true
+      report_to_parent: true
+      output_schema:
+        type: object
+        required: [verdict, summary]
+        properties:
+          verdict:
+            type: string
+            enum: [ACCEPT, REVISE, REJECT, BLOCKED]
+          summary: { type: string }
+      prompt_template:
+        inline: "Review these findings and submit a structured verdict: {{findings}}"
 
-  - id: implement
-    worker_type: build
-    depends_on: [gate]
-    prompt_template:
-      inline: "Implement based on approved findings."
+    - id: implement
+      name: implement
+      worker_type: build
+      depends_on: [gate]
+      condition: 'gate.output.verdict == "ACCEPT"'
+      prompt_template:
+        inline: "Implement based on approved findings."
 ```
 
-The gate node is `required: true`. If it fails, the scheduler cancels the workflow instead of spawning `implement` — this is automatic. Design gate prompts to output a clear pass/fail signal.
+The gate node is `required: true`, so an execution or output-contract failure
+cancels the workflow. A successful non-ACCEPT verdict does not fail the node;
+the condition prevents `implement` from running, and the reported verdict gives
+the parent an actionable replan or stop decision.
 
 ### 2. Parallel Fan-out
 
 One preparatory node feeds N independent worker nodes, which fan back into a single assembler.
 
 ```yaml
-nodes:
-  - id: discover
-    worker_type: explore
-    prompt_template: { inline: "List all packages that need the API migration." }
-    required: true
+action: start
+config:
+  name: parallel-fan-out
+  nodes:
+    - id: discover
+      name: discover
+      worker_type: explore
+      depends_on: []
+      prompt_template: { inline: "List all packages that need the API migration." }
+      required: true
 
-  - id: migrate-auth
-    worker_type: build
-    depends_on: [discover]
-    prompt_template: { inline: "Migrate the auth package to the new API." }
+    - id: migrate-auth
+      name: migrate-auth
+      worker_type: build
+      depends_on: [discover]
+      prompt_template: { inline: "Migrate the auth package to the new API." }
 
-  - id: migrate-server
-    worker_type: build
-    depends_on: [discover]
-    prompt_template: { inline: "Migrate the server package to the new API." }
+    - id: migrate-server
+      name: migrate-server
+      worker_type: build
+      depends_on: [discover]
+      prompt_template: { inline: "Migrate the server package to the new API." }
 
-  - id: migrate-cli
-    worker_type: build
-    depends_on: [discover]
-    prompt_template: { inline: "Migrate the CLI package to the new API." }
+    - id: migrate-cli
+      name: migrate-cli
+      worker_type: build
+      depends_on: [discover]
+      prompt_template: { inline: "Migrate the CLI package to the new API." }
 
-  - id: assemble
-    worker_type: build
-    depends_on: [migrate-auth, migrate-server, migrate-cli]
-    prompt_template: { inline: "Run integration tests and assemble a summary." }
+    - id: assemble
+      name: assemble
+      worker_type: build
+      depends_on: [migrate-auth, migrate-server, migrate-cli]
+      prompt_template: { inline: "Run integration tests and assemble a summary." }
 ```
 
 `migrate-*` nodes execute concurrently (bounded by `max_concurrency`). `assemble` waits until all three complete. Non-required worker nodes that fail do not cancel the workflow — `assemble` still runs and can report which migrations failed.
@@ -252,66 +338,87 @@ nodes:
 Multiple reviewer nodes with different perspectives examine the same artifact. A final arbiter synthesizes their verdicts.
 
 ```yaml
-nodes:
-  - id: implement
-    worker_type: build
-    prompt_template: { id: implement }
-    required: true
+action: start
+config:
+  name: adversarial-review
+  nodes:
+    - id: implement
+      name: implement
+      worker_type: build
+      depends_on: []
+      prompt_template: { id: implement }
+      required: true
 
-  - id: review-arch
-    worker_type: general
-    depends_on: [implement]
-    model: { modelID: "gpt-4o", providerID: "openai" }
-    prompt_template: { id: review-arch }
+    - id: review-arch
+      name: review-arch
+      worker_type: general
+      depends_on: [implement]
+      prompt_template: { id: review-arch }
 
-  - id: review-logic
-    worker_type: general
-    depends_on: [implement]
-    prompt_template: { id: review-logic }
+    - id: review-logic
+      name: review-logic
+      worker_type: general
+      depends_on: [implement]
+      prompt_template: { id: review-logic }
 
-  - id: review-style
-    worker_type: general
-    depends_on: [implement]
-    model: { modelID: "claude-sonnet", providerID: "anthropic" }
-    prompt_template: { id: review-style }
+    - id: review-style
+      name: review-style
+      worker_type: general
+      depends_on: [implement]
+      prompt_template: { id: review-style }
 
-  - id: arbitrate
-    worker_type: general
-    depends_on: [review-arch, review-logic, review-style]
-    required: true
-    prompt_template:
-      inline: "Three reviewers produced verdicts. Synthesize a final decision: ACCEPT, REJECT, or REVISE with specific actions."
+    - id: arbitrate
+      name: arbitrate
+      worker_type: general
+      depends_on: [review-arch, review-logic, review-style]
+      required: true
+      prompt_template:
+        inline: "Three reviewers produced verdicts. Synthesize a final decision: ACCEPT, REJECT, or REVISE with specific actions."
 ```
 
-Reviewer nodes use different models to avoid single-model blind spots. The arbiter is `required: true` — its failure signals that the artifact could not be confidently accepted.
+Reviewer nodes may use different exact models when the user selected them;
+otherwise omit `model` and let workflow, agent, and parent configuration provide
+the defaults. The arbiter is `required: true` — its execution failure signals
+that the artifact could not be confidently accepted, while its successful
+business verdict must still be interpreted.
 
 ### 4. Diverge-Converge (Brainstorm)
 
 Multiple independent generators produce candidate solutions; a converger selects and refines.
 
 ```yaml
-nodes:
-  - id: gen-a
-    worker_type: general
-    prompt_template:
-      inline: "Propose a solution for X using approach: microservices."
+action: start
+config:
+  name: diverge-converge
+  nodes:
+    - id: gen-a
+      name: gen-a
+      worker_type: general
+      depends_on: []
+      prompt_template:
+        inline: "Propose a solution for X using approach: microservices."
 
-  - id: gen-b
-    worker_type: general
-    prompt_template:
-      inline: "Propose a solution for X using approach: modular monolith."
+    - id: gen-b
+      name: gen-b
+      worker_type: general
+      depends_on: []
+      prompt_template:
+        inline: "Propose a solution for X using approach: modular monolith."
 
-  - id: gen-c
-    worker_type: general
-    prompt_template:
-      inline: "Propose a solution for X using approach: event-driven."
+    - id: gen-c
+      name: gen-c
+      worker_type: general
+      depends_on: []
+      prompt_template:
+        inline: "Propose a solution for X using approach: event-driven."
 
-  - id: converge
-    worker_type: general
-    depends_on: [gen-a, gen-b, gen-c]
-    required: true
-    prompt_template:
-      inline: "Three approaches were proposed. Compare trade-offs and select the best fit for the constraints."
+    - id: converge
+      name: converge
+      worker_type: general
+      depends_on: [gen-a, gen-b, gen-c]
+      required: true
+      prompt_template:
+        inline: "Three approaches were proposed. Compare trade-offs and select the best fit for the constraints."
 ```
 
 ## Adaptive Replanning
@@ -322,7 +429,11 @@ Workflows are not static. After creating a workflow, use `extend` and `control(r
 - **Cut short**: a node proves the remaining work is unnecessary → `control(complete)` to early-complete and skip pending nodes.
 - **Redirect**: a gate or review reveals a wrong direction → `control(replan)` with `restart: true` on the affected nodes and `cancel: true` on their downstream dependents.
 
-Node outputs are reported back on completion. When a report suggests the task decomposition was wrong, replan rather than letting the original graph run to completion.
+Only nodes with `report_to_parent: true` produce intermediate parent
+checkpoints, and those reports are delivered at the next actionable wake
+boundary. Terminal workflow state also wakes the parent. Do not poll `status`
+merely to wait. When a report suggests the task decomposition was wrong, replan
+rather than letting the original graph run to completion.
 
 ### Escalation: change approach after repeated failures
 
@@ -330,7 +441,11 @@ When the same node or workflow keeps failing — via `orchestrator_unresponsive`
 
 ## Model Assignment Strategy
 
-Each node MAY specify `model: { modelID, providerID }` to pin a specific model. If omitted, the node uses its agent's default model.
+Each node MAY specify `model: { modelID, providerID }` to pin a specific model.
+`modelID` is the provider-local model ID; never repeat `providerID` inside it.
+If omitted, resolution follows `config.node_defaults.model`, then the configured
+agent model and then the parent session model. Pin only an exact user-supplied
+selection and never invent an identifier from a qualitative request.
 
 - Expensive models for planning, review, and arbitration — high-stakes decisions where reasoning quality matters.
 - Fast models for mechanical implementation — well-specified edits where speed and cost matter.
@@ -353,7 +468,11 @@ Templates are read-only prompt fragments under `.opencode/dag-prompts/*.md`. Ref
 - `patcher-assemble`: Assemble clean patch from completed work
 - `integration-test`: Run integration tests and report
 
-For ad-hoc prompts, use `prompt_template: { inline: "...", input: {...} }`. Inline templates support `{{var}}` interpolation from `input`.
+For ad-hoc prompts, use `prompt_template: { inline: "...", input: {...} }`.
+Static `prompt_template.input` supplies literal, local template values; it does
+not read upstream node output. Inline templates interpolate those static values
+and direct dependency variables. Use `input_mapping` when an upstream output
+needs a stable variable name or field selection.
 
 ## Budget Declaration
 
@@ -376,6 +495,10 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 
 - Each node is a real child session with its own message history, tools, and context window. There is no shared memory between nodes — data flows only through `depends_on` and `input_mapping`.
 - `required: true` means failure cancels the entire workflow. Use it for nodes whose output is indispensable (gates, core implementation). Omit it for nodes whose failure is recoverable.
+- A successful fan-in node must actually contain the requested comparison,
+  synthesis, or final decision. Unresolved placeholders, missing dependency
+  outputs, or a claim that inputs were aggregated are not successful
+  aggregation.
 - Layers are computed automatically from `depends_on`. Nodes in the same layer execute concurrently up to `max_concurrency`. Do not try to control execution order beyond declaring dependencies.
 - When a node declares `output_schema`, the child agent must call `submit_result` to submit its structured result. Failure to call `submit_result` before the session ends results in node failure (`verdict_fail`). Nodes without `output_schema` use plain text output (the final text part of the session).
 
@@ -383,7 +506,11 @@ All nodes share the same workspace. Write conflicts are an orchestration concern
 
 ### Actions
 
-**start** — Create a workflow from a YAML-declared graph. Returns the workflow ID. Nodes declare `depends_on` (node IDs); layers and execution order are computed automatically.
+**start** — Create a workflow from a YAML-declared graph. Pass the graph as
+`{ action: "start", config: { name, nodes, ...defaultsAndBudgets } }`; `nodes`
+at the tool-call top level is only for `extend`, not `start`. Returns the
+workflow ID. Nodes declare `depends_on` (node IDs); layers and execution order
+are computed automatically.
 
 **extend** — Add nodes to a running workflow. Existing nodes are unaffected; new nodes are immediately eligible for scheduling if their dependencies are met.
 

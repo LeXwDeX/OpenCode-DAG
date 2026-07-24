@@ -9,9 +9,12 @@ import PROMPT_INITIALIZE from "./command/initialize.txt"
 import PROMPT_REVIEW from "./command/review.txt"
 import DAG_FLOW_PROMPT from "./command/dag-flow.txt"
 import workflowContent from "./command/workflow.md" with { type: "text" }
+import orchestrationPolicy from "./command/orchestration-policy.md" with { type: "text" }
 
 export const DagFlowDescription = "Start a dependency-graph multi-agent workflow for the supplied task"
-export const WorkflowContent = workflowContent
+export const WorkflowFactsContent = workflowContent
+export const OrchestrationPolicyContent = orchestrationPolicy
+export const WorkflowContent = `${WorkflowFactsContent}\n\n${OrchestrationPolicyContent}`
 export const DagFlowContent = `${DAG_FLOW_PROMPT}\n\n${WorkflowContent}`
 
 export const Plugin = define({
