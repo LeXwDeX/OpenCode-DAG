@@ -76,7 +76,7 @@ export const Definitions = {
 
   dag_open: keybind("none", "Open DAG inspector"),
   dag_close: keybind("escape,q", "Close DAG inspector"),
-  dag_enter: keybind("enter", "Enter selected DAG node's session"),
+  dag_enter: keybind("return", "Enter selected DAG node's session"),
   dag_down: keybind("j,down", "Select next DAG node"),
   dag_up: keybind("k,up", "Select previous DAG node"),
   dag_next_workflow: keybind("l,right,tab", "Select next DAG workflow"),

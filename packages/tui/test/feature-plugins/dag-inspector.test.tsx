@@ -60,6 +60,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
 
   // Trackable spies
   const nodesCalls: string[] = []
+  const controlCalls: { dagID: string; operation: string }[] = []
   const commandCalls: unknown[] = []
   const navigations: { name: string; params?: Record<string, unknown> }[] = []
   const toasts: { variant?: string; message: string }[] = []
@@ -84,6 +85,10 @@ async function renderDagInspector(opts: RenderOpts = {}) {
           nodes: async (input: { dagID: string }) => {
             nodesCalls.push(input.dagID)
             return { data: opts.nodes ?? [] }
+          },
+          control: async (input: { dagID: string; operation: string }) => {
+            controlCalls.push(input)
+            return { data: undefined }
           },
         },
         session: {
@@ -161,6 +166,7 @@ async function renderDagInspector(opts: RenderOpts = {}) {
     commandCalls: () => commandCalls,
     toasts: () => toasts,
     nodesCalls: () => nodesCalls,
+    controlCalls: () => controlCalls,
     setWorkflows: (wfs: DagWorkflowSummary[]) => {
       workflowsState = wfs
     },
@@ -354,6 +360,85 @@ describe("DagInspector", () => {
       expect(viewer.navigations()).toContainEqual(
         expect.objectContaining({ name: "session", params: expect.objectContaining({ sessionID: "child_ses_1" }) }),
       )
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("pressing Enter navigates into the selected node's child session", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1" })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running", child_session_id: "child_ses_1" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("build"))
+      viewer.app.mockInput.pressEnter()
+      await waitForCondition(() => viewer.navigations().some((item) => item.name === "session"))
+      expect(viewer.navigations()).toContainEqual(
+        expect.objectContaining({ name: "session", params: expect.objectContaining({ sessionID: "child_ses_1" }) }),
+      )
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("pressing p pauses a running workflow", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1", status: "running" })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("build"))
+      viewer.app.mockInput.pressKey("p")
+      await waitForCondition(() => viewer.controlCalls().length > 0)
+      expect(viewer.controlCalls()).toContainEqual({ dagID: "wf-1", operation: "pause" })
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("pressing p pauses a stepping workflow", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1", status: "stepping" })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("build"))
+      viewer.app.mockInput.pressKey("p")
+      await waitForCondition(() => viewer.controlCalls().length > 0)
+      expect(viewer.controlCalls()).toContainEqual({ dagID: "wf-1", operation: "pause" })
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("pressing p on a terminal workflow explains why pause is unavailable", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1", status: "completed", completedNodes: 2 })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "completed" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => frame.includes("build"))
+      viewer.app.mockInput.pressKey("p")
+      await waitForCondition(() => viewer.toasts().length > 0)
+      expect(viewer.controlCalls()).toEqual([])
+      expect(viewer.toasts().at(-1)?.message).toMatch(/completed.*cannot be paused/i)
+    } finally {
+      viewer.app.renderer.destroy()
+    }
+  })
+
+  test("the inspector leaves a blank outer row below its footer", async () => {
+    const viewer = await renderDagInspector({
+      workflows: [wfSummary({ id: "wf-1" })],
+      nodes: [dagNode({ id: "n-1", name: "build", status: "running" })],
+    })
+    try {
+      await viewer.app.waitForFrame((frame) => {
+        const rows = frame.split("\n")
+        const footer = rows.findIndex((row) => row.includes("open session"))
+        return footer >= 0 && rows.slice(footer + 1).some((row) => row.trim() === "")
+      })
     } finally {
       viewer.app.renderer.destroy()
     }

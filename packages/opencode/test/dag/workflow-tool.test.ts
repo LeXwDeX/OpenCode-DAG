@@ -32,11 +32,42 @@ const store = Layer.mock(DagStore.Service, {
             timeCreated: 1,
             timeUpdated: 2,
           }
+        : id === "dag_defaults"
+          ? {
+              id,
+              projectId: projectID,
+              sessionId: "ses_workflow_parent",
+              title: "Configured defaults",
+              status: "running",
+              config: JSON.stringify({
+                name: "configured-defaults",
+                node_defaults: {
+                  required: true,
+                  report_to_parent: true,
+                  worker_config: { timeout_ms: 1234 },
+                  model: {
+                    providerID: "local-proxy-compatible",
+                    modelID: "local-proxy-compatible/glm-5.2",
+                  },
+                },
+                max_concurrency: 5,
+                max_node_replan_attempts: 5,
+                max_total_nodes: 100,
+                nodes: [],
+              }),
+              seq: 1,
+              wakeReported: false,
+              startedAt: 1,
+              completedAt: null,
+              timeCreated: 1,
+              timeUpdated: 2,
+            }
         : undefined,
     ),
-  getNodes: () =>
-    Effect.succeed([
-      {
+  getNodes: (id: string) =>
+    Effect.succeed(
+      id === "dag_status"
+        ? [{
         id: "node_running",
         workflowId: "dag_status",
         name: "Running node",
@@ -59,8 +90,9 @@ const store = Layer.mock(DagStore.Service, {
         completedAt: null,
         timeCreated: 1,
         timeUpdated: 2,
-      },
-    ]),
+          }]
+        : [],
+    ),
 })
 const events = Layer.mock(EventV2Bridge.Service, {
   publish: (definition, data) =>
@@ -137,12 +169,18 @@ describe("workflow tool schema (negative tests)", () => {
     expect(() => decode({ action: "control", workflow_id: "wf-1", operation: "start" })).toThrow()
   })
 
-  it("defaults an omitted node required flag to false", () => {
+  it("leaves omitted node defaults unresolved for the workflow config", () => {
     const decode = Schema.decodeUnknownSync(Parameters)
     const input = decode({
       action: "start",
       config: {
         name: "required-default",
+        node_defaults: {
+          required: true,
+          report_to_parent: true,
+          worker_config: { timeout_ms: 1234 },
+          model: { providerID: "configured", modelID: "configured/model" },
+        },
         nodes: [
           {
             id: "optional-node",
@@ -155,7 +193,13 @@ describe("workflow tool schema (negative tests)", () => {
       },
     })
 
-    expect(input.config?.nodes[0]?.required).toBe(false)
+    expect(input.config?.nodes[0]?.required).toBeUndefined()
+    expect(input.config?.node_defaults).toEqual({
+      required: true,
+      report_to_parent: true,
+      worker_config: { timeout_ms: 1234 },
+      model: { providerID: "configured", modelID: "configured/model" },
+    })
   })
 })
 
@@ -269,6 +313,254 @@ describe("workflow tool execution", () => {
 
       expect(published.find((event) => event.type === DagEvent.NodeRegistered.type)?.data).toEqual(
         expect.objectContaining({ required: false }),
+      )
+    }),
+  )
+
+  runtime.effect("start resolves omitted values from workflow config defaults", () =>
+    Effect.gen(function* () {
+      published.length = 0
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      yield* workflow.execute(
+        {
+          action: "start",
+          config: {
+            name: "configured-defaults",
+            node_defaults: {
+              required: true,
+              report_to_parent: true,
+              worker_config: { timeout_ms: 1234 },
+              model: {
+                providerID: "local-proxy-compatible",
+                modelID: "local-proxy-compatible/glm-5.2",
+              },
+            },
+            nodes: [
+              {
+                id: "inherits",
+                name: "Inherits defaults",
+                worker_type: "general",
+                depends_on: [],
+                prompt_template: { inline: "work" },
+              },
+              {
+                id: "overrides",
+                name: "Overrides defaults",
+                worker_type: "general",
+                depends_on: [],
+                required: false,
+                report_to_parent: false,
+                worker_config: { timeout_ms: 4321 },
+                prompt_template: { inline: "work" },
+                model: { providerID: "other", modelID: "other-model" },
+              },
+            ],
+          },
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      const created = published.find((event) => event.type === DagEvent.WorkflowCreated.type)?.data as {
+        config?: string
+      }
+      const config = JSON.parse(created.config ?? "{}")
+      expect(config).toEqual(
+        expect.objectContaining({
+          max_concurrency: 5,
+          max_node_replan_attempts: 5,
+          max_total_nodes: 100,
+        }),
+      )
+      expect(config.nodes[0]).toEqual(
+        expect.objectContaining({
+          required: true,
+          report_to_parent: true,
+          worker_config: { timeout_ms: 1234 },
+          model: { providerID: "local-proxy-compatible", modelID: "glm-5.2" },
+        }),
+      )
+      expect(config.nodes[1]).toEqual(
+        expect.objectContaining({
+          required: false,
+          report_to_parent: false,
+          worker_config: { timeout_ms: 4321 },
+          model: { providerID: "other", modelID: "other-model" },
+        }),
+      )
+    }),
+  )
+
+  runtime.effect("start canonicalizes a provider-qualified model ID", () =>
+    Effect.gen(function* () {
+      published.length = 0
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      yield* workflow.execute(
+        {
+          action: "start",
+          config: {
+            name: "canonical-model",
+            nodes: [
+              {
+                id: "worker",
+                name: "Worker",
+                worker_type: "general",
+                depends_on: [],
+                prompt_template: { inline: "work" },
+                model: {
+                  providerID: "local-proxy-compatible",
+                  modelID: "local-proxy-compatible/glm-5.2",
+                },
+              },
+            ],
+          },
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      expect(published.find((event) => event.type === DagEvent.NodeRegistered.type)?.data).toEqual(
+        expect.objectContaining({
+          model: {
+            providerID: "local-proxy-compatible",
+            modelID: "glm-5.2",
+          },
+        }),
+      )
+      const created = published.find((event) => event.type === DagEvent.WorkflowCreated.type)?.data as {
+        config?: string
+      }
+      expect(JSON.parse(created.config ?? "{}").nodes[0].model).toEqual({
+        providerID: "local-proxy-compatible",
+        modelID: "glm-5.2",
+      })
+    }),
+  )
+
+  runtime.effect("extend resolves new nodes from the persisted workflow defaults", () =>
+    Effect.gen(function* () {
+      published.length = 0
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      yield* workflow.execute(
+        {
+          action: "extend",
+          workflow_id: "dag_defaults",
+          nodes: [
+            {
+              id: "added",
+              name: "Added node",
+              worker_type: "general",
+              depends_on: [],
+              prompt_template: { inline: "work" },
+            },
+          ],
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      expect(published.find((event) => event.type === DagEvent.NodeRegistered.type)?.data).toEqual(
+        expect.objectContaining({
+          nodeID: "added",
+          required: true,
+          model: {
+            providerID: "local-proxy-compatible",
+            modelID: "glm-5.2",
+          },
+        }),
+      )
+      const updated = published.find((event) => event.type === DagEvent.WorkflowConfigUpdated.type)?.data as {
+        config?: string
+      }
+      expect(JSON.parse(updated.config ?? "{}").nodes[0]).toEqual(
+        expect.objectContaining({
+          report_to_parent: true,
+          worker_config: { timeout_ms: 1234 },
+        }),
+      )
+    }),
+  )
+
+  runtime.effect("replan resolves new nodes from the persisted workflow defaults", () =>
+    Effect.gen(function* () {
+      published.length = 0
+      const info = yield* WorkflowTool
+      const workflow = yield* info.init()
+
+      yield* workflow.execute(
+        {
+          action: "control",
+          workflow_id: "dag_defaults",
+          operation: "replan",
+          fragment: {
+            name: "replan-fragment",
+            nodes: [
+              {
+                id: "replanned",
+                name: "Replanned node",
+                worker_type: "general",
+                depends_on: [],
+                prompt_template: { inline: "work" },
+              },
+            ],
+          },
+        },
+        {
+          sessionID: SessionID.make("ses_workflow_parent"),
+          messageID: MessageID.ascending(),
+          agent: "build",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => Effect.void,
+          ask: () => Effect.void,
+        } satisfies Tool.Context,
+      )
+
+      expect(published.find((event) => event.type === DagEvent.NodeRegistered.type)?.data).toEqual(
+        expect.objectContaining({
+          nodeID: "replanned",
+          required: true,
+          model: {
+            providerID: "local-proxy-compatible",
+            modelID: "glm-5.2",
+          },
+        }),
+      )
+      const updated = published.find((event) => event.type === DagEvent.WorkflowConfigUpdated.type)?.data as {
+        config?: string
+      }
+      expect(JSON.parse(updated.config ?? "{}").nodes[0]).toEqual(
+        expect.objectContaining({
+          report_to_parent: true,
+          worker_config: { timeout_ms: 1234 },
+        }),
       )
     }),
   )

@@ -102,9 +102,10 @@ export const layer = Layer.effect(
             const promptParts: { type: "text"; text: string }[] = []
 
             let resolvedMapping: Record<string, unknown> = {}
-            if (nodeConfig?.input_mapping) {
+            const inputMapping = nodeConfig?.input_mapping ?? Object.fromEntries(node.dependsOn.map((dependency) => [dependency, dependency]))
+            if (Object.keys(inputMapping).length > 0) {
               const allNodes = yield* store.getNodes(dagID)
-              resolvedMapping = resolveInputMapping(nodeConfig.input_mapping, (depId) => {
+              resolvedMapping = resolveInputMapping(inputMapping, (depId) => {
                 const depNode = allNodes.find((n) => n.id === depId)
                 return depNode?.output ?? null
               })
@@ -143,6 +144,19 @@ export const layer = Layer.effect(
               if (value !== null && value !== undefined) {
                 promptText = promptText.replaceAll(`{{${key}}}`, String(value))
               }
+            }
+
+            const unresolvedPlaceholders = [...promptText.matchAll(/{{\s*([^{}]+?)\s*}}/g)]
+              .map((match) => match[1])
+            if (unresolvedPlaceholders.length > 0) {
+              yield* dag.nodeFailed(
+                dagID,
+                nodeID,
+                `Unresolved template placeholders: ${unresolvedPlaceholders.join(", ")}`,
+                "verdict_fail",
+              ).pipe(Effect.ignore)
+              entry.runtime.markUnsatisfied(nodeID)
+              continue
             }
 
             promptParts.push({ type: "text", text: promptText })
@@ -224,7 +238,7 @@ export const layer = Layer.effect(
             })
           }
           const nodes = yield* store.getNodes(dagID)
-          const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
+          const maxConcurrency = Math.max(1, config?.max_concurrency ?? Dag.DEFAULT_WORKFLOW_CONFIG.maxConcurrency)
           const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
           const semaphore = Semaphore.makeUnsafe(maxConcurrency)
           const isPaused = wf.status === "paused"
@@ -255,7 +269,7 @@ export const layer = Layer.effect(
               if (!wf) return
               const config = parseWorkflowConfig(wf.config)
               const nodes = yield* store.getNodes(dagID)
-              const maxConcurrency = Math.max(1, config?.max_concurrency ?? 5)
+              const maxConcurrency = Math.max(1, config?.max_concurrency ?? Dag.DEFAULT_WORKFLOW_CONFIG.maxConcurrency)
               const runtime = new WorkflowRuntime(toSchedulingNodes(nodes), maxConcurrency)
               const semaphore = Semaphore.makeUnsafe(maxConcurrency)
               const entry: WorkflowEntry = { runtime, semaphore, evalLock: Semaphore.makeUnsafe(1), parentSessionID: wf.sessionId, config, fibers: new Map() }
